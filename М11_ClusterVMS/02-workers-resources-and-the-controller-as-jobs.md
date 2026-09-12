@@ -58,7 +58,7 @@ Every allocation gets `NOMAD_ALLOC_INDEX`, `0..count−1`. It looks exactly like
 
 ```python
 NOMAD_ALLOC_INDEX=1  NOMAD_NODE_NAME=srv-b  NOMAD_META_labels=vlan:cctv-a,vlan:cctv-b  NOMAD_ALLOC_ID=alloc-0002
-w = ClusterWorker(vars, objects, env=...)     -> claims vms/slots/w-1 by CAS: {holder: alloc-0002, until, released: false, gen}
+w = ClusterWorker(vars, objects, env=...)     -> М10's VmsWorker, reading NOMAD_* from env; claims vms/slots/w-1 by CAS: {holder: alloc-0002, until, released: false, gen}
 ```
 
 The index is the *preference* — `claim_slot(prefer="w-1")` — and the claim is the *proof*. `test_the_slot_comes_from_the_allocation_index_and_the_labels_from_the_server` shows the row: the holder is the allocation id, and the heartbeat carries `server: srv-b`, `labels: vlan:cctv-a,vlan:cctv-b`, `capacity`, `headroom`. Then the bug, on purpose:

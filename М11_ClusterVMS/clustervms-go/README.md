@@ -8,8 +8,9 @@ clustervms-go/
   cluster/
     variables.go               NomadVariables (net/http, the task's own token, cas, delete) and FakeVariables (one raft in memory, ACL)
     objectstore.go  s3.go      VariablesObjectStore (this cluster's choice: objects as Variables), HTTP, a directory, S3 with SigV4 + List
-    worker.go                  ClusterWorker: the slot from NOMAD_ALLOC_INDEX, labels from NOMAD_META_labels, previous_hb for the RTO
-    controller.go              ClusterController: Eligible / Place with labels and the server in the reason, Unplaceable, Snapshot, FailoverSeconds
+    worker.go                  ClusterWorker = vms.VmsWorker — one type alias and an env-first constructor; nothing a box lacks
+    controller.go              ClusterController = vms.VmsController — one type alias; constraints, the server in the reason, the snapshot and
+                               the measured failover are the one-box behaviour with N = 1, in the platform's SpecController
     directory.go               where is camera 7 — one scan of vms/workers/*, cached by time; "w-1+w-2" during a move
     resource.go                VmsRoutes (/manifest, /segment with Range) on the platform's resource server; ClusterResource registers the VMS hook
     timeline.go                MergedTimeline across resources; unreachable named; "not lost"

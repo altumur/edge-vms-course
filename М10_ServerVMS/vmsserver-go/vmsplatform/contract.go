@@ -474,7 +474,12 @@ func (w *Worker) ClaimSlot(prefer string) (string, error) {
 					maxN = SlotNumber(n)
 				}
 			}
-			sort.Slice(lapsed, func(i, j int) bool { return known[lapsed[i]].Until < known[lapsed[j]].Until })
+			sort.Slice(lapsed, func(i, j int) bool {
+				if known[lapsed[i]].Until != known[lapsed[j]].Until {
+					return known[lapsed[i]].Until < known[lapsed[j]].Until
+				}
+				return SlotNumber(lapsed[i]) < SlotNumber(lapsed[j])
+			})
 			sort.Slice(free, func(i, j int) bool { return SlotNumber(free[i]) < SlotNumber(free[j]) })
 			order = append(append(lapsed, free...), fmt.Sprintf("w-%d", maxN+1))
 		}

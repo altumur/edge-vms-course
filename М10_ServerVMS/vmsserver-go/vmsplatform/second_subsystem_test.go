@@ -5,11 +5,13 @@ package vmsplatform_test
 // works, the VMS is a subsystem and not the platform.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"vmsserver/testbox"
@@ -18,10 +20,32 @@ import (
 
 var counter = p.Subsystem{Name: "counter"}
 
-type counterController struct{ *p.Controller }
+// The counter's controller is not written: it is this spec, run by the
+// platform's SpecController — the same type the VMS runs from
+// vms.subsystem.yaml, with a different prefix, id rule and fields.
+const counterSpec = `
+name: counter
+unit:
+  rows: units
+  id: name                     # named by the operator, not numbered
+  fields:
+    name: {type: string, required: true}
+    step: {type: int, default: 1}
+placement:
+  capacity: {from: capacity, fallback: 10}     # no constraint: any worker
+snapshot: [name, step]
+`
 
-func (c counterController) Create(name string, step int) {
-	c.Vars.Put(counter.Config("units", name), p.Items{"step": strconv.Itoa(step), "revision": "1"}, 0)
+func counterController(box *testbox.Box) *p.SpecController {
+	v, err := p.ParseYAML(counterSpec)
+	if err != nil {
+		panic(err)
+	}
+	spec, err := p.SpecFromMap(v.(map[string]any))
+	if err != nil {
+		panic(err)
+	}
+	return p.NewSpecController(spec, box.Vars, box.Objects, 0, box.Wall.Now, "")
 }
 
 type counterWorker struct {
@@ -64,10 +88,34 @@ func (w *counterWorker) reconcileOnce() []string {
 
 func TestASecondSubsystemThroughTheSamePlatform(t *testing.T) {
 	box := testbox.NewBox()
-	ctl := counterController{p.NewController(counter, box.Vars, box.Objects, box.Wall.Now)}
+	ctl := counterController(box)
 	w := &counterWorker{p.NewWorker(counter, box.Vars, box.Objects, p.WorkerOptions{Name: "c-1", Clock: box.Clock.Now, Wall: box.Wall.Now}), map[string]int{}, box.Archive}
-	ctl.Create("a", 2)
-	ctl.Create("b", 5)
+	if r, err := ctl.Create(map[string]any{"name": "a", "step": 2}); err != nil || r.ID() != "a" {
+		t.Fatal(r, err)
+	}
+	if r, err := ctl.Create(map[string]any{"name": "b", "step": 5}); err != nil || r.Int("revision") != 1 {
+		t.Fatal(r, err)
+	}
+	for _, bad := range []map[string]any{{"name": "c", "worker": "c-1"}, {"step": 3}, {"name": "a", "step": 9}} {
+		var refused *p.Refused
+		if _, err := ctl.Create(bad); !errors.As(err, &refused) { // the platform's refusals, for free
+			t.Fatal(bad, err)
+		}
+	}
+	if u := ctl.Units(); len(u) != 2 || u[0].ID() != "a" || u[1].ID() != "b" {
+		t.Fatal(u)
+	}
+	if r, _ := ctl.Update("b", map[string]any{"step": 5}); r.Int("revision") != 2 {
+		t.Fatal(r)
+	}
+	w.HeartbeatWith(nil, map[string]any{"capacity": 10})
+	if pls, _ := ctl.EnsurePlaced(nil); len(pls) != 2 || pls[0].Worker != "c-1" || !strings.Contains(ctl.Placement("a").Reason, "on ") { // placed like any unit
+		t.Fatal(pls)
+	}
+	snap := ctl.Snapshot()["units"].([]map[string]any)[0]
+	if snap["id"] != "a" || snap["step"] != 2 || snap["worker"] != "c-1" || snap["server"] != "?" {
+		t.Fatal(snap)
+	}
 	ctl.Assign("c-1", []string{"a", "b"})
 	if !reflect.DeepEqual(w.reconcileOnce(), []string{"a", "b"}) || !reflect.DeepEqual(w.reconcileOnce(), []string{"a", "b"}) {
 		t.Fatal("units")
@@ -99,7 +147,13 @@ func TestASecondSubsystemThroughTheSamePlatform(t *testing.T) {
 	}
 	// the two subsystems do not see each other: prefixes, and nothing else
 	v, _ := box.Vars.List("vms/")
-	c, _ := box.Vars.List("counter/")
+	all, _ := box.Vars.List("counter/")
+	var c []string
+	for _, pth := range all {
+		if !strings.Contains(pth, "/placement/") {
+			c = append(c, pth)
+		}
+	}
 	if len(v) != 0 || !reflect.DeepEqual(c, []string{"counter/epoch/a", "counter/epoch/b", "counter/units/a", "counter/units/b", "counter/workers/c-1"}) {
 		t.Fatal(v, c)
 	}

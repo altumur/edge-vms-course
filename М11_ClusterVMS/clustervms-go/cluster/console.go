@@ -207,7 +207,7 @@ func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {
 					r = marks.Handle(vms.ReadBody(req), user, ctl.Wall())
 				}
 			} else {
-				r = vms.CreateReply(ctl.VmsController, ctl, vms.ReadBody(req))
+				r = vms.CreateReply(ctl, ctl, vms.ReadBody(req))
 			}
 			seen.Set(key, r)
 			vms.SendJSON(w, r.Status, r.Body)
@@ -217,7 +217,7 @@ func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {
 				return
 			}
 			cid, _ := vms.LastSegmentInt(path)
-			r := vms.UpdateReply(ctl.VmsController, cid, vms.ReadBody(req))
+			r := vms.UpdateReply(ctl, cid, vms.ReadBody(req))
 			vms.SendJSON(w, r.Status, r.Body)
 		default:
 			vms.SendJSON(w, 405, map[string]any{"error": "method"})

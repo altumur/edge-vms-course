@@ -14,13 +14,17 @@ vmsserver-go/
     events.go                  EventLog: buckets <sub>/<unit>/e<epoch>/<start>Z.events.jsonl; BucketsUnder, SubsystemsUnder
     resource.go                Resource: heartbeat, Retain by <sub>/retention[/<unit>], Mirror to PeersOf, Restore, Pass; Serve over HTTP
     eventindex.go              EventIndex: Rebuild / Tail / Query / Forget over every resource's buckets; the mirror branch
+    spec.go  yaml.go           the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name, snapshot), SpecController — the one
+                               controller every subsystem runs; a YAML subset parser (block and flow, scalars, comments) so the spec needs no dependency
   vms/                         the VMS — a subsystem
-    config.go                  Camera, Row / ItemsOf, the operator and forbidden fields (ref included)
+    vms.subsystem.yaml         the VMS's controller, as a spec — embedded into the binary (go:embed); the same file the Python package reads
+    config.go                  Camera, the typed view of a spec row; Row / ItemsOf through the spec
     reconciler.go              М9 Lesson 6's loop: Reconcile, Lost, Clear, Status
     archive.go                 SegmentPath / Parse, Manifest (Read / Buckets / Rewrite / Timeline), ArchiveResource (Promote,
                                CloseBuckets, Repair, Retain), ArchivePolicy — the hook the VMS registers with the resource
-    worker.go                  VmsWorker: the gate (an epoch per start), LeasePass, Fence, Observe, PumpOnce, Status, Headroom, Run
-    controller.go              VmsController: CreateCamera / UpdateCamera / DeleteCamera, Place, MoveTo, Redistribute, Rebalance, ReadModel
+    worker.go                  VmsWorker: the slot, server, labels and capacity from the environment (a box or an allocation); the gate (an epoch
+                               per start), LeasePass, Fence, Observe, PumpOnce, Status, Headroom, Run
+    controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
     console.go                 the one-box console: /cameras /where /timeline /metrics; POST /cameras, POST /marks, PUT /cameras
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
@@ -44,6 +48,7 @@ Read each Go file beside its Python twin: the names are the same and so are the 
 | `Controller.write(path, mutate)` with `mutate -> None` | `Write(path, Mutate)` with `nil` = leave it; `panic(&ErrRow{})` for a refused row | The CAS loop is identical; a refusal (a deleted camera) became a typed error instead of `KeyError`. |
 | `VmsWorker(Worker)`, `ClusterWorker(VmsWorker)` | struct embedding: `*p.Worker` inside `VmsWorker` inside `ClusterWorker` | Same layering; where Python overrode `place()` / `heartbeat_once()`, Go passes the override explicitly (`EnsurePlacedWith(c, placer)`, `Run(…, heartbeat)`). |
 | `sqlite3` under the event index | a slice and a `seen` map, one mutex | The index is a cache either way; the standard library has no SQLite and a cache that admits to being one needs no file. |
+| `yaml.safe_load` of the spec | `ParseYAML`, a subset: block and flow collections, scalars, comments | A spec that needs anchors or multi-line scalars has stopped being a spec; the parser is 150 lines and the VMS's file is embedded in the binary. |
 | `threading.Thread × 4` racing `next_epoch` | four goroutines, `-race` clean | The Python test proves CAS under the GIL; the Go test proves it under real concurrency. |
 | exceptions (`Conflict`, `Forbidden`, `Refused`) | `ErrConflict`, `ErrForbidden`, `*Refused` with `errors.Is` / `errors.As` | Every `except Exception: log` became an explicit `if err != nil` — most of the extra lines. |
 | `json.dumps` of a heartbeat | `map[string]any` → `encoding/json` | Byte-compatible: a Go worker's heartbeat is read by the Python controller and the other way round (the М11 port checks it against the Python fixtures' shape). |

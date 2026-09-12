@@ -7,8 +7,8 @@ clustervms/
   cluster/
     variables.py     L1  Nomad Variables over HTTP with the task's own token (ModifyIndex, cas, 409, 403) — and the fake with the promised semantics
     objectstore.py   L1  the object-store contract: Variables under objects/… on this cluster (heartbeats, the snapshot); S3 (s3.py, SigV4) when rented or outgrown; a directory in tests
-    worker.py        L2  the worker as an allocation: the slot from NOMAD_ALLOC_INDEX, the server and its labels from the environment, capacity and headroom in the heartbeat
-    controller.py    L5  the controller as a job: placement under label constraints with the server in the reason; `unplaceable`; the snapshot for М12; vms_failover_seconds from the heartbeats
+    worker.py        L2  the worker as an allocation — М10's VmsWorker by the name the lessons use: the slot from NOMAD_ALLOC_INDEX, the server and its labels from the environment
+    controller.py    L5  the controller as a job — М10's VmsController by the name the lessons use: constraints, the server in the reason, the snapshot and the measured failover are the one-box behaviour with N = 1
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  the VMS's part of the platform's resource job: ArchivePolicy (repair, close, media retention) registered as the `vms` hook; /manifest and /segment plugged in
     eventindex.py    L3  a name for vmsplatform.eventindex — the platform's index over every subsystem's buckets on every resource
@@ -36,12 +36,12 @@ clustervms/
 | The object store | a directory | Variables under `objects/…` — a dozen 10 KB heartbeats every ten seconds is not a raft load; MinIO/S3 only when a cluster outgrows this or is rented | `objectstore.py`, `s3.py` |
 | A worker's name | `systemd`'s `%i` | `w-<NOMAD_ALLOC_INDEX>`, claimed by CAS — the index is the preference, the Variable the proof | `worker.py` |
 | Who decides how many workers | the operator starts units | Nomad runs `count`; the Autoscaler moves it from `vms_worker_load`; **never the controller** | `deploy/vmsworker.nomad.hcl` |
-| Placement | most free capacity | most free capacity **among workers whose server can reach the camera** (`labels`) | `controller.py` |
+| Placement | most free capacity; `labels` empty | most free capacity **among workers whose server can reach the camera** — the same `constraint: labels-subset` in `vms.subsystem.yaml`, now with labels to match | `vmsserver/vms/vms.subsystem.yaml` |
 | The resource | a directory on the box | the platform's `resource` job on *each* server: every subsystem's buckets served and mirrored, retention by each subsystem's row; the VMS registers its manifests and media on it | `vmsplatform/resource.py`, `resource.py` |
 | A timeline | one manifest | merged across the resources that hold the camera; a silent one is named as unreachable | `timeline.py` |
-| What leaves the cluster | nothing | one snapshot object for М12's read model — a copy with an age | `controller.py` |
+| What leaves the cluster | the same snapshot, of a cluster of one | one snapshot object for М12's read model — a copy with an age | `vmsplatform/spec.py` |
 | Events | buckets per unit on the resource, written by the worker holding the epoch, any subsystem | the same, on each server's resource; indexed across the cluster by the platform's `eventindex`, a cache; mirrored to the next resource with `platform/mirror` on | `vmsplatform/eventindex.py`, `vmsplatform/resource.py` |
-| The contract, the controller's logic, the worker's loop, the epoch, the lease, the manifest | | **unchanged**: imported from `vmsserver/` | |
+| The contract, **the controller**, **the worker**, the epoch, the lease, the manifest | | **unchanged**: imported from `vmsserver/` — `controller.py` and `worker.py` here are one import each | |
 
 ## The three lines the tests hold
 

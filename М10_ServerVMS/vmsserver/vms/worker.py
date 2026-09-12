@@ -8,6 +8,14 @@ camera, and publishes a heartbeat carrying its status. It never writes
 configuration. Nomad (or systemd, on one box) supervises the process; the
 process supervises its pipelines; nothing supervises the loop, because the
 loop is the process.
+
+What the environment hands a process, on a box or in an allocation:
+
+    WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
+                                        the claim (CAS on vms/slots/w-N) is the proof
+    NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: which resource it records into
+    NOMAD_META_labels                 -> `labels` in the heartbeat: what this server can reach; the controller places by them
+    NOMAD_ALLOC_ID                    -> the instance; CAPACITY -> the worker's own number, from М9 Lesson 7's probe
 """
 from __future__ import annotations
 
@@ -70,30 +78,57 @@ class FakeActuator:
         self.running.clear()
 
 
+def slot_from_environment(env: dict) -> str | None:
+    if env.get("WORKER_NAME"):
+        return env["WORKER_NAME"]
+    if "NOMAD_ALLOC_INDEX" in env:
+        return f"w-{int(env['NOMAD_ALLOC_INDEX'])}"
+    return None                                  # claim whatever is free — a lapsed slot first
+
+
+def labels_from_environment(env: dict) -> list[str]:
+    return [l for l in env.get("NOMAD_META_labels", "").split(",") if l]
+
+
 class VmsWorker(Worker):
     """`name` is a slot. Given (systemd's %i, Nomad's alloc index) it is
-    claimed by that name; None means "whichever slot is free" — a lapsed one
-    first, so a replacement inherits its assignment."""
+    claimed by that name; None means the environment's, and failing that
+    "whichever slot is free" — a lapsed one first, so a replacement
+    inherits its assignment. A worker on a cluster is a worker on a box
+    whose stores happen to be raft: same class, same heartbeat."""
 
     def __init__(self, name: str | None, vars_: Variables, objects: ObjectStore, actuator=None,
                  lease_ttl: float = 30.0, lease_margin: float = 5.0, clock=time.monotonic, wall=time.time,
-                 server: str | None = None, capacity: int = 50, instance: str | None = None, slot_ttl: float = 45.0,
-                 archive_root: str | None = None, bucket_seconds: int = 600):
+                 server: str | None = None, capacity: int | None = None, instance: str | None = None, slot_ttl: float = 45.0,
+                 archive_root: str | None = None, bucket_seconds: int = 600, env: dict | None = None):
+        env = dict(os.environ if env is None else env)
+        instance = instance or env.get("NOMAD_ALLOC_ID") or None
         super().__init__(VMS, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
-        self.claim_slot(prefer=name)
-        self.archive_root = archive_root or os.environ.get("ARCHIVE", "/data/archive")   # this server's resource
+        self.claim_slot(prefer=name if name is not None else slot_from_environment(env))
+        self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource
         self.bucket_seconds = bucket_seconds
         self.observed: list[tuple[int, float, str]] = []
-        self.capacity = capacity          # cameras this process can carry: М9 Lesson 7's B + n·I, measured on its server
+        self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
         self.actuator = actuator or FakeActuator()
         self.rows: list[dict] = []
         self.assignment_rev = 0
         self.reconciler = Reconciler(self, self._actuate)
         self.recording_allowed = True
         self.fenced_reason: str | None = None
-        self.server = server or os.environ.get("NOMAD_NODE_ID") or socket.gethostname()
+        self.server = server or env.get("NOMAD_NODE_NAME") or env.get("NOMAD_NODE_ID") or socket.gethostname()
+        self.labels = labels_from_environment(env)
+        self.alloc = env.get("NOMAD_ALLOC_ID", "")
         self.started_at = clock()
+        self._started_wall = self.wall()
         self.passes = 0
+        # the previous instance of this slot, if it left a heartbeat: what failover is measured from
+        self.previous_hb, self.previous_instance = 0.0, ""
+        raw = objects.get(self.sub.heartbeat_key(self.name))
+        if raw:
+            from vmsplatform.contract import Heartbeat
+            old = Heartbeat.from_bytes(raw)
+            if old.extra.get("instance") != self.instance:
+                self.previous_hb, self.previous_instance = old.ts, old.extra.get("instance", "")
 
     # -- the store, as the reconciler sees it ------------------------------------
     def desired(self) -> list[dict]:
@@ -211,9 +246,11 @@ class VmsWorker(Worker):
         return max(0, self.capacity - len(self.rows))
 
     def heartbeat_once(self) -> None:
-        self.heartbeat(self.status(), server=self.server, instance=self.instance, assignment_rev=self.assignment_rev,
+        self.heartbeat(self.status(), server=self.server, instance=self.instance, alloc=self.alloc,
+                       labels=",".join(self.labels), assignment_rev=self.assignment_rev,
                        fenced=not self.recording_allowed, conflicts=self.conflicts(), passes=self.passes,
-                       capacity=self.capacity, headroom=self.headroom())
+                       capacity=self.capacity, headroom=self.headroom(), started=self._started_wall,
+                       previous_hb=self.previous_hb, previous_instance=self.previous_instance)
 
     def run(self, poll: float = 2.0, stop=None) -> None:
         """One box: the loop as a process. Nomad or systemd restarts it."""

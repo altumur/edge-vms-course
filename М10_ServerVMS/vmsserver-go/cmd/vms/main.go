@@ -55,7 +55,7 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("worker %s (instance %s) claimed its slot", w.Name, w.Instance)
-		w.Run(2*time.Second, stop, nil)
+		w.Run(2*time.Second, stop)
 	case "controller":
 		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
 		vars = vars.AsWriter("vmscontroller", "vms/*")

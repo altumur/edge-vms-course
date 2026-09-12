@@ -5,19 +5,59 @@ package vms
 // names, runs М9's reconcile loop over them, takes an epoch per camera by
 // CAS when it starts one, holds a lease per camera, and publishes a
 // heartbeat carrying its status. It never writes configuration.
+//
+// What the environment hands a process, on a box or in an allocation:
+//
+//	WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
+//	                                    the claim (CAS on vms/slots/w-N) is the proof
+//	NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: which resource it records into
+//	NOMAD_META_labels                 -> `labels` in the heartbeat: what this server can reach
+//	NOMAD_ALLOC_ID                    -> the instance; CAPACITY -> the worker's own number
+//
+// A worker on a cluster is a worker on a box whose stores happen to be raft.
 
 import (
 	"log"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	p "vmsserver/vmsplatform"
 )
 
-var VMS = p.Subsystem{Name: "vms"}
+// Env is a process's environment; nil means the real one.
+type Env map[string]string
+
+func (e Env) Get(k string) string {
+	if e == nil {
+		return os.Getenv(k)
+	}
+	return e[k]
+}
+
+func SlotFromEnvironment(env Env) string {
+	if n := env.Get("WORKER_NAME"); n != "" {
+		return n
+	}
+	if i := env.Get("NOMAD_ALLOC_INDEX"); i != "" {
+		n, _ := strconv.Atoi(i)
+		return "w-" + strconv.Itoa(n)
+	}
+	return "" // claim whatever is free — a lapsed slot first
+}
+
+func LabelsFromEnvironment(env Env) []string {
+	out := []string{}
+	for _, l := range strings.Split(env.Get("NOMAD_META_labels"), ",") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
 
 // Posted is what an element posted on the bus about a camera.
 type Posted struct {
@@ -123,6 +163,7 @@ type VmsWorkerOptions struct {
 	Capacity      int
 	ArchiveRoot   string
 	BucketSeconds int
+	Env           Env // nil: the process's own
 }
 
 // VmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
@@ -141,19 +182,34 @@ type VmsWorker struct {
 	RecordingAllowed bool
 	FencedReason     string
 	Server           string
+	Labels           []string
+	Alloc            string
 	StartedAt        float64
+	StartedWall      float64
+	PreviousHb       float64 // the previous instance of this slot, if it left a heartbeat: what failover is measured from
+	PreviousInstance string
 	Passes           int
 }
 
+// NewVmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
+// is claimed by that name; "" means the environment's, and failing that
+// whichever slot is free — a lapsed one first, so a replacement inherits its assignment.
 func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actuator, o VmsWorkerOptions) (*VmsWorker, error) {
+	env := o.Env
+	if name == "" {
+		name = SlotFromEnvironment(env)
+	}
+	if o.Instance == "" {
+		o.Instance = env.Get("NOMAD_ALLOC_ID")
+	}
 	base := p.NewWorker(VMS, vars, objects, o.WorkerOptions)
 	if _, err := base.ClaimSlot(name); err != nil {
 		return nil, err
 	}
 	w := &VmsWorker{Worker: base, ArchiveRoot: o.ArchiveRoot, BucketSeconds: o.BucketSeconds, Capacity: o.Capacity,
-		Act: act, RecordingAllowed: true, Server: o.Server}
+		Act: act, RecordingAllowed: true, Server: o.Server, Labels: LabelsFromEnvironment(env), Alloc: env.Get("NOMAD_ALLOC_ID")}
 	if w.ArchiveRoot == "" {
-		w.ArchiveRoot = os.Getenv("ARCHIVE")
+		w.ArchiveRoot = env.Get("ARCHIVE")
 		if w.ArchiveRoot == "" {
 			w.ArchiveRoot = "/data/archive"
 		}
@@ -162,19 +218,31 @@ func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 		w.BucketSeconds = 600
 	}
 	if w.Capacity == 0 {
-		w.Capacity = 50
+		w.Capacity, _ = strconv.Atoi(env.Get("CAPACITY"))
+		if w.Capacity == 0 {
+			w.Capacity = 50
+		}
 	}
 	if w.Act == nil {
 		w.Act = NewFakeActuator()
 	}
 	if w.Server == "" {
-		w.Server = os.Getenv("NOMAD_NODE_ID")
+		w.Server = env.Get("NOMAD_NODE_NAME")
+		if w.Server == "" {
+			w.Server = env.Get("NOMAD_NODE_ID")
+		}
 		if w.Server == "" {
 			w.Server, _ = os.Hostname()
 		}
 	}
 	w.Reconciler = NewReconciler(w, w.actuate)
 	w.StartedAt = w.Clock()
+	w.StartedWall = w.Wall()
+	if raw, _ := objects.Get(w.Sub.HeartbeatKey(w.Name)); len(raw) > 0 {
+		if old, err := p.HeartbeatFromBytes(raw); err == nil && old.ExtraString("instance", "") != w.Instance {
+			w.PreviousHb, w.PreviousInstance = old.Ts, old.ExtraString("instance", "")
+		}
+	}
 	return w, nil
 }
 
@@ -343,21 +411,19 @@ func (w *VmsWorker) Headroom() int {
 }
 
 func (w *VmsWorker) HeartbeatExtra() map[string]any {
-	return map[string]any{"server": w.Server, "instance": w.Instance, "assignment_rev": w.AssignmentRev,
-		"fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
-		"capacity": w.Capacity, "headroom": w.Headroom()}
+	return map[string]any{"server": w.Server, "instance": w.Instance, "alloc": w.Alloc, "labels": strings.Join(w.Labels, ","),
+		"assignment_rev": w.AssignmentRev, "fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
+		"capacity": w.Capacity, "headroom": w.Headroom(), "started": w.StartedWall,
+		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance}
 }
 
 func (w *VmsWorker) HeartbeatOnce() error {
 	return w.HeartbeatWith(w.Status(), w.HeartbeatExtra())
 }
 
-// Run: one box — the loop as a process. Nomad or systemd restarts it.
-// heartbeat is the function to publish with (a cluster worker adds fields).
-func (w *VmsWorker) Run(poll time.Duration, stop <-chan struct{}, heartbeat func() error) {
-	if heartbeat == nil {
-		heartbeat = w.HeartbeatOnce
-	}
+// Run: the loop as a process. Nomad or systemd restarts it.
+func (w *VmsWorker) Run(poll time.Duration, stop <-chan struct{}) {
+	heartbeat := w.HeartbeatOnce
 	leaseEvery := (w.LeaseTTL - w.LeaseMargin) / 3
 	if leaseEvery < 1 {
 		leaseEvery = 1

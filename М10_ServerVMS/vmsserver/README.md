@@ -12,13 +12,15 @@ vmsserver/
     events.py                  Lesson 3  the event log: buckets per unit per epoch on the resource, for any subsystem — generic
     resource.py                Lesson 3  the resource as a platform job: heartbeat, buckets over HTTP, retention by each subsystem's row, the mirror to a peer, restore
     eventindex.py              Lesson 3  the index over every subsystem's buckets on every resource — a cache
+    spec.py                    Lesson 5  the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name, snapshot) and SpecController, the one controller every subsystem runs
   vms/                         the VMS — the first subsystem
     reconciler.py              Lesson 4  М9 Lesson 6's loop, copied unchanged: the contract
     archive.py                 Lesson 3  the VMS's part of the resource under vms/<cam>/: spool → promote → manifest; the camera's event buckets; ArchivePolicy (repair, close, media retention) registered on the platform's resource
-    worker.py                  Lesson 4  vmsworker: N pipelines against an assignment; an epoch per camera; a lease; the heartbeat
-    controller.py              Lesson 5  vmscontroller: cameras and placement by CAS; what it refuses; rebalance on request; vms/retention/<cam> for the platform
+    worker.py                  Lesson 4  vmsworker: N pipelines against an assignment; an epoch per camera; a lease; the heartbeat with server, labels and capacity — on a box or in an allocation
+    vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
+    controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
     console.py                 Lesson 5  the one-box console, standard library: the read model from heartbeats; writes to the controller; operator marks into its own bucket
-    config.py                  the schema, as items in the config store
+    config.py                  the schema's Python view over the spec: row() and items()
     __main__.py                python3 -m vms worker | controller
   gstvms/                      Track 2 — needs GStreamer
     uri.py                     Lesson 2  driverpack://file/<name> resolved and refused — pure, no GStreamer

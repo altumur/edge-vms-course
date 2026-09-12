@@ -1,0 +1,26 @@
+# The VMS, as the platform sees it. Everything the controller does for this
+# subsystem is here; the worker (vmsworker) is the part that knows what a camera is.
+name: vms
+unit:
+  rows: cameras                      # vms/cameras/<id>
+  id: numeric                        # vms/next_id
+  fields:
+    name:                  {type: string, default: "cam{id}"}
+    source:                {type: string, required: true}     # driverpack://file/<name> or driverpack://<vendor>/<host>
+    enabled:               {type: bool,   default: true}
+    retention_days:        {type: int,    default: 30}        # media: the VMS's own policy, on its manifest
+    events_retention_days: {type: int,    default: 365}       # buckets: the platform's, via the derived row below
+    priority:              {type: int,    default: 100}
+    labels:                {type: list}                       # where the camera is reachable from: "vlan:cctv-a"
+    ref:                   {type: string}                     # the name a layer above knows it by (М12)
+  derived:
+    - row: retention/{id}            # vms/retention/<id> {days}: what the platform's resource job retains buckets by
+      items: {days: events_retention_days}
+      on_delete: {days: 0}           # a deleted camera's buckets go at the next pass
+placement:
+  capacity:   {from: capacity, fallback: 50}    # the worker's word, from its heartbeat; the fallback for one that said nothing
+  headroom:   {from: headroom}                  # what the autoscaler sums
+  constraint: labels-subset                     # the camera's labels ⊆ the worker's server's labels
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+snapshot: [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]

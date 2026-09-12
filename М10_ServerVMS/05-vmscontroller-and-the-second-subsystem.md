@@ -1,12 +1,12 @@
 # Lesson 5 — `vmscontroller`, and the Second Subsystem
 
-**Module:** ServerVMS — the platform's shape on one server (Module 10)
+**Module:** NodeVMS — the platform's shape on one Node (Module 10)
 **You will build:** the controller — the only writer of `vms/*`, camera CRUD and placement by CAS, stored with a reason, safe at two, never needed to recover, never deciding how many workers there are — the console over it, the failure arithmetic measured process by process, and a second subsystem through the same platform code.
 **Time:** ~150 minutes.
 
 ## Why this lesson exists
 
-Somebody has to write configuration, and the module's answer is: exactly one thing, and it is not the worker and not the console. М9 gave the recorder its own database so that an operator could edit a camera with everything above the recorder unreachable — an argument about the *domain*, which may be down. Inside a cluster the store is one raft, the workers are stateless, and a single writer keeps every property М9 wanted while dropping the one it paid for. The controller is that writer.
+Somebody has to write configuration, and the module's answer is: exactly one thing, and it is not the worker and not the console. М9 gave the Node its own database so that an operator could edit a camera with everything above the Node unreachable — an argument about the *domain*, which may be down. Inside a cluster the store is one raft, the workers are stateless, and a single writer keeps every property М9 wanted while dropping the one it paid for. The controller is that writer.
 
 It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on the proof that the shape is not special: a second subsystem, a controller and a worker that count seconds, dropped onto the same platform with a different prefix.
 
@@ -145,7 +145,7 @@ GET  /metrics                        -> vms_epoch_conflicts, vms_workers_live, v
 
 ## Step 7 — The second subsystem
 
-`tests/test_second_subsystem.py` defines a `CounterController` and a `CounterWorker` over `Subsystem("counter")`: units with a `step`, a worker that adds the step each pass, heartbeats its values, and writes an event into `counter/b/e1/…` on the same resource every tenth tick through the platform's `EventLog`. Forty lines, no reference to the VMS, and the platform runs it:
+`tests/test_second_subsystem.py` defines a `CounterWorker` over `Subsystem("counter")` — a worker that adds a `step` each pass, heartbeats its values, and writes an event into `counter/b/e1/…` on the same resource every tenth tick through the platform's `EventLog` — and **no controller at all**. The counter's controller is a *spec*, ten lines of YAML the platform's `SpecController` runs from: a prefix, where the rows live, how a unit is named (`id: name` — the operator names counters; the VMS numbers cameras), the operator's fields with types and defaults, which heartbeat field is capacity. Refusals, CAS, revision bumps, placement by capacity with a reason, redistribution, the read model and the snapshot all come with it. Thirty lines of worker, no reference to the VMS, and the platform runs it:
 
 ```
 counter/units/a  counter/units/b  counter/workers/c-1  counter/epoch/a  counter/epoch/b
@@ -153,7 +153,7 @@ heartbeat status: [{'id': 'a', 'value': 4, 'phase': 'counting'}, {'id': 'b', 'va
 vms/*: []            the two subsystems share the platform and see nothing of each other
 ```
 
-Diff the two subsystems' `systemd` units and you get a prefix and a name. That is what "each new subsystem provides its controller and its worker to the platform" means as an artifact: detectors in М11 will be `det/*`, a `detectorcontroller` that places detector jobs on GPU resources, and a `detectorworker` that runs them — the same base classes, the same stores, the same ACL shape.
+Diff the two subsystems and you get a YAML file and a worker. That is what "each new subsystem provides its controller and its worker to the platform" means as an artifact — and the VMS is no exception: `vms/vms.subsystem.yaml` is *its* controller, and `vms/controller.py` is twenty lines that call the platform's class by the VMS's names (`create_camera`, not `create`). The spec's vocabulary is deliberately small: fields, a derived row, a constraint and a tie-break **by name** from a catalogue of two (`labels-subset`, `most-free-capacity`), a snapshot list. A subsystem that needs another rule registers a function under a name — code, not YAML pretending to be code. Detectors in М11 will be `det.subsystem.yaml` with `constraint: labels-subset` against GPU labels and a `detectorworker` that runs them — the same class, the same stores, the same ACL shape.
 
 **Deliverable:** one box, two subsystems, one console. `POST /cameras` starts a recording within one worker pass; stop the controller and show recording, the read model and a worker restart all unaffected; kill the worker and show the edit made meanwhile applied on restart; and `test_second_subsystem.py` green, with a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, and nothing else.
 
