@@ -1,14 +1,16 @@
 """Lesson 2 — shadow mode: the domain that writes nothing.
 
-The domain computes what the directory WOULD say, observes what Nodes
-report, and emits a divergence report. It changes nothing. The taxonomy:
+The domain computes what the directory WOULD say, observes what the
+clusters' workers report, and emits a divergence report. It changes
+nothing. The taxonomy, per CAMERA now that the unit of work is a camera on
+a worker rather than a recorder with its own database (М9):
 
-    lagging       behind, within grace                 not a fault
-    stalled       behind past grace, no progress       the real "it did not take effect"
-    orphaned      placed, and no Node claims it        fault
-    unmanaged     a Node records something the domain never placed   in shadow mode: a MEASUREMENT
-    conflict      two Nodes claim one camera           always a fault — fencing or placement
-    stale_epoch   a report under a superseded epoch    the fencing rule catching a writer that should have stopped
+    lagging       a worker has not yet applied a camera's revision, within grace     not a fault
+    stalled       behind past grace, no progress                                     the real "it did not take effect"
+    orphaned      placed by the domain, and no cluster's snapshot lists it            fault
+    unmanaged     a cluster runs a camera the domain never placed                     in shadow mode: a MEASUREMENT
+    conflict      two clusters — or two workers — claim one camera                   always a fault — placement or fencing
+    stale_epoch   a worker reports a camera under a superseded epoch                  the fence catching a writer that should have stopped
 
 The one number is `unmanaged == 0`: anything running that the model does
 not describe is a gap in the model, and driving it to zero IS the design
@@ -21,14 +23,13 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class NodeReport:
-    """What a Node's heartbeat/status object says: which cameras it runs,
-    under which epoch, at which revision it observed the directory."""
-    node: str
+class WorkerReport:
+    """What a worker's heartbeat says: which cameras it runs, under which
+    epoch each, and which revision of each it has applied."""
+    worker: str
     cluster: str
-    epoch: int
-    cameras: list[int]
-    observed_revision: int
+    server: str
+    cameras: list[tuple[str, int, int, int]]   # (camera ref — the domain's name for it, epoch, revision, observed_revision)
     ts: float
 
 
@@ -36,14 +37,13 @@ class NodeReport:
 class Finding:
     kind: str
     camera: int | None
-    node: str | None
+    where: str | None
     detail: str
 
 
 @dataclass
 class DivergenceReport:
     findings: list[Finding] = field(default_factory=list)
-    revision: int = 0
 
     def count(self, kind: str) -> int:
         return sum(1 for f in self.findings if f.kind == kind)
@@ -58,50 +58,79 @@ class DivergenceReport:
 
     def summary(self) -> str:
         kinds = ("lagging", "stalled", "orphaned", "unmanaged", "conflict", "stale_epoch")
-        return "  ".join(f"{k}={self.count(k)}" for k in kinds) + f"  (directory revision {self.revision})"
+        return "  ".join(f"{k}={self.count(k)}" for k in kinds)
 
 
 class Shadow:
-    """`placed`: camera -> node the directory says should run it (from М11
-    placement/<camera>, cluster by cluster). `epochs`: node -> current epoch
-    from nodes/<node>/epoch. `revision`: the directory's current revision."""
+    """`placed`: camera ref -> cluster the domain's placement says. `epochs`:
+    (cluster, ref) -> current epoch from that cluster's vms/epoch/<id>, keyed
+    by the ref the snapshot maps it to. `reports`: every worker's heartbeat,
+    every cluster. Everything is keyed by the domain's ref: two clusters both
+    have an id 1, and the domain never compares by it."""
 
     def __init__(self, grace_seconds: float = 60.0):
         self.grace = grace_seconds
-        self._progress: dict[str, tuple[int, float]] = {}   # node -> (last observed_revision, since when)
+        self._progress: dict[tuple[str, int], tuple[int, float]] = {}   # (worker, camera) -> (last observed, since when)
 
-    def compare(self, placed: dict[int, str], epochs: dict[str, int], revision: int,
-                reports: list[NodeReport], now: float) -> DivergenceReport:
-        rep = DivergenceReport(revision=revision)
-        claims: dict[int, list[str]] = {}
+    def compare(self, placed: dict, epochs: dict[tuple[str, str], int],
+                reports: list[WorkerReport], now: float) -> DivergenceReport:
+        rep = DivergenceReport()
+        claims: dict[int, list[tuple[str, str]]] = {}
         for r in reports:
-            if epochs.get(r.node, r.epoch) != r.epoch:
-                rep.findings.append(Finding("stale_epoch", None, r.node,
-                                            f"reports under epoch {r.epoch}, current is {epochs[r.node]}"))
-                continue                                  # a fenced writer's claims count for nothing
-            for c in r.cameras:
-                claims.setdefault(c, []).append(r.node)
-            last, since = self._progress.get(r.node, (None, now))
-            if last != r.observed_revision:
-                self._progress[r.node] = (r.observed_revision, now)
-                since = now
-            behind = revision - r.observed_revision
-            if behind > 0:
-                age = now - since
-                kind = "stalled" if age > self.grace else "lagging"
-                rep.findings.append(Finding(kind, None, r.node,
-                                            f"behind by {behind} revision(s) for {age:.0f}s"))
-        for cam, nodes in claims.items():
-            if len(nodes) > 1:
-                rep.findings.append(Finding("conflict", cam, None, f"claimed by {sorted(nodes)}"))
+            for cam, epoch, revision, observed in r.cameras:
+                current = epochs.get((r.cluster, cam), epoch)
+                if epoch < current:
+                    rep.findings.append(Finding("stale_epoch", cam, f"{r.cluster}/{r.worker}",
+                                                f"reports under epoch {epoch}, current is {current}"))
+                    continue                              # a fenced writer's claim counts for nothing
+                claims.setdefault(cam, []).append((r.cluster, r.worker))
+                key = (r.worker, cam)
+                last, since = self._progress.get(key, (None, now))
+                if last != observed:
+                    self._progress[key] = (observed, now); since = now
+                behind = revision - observed
+                if behind > 0:
+                    age = now - since
+                    rep.findings.append(Finding("stalled" if age > self.grace else "lagging", cam, f"{r.cluster}/{r.worker}",
+                                                f"behind by {behind} revision(s) for {age:.0f}s"))
+        for cam, who in claims.items():
+            if len(who) > 1:
+                rep.findings.append(Finding("conflict", cam, None, f"claimed by {sorted(who)}"))
             elif cam not in placed:
-                rep.findings.append(Finding("unmanaged", cam, nodes[0], "running, never placed"))
-            elif placed[cam] != nodes[0]:
-                rep.findings.append(Finding("conflict", cam, nodes[0], f"placed on {placed[cam]}, running on {nodes[0]}"))
-        for cam, node in placed.items():
+                rep.findings.append(Finding("unmanaged", cam, f"{who[0][0]}/{who[0][1]}", "running, never placed by the domain"))
+            elif placed[cam] != who[0][0]:
+                rep.findings.append(Finding("conflict", cam, f"{who[0][0]}/{who[0][1]}", f"placed in {placed[cam]}, running in {who[0][0]}"))
+        for cam, cl in placed.items():
             if cam not in claims:
-                rep.findings.append(Finding("orphaned", cam, node, "placed, and no Node claims it"))
+                rep.findings.append(Finding("orphaned", cam, cl, "placed, and no worker in the domain runs it"))
         return rep
+
+
+def reports_from(fed) -> tuple[list[WorkerReport], dict[tuple[str, str], int], list[str]]:
+    """Build the reports and the epoch map from every reachable cluster's
+    heartbeats and vms/epoch/* — what the shadow job reads each pass."""
+    from .federation import Unreachable
+    reports, epochs, down = [], {}, []
+    for name, c in fed.clusters.items():
+        try:
+            def ref_of(st):
+                return str(st.get("ref") or f"{name}/{st['id']}")
+            refs = {}
+            for w, hb in c.heartbeats().items():
+                cams = []
+                for st in hb.get("status", []):
+                    if st.get("phase") != "running":
+                        continue
+                    refs[int(st["id"])] = ref_of(st)
+                    cams.append((ref_of(st), int(st.get("epoch", 0)), int(st.get("revision", 0)), int(st.get("observed_revision", 0))))
+                reports.append(WorkerReport(w, name, hb.get("server", "?"), cams, float(hb["ts"])))
+            for path in c.vars.list("vms/epoch/"):
+                items, _ = c.vars.get(path)
+                cid = int(path.rsplit("/", 1)[1])
+                epochs[(name, refs.get(cid, f"{name}/{cid}"))] = int(items["epoch"])
+        except Unreachable:
+            down.append(name)
+    return reports, epochs, down
 
 
 def exit_criterion(rep: DivergenceReport, consecutive_clean: int, required: int = 3) -> tuple[bool, str]:

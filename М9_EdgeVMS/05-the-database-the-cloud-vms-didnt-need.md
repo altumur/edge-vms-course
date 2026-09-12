@@ -1,7 +1,7 @@
 # Lesson 5 — The Database the Cloud VMS Didn't Need
 
 **Module:** EdgeVMS — the box owns its truth (Module 9)
-**You will build:** the Node's schema — configuration, archive index and events — with time partitioning, a GiST-indexed timeline query, and migrations that run unattended at boot on a box nobody visits.
+**You will build:** the recorder's schema — configuration, archive index and events — with time partitioning, a GiST-indexed timeline query, and migrations that run unattended at boot on a box nobody visits.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists
@@ -32,19 +32,19 @@ This lesson is where the box starts owning its own truth. It is mostly schema, a
 
 ---
 
-## Step 1 — One database, and this Node owns it
+## Step 1 — One database, and this recorder owns it
 
 Before any SQL, one decision, because it shapes everything after it and it is the opposite of what most control-plane tutorials do.
 
-**This database is not a cache.** The Node is the authority for its own configuration. Nothing above it ever writes these rows — not in this module, and not in М11 when there are twenty Nodes and a layer above them. That layer is a *directory*: it holds a list and a durable copy, and it may be unreachable while an operator edits a camera right here.
+**This database is not a cache.** The recorder is the authority for its own configuration. Nothing above it ever writes these rows — not in this module, and not in М11 when there are twenty recorders and a layer above them. That layer is a *directory*: it holds a list and a durable copy, and it may be unreachable while an operator edits a camera right here.
 
-The consequence you can feel later: when М11 moves this Node to a different server, its configuration travels with it and **nothing rewrites who owns what**. Ownership never changed, because ownership was always local.
+The consequence you can feel later: when М11 moves this recorder to a different server, its configuration travels with it and **nothing rewrites who owns what**. Ownership never changed, because ownership was always local.
 
 So: **there is no second database here, and none arrives later.** Worth saying plainly, because the instinct after a few years of building control planes is to put a central one in.
 
 ## Step 2 — Three kinds of data, one engine
 
-The Node holds three things. They share an engine and almost nothing else, and Lesson 8 depends on you having noticed the difference:
+The recorder holds three things. They share an engine and almost nothing else, and Lesson 8 depends on you having noticed the difference:
 
 | | **Configuration** | **Archive index** | **Events** |
 |---|---|---|---|
@@ -52,7 +52,7 @@ The Node holds three things. They share an engine and almost nothing else, and L
 | Written by | people, rarely | the AppHost, constantly | detectors and the AppHost |
 | Rate | a few rows a day | ~100 rows/second at scale | bursty, high volume |
 | Read | on every reconcile | on every timeline query | rarely, and by search |
-| If lost | **the Node is gone** | rebuildable by scanning segments | acceptable — they are observations |
+| If lost | **the recorder is gone** | rebuildable by scanning segments | acceptable — they are observations |
 | Retention | forever | a rolling window | a rolling window |
 
 That bottom-left cell is the one that matters. Configuration is the only thing here that cannot be re-derived from something else, which is why М11 replicates it upward and ignores the rest.
@@ -61,14 +61,14 @@ That bottom-left cell is the one that matters. Configuration is the only thing h
 
 The honest version of this argument, because "Postgres is more serious" is not one.
 
-If the Node held only configuration — a few hundred rows, one writer — SQLite would be plenty and would save you a service. But the index and the events are in the picture regardless, and they change the question:
+If the recorder held only configuration — a few hundred rows, one writer — SQLite would be plenty and would save you a service. But the index and the events are in the picture regardless, and they change the question:
 
 - **Concurrency.** SQLite permits one writer at a time; WAL lets readers run alongside a writer but does not change that. Twenty media workers writing index rows, an event stream, and the AppHost reading is real contention.
 - **Partitioning is the deciding feature**, and Step 5 makes it concrete with numbers.
 - **Types that match the work.** `tstzrange` with a GiST index answers М8's timeline query directly; JSONB carries event payloads that differ per detector.
 - **One engine, one skillset.** The same `psql`, `pg_dump`, backup story and client library. Students learn one thing; whoever operates the appliance operates one thing.
 
-So a Node is running Postgres either way, and putting configuration anywhere else buys nothing.
+So a recorder is running Postgres either way, and putting configuration anywhere else buys nothing.
 
 ## Step 3 — The configuration schema
 
@@ -125,7 +125,7 @@ CREATE TABLE cameras (
 Two answers that actually work on an appliance:
 
 - **The TPM**, where М9's hardware allows: seal the column key so it can only be unwrapped by *this box, running this software*. A stolen disk yields ciphertext.
-- **Delivered at runtime** by whatever starts the Node, and held only in memory. On one box that is systemd reading from the data partition — no better than the file. From М11 it is a Nomad Variable, which is encrypted, ACL'd, and genuinely not in your `pg_dump`.
+- **Delivered at runtime** by whatever starts the recorder, and held only in memory. On one box that is systemd reading from the data partition — no better than the file. From М11 it is a Nomad Variable, which is encrypted, ACL'd, and genuinely not in your `pg_dump`.
 
 **This module ships the first, weaker version and says so**: the column is encrypted, the key is on the data partition, and the improvement is named as a debt. What it must not do is leave the credential in a URL string, because that version cannot be improved later without touching every row and every log that has already been written.
 
@@ -143,7 +143,7 @@ The comment is not decoration. It is the most important thing in the lesson.
 
 An API that lets a client set `phase` has handed the client the ability to lie about reality. An API that lets a client set `observed_revision` has handed it the ability to claim a change was applied that never was. These are not hypothetical: they are the default outcome of generating CRUD endpoints from a table definition, which is why the split has to be in your head before the endpoints exist.
 
-**There is also no Node column here that a client may write**, and there will not be one in М11 either. Which Node owns a camera is decided *for* the operator. An operator assigns cameras to a **site** — where they physically are — and the controller turns that into a placement decision of its own.
+**There is also no recorder column here that a client may write**, and there will not be one in М11 either. Which recorder owns a camera is decided *for* the operator. An operator assigns cameras to a **site** — where they physically are — and the controller turns that into a placement decision of its own.
 
 ### `revision` is an integer, not a hash and not a timestamp
 
@@ -167,7 +167,7 @@ CREATE TRIGGER cameras_bump BEFORE UPDATE ON cameras
     EXECUTE FUNCTION bump_revision();
 ```
 
-**The `WHEN` clause names the operator-owned columns, and that is not fussiness.** The first draft of this lesson wrote `WHEN (OLD.* IS DISTINCT FROM NEW.*)`, which reads well and is wrong: the AppHost's own status write — `observed_revision`, `phase`, `last_seen` — is an `UPDATE` too, so every report bumped `revision`. Measured: report `observed_revision = 2` and `revision` goes to 3; the lag is 1 forever and the Node chases its own tail. The line through the middle of the table is enforced here, by the database, rather than remembered by whoever writes the next `UPDATE`.
+**The `WHEN` clause names the operator-owned columns, and that is not fussiness.** The first draft of this lesson wrote `WHEN (OLD.* IS DISTINCT FROM NEW.*)`, which reads well and is wrong: the AppHost's own status write — `observed_revision`, `phase`, `last_seen` — is an `UPDATE` too, so every report bumped `revision`. Measured: report `observed_revision = 2` and `revision` goes to 3; the lag is 1 forever and the recorder chases its own tail. The line through the middle of the table is enforced here, by the database, rather than remembered by whoever writes the next `UPDATE`.
 
 Monotonic, controller-assigned, one per object. Three candidates and only one survives:
 
@@ -330,9 +330,9 @@ CREATE TABLE grants (
 );
 ```
 
-On one Node, authorization is a non-problem: one operator, all capabilities. So this lesson builds the tables and **no policy**.
+On one recorder, authorization is a non-problem: one operator, all capabilities. So this lesson builds the tables and **no policy**.
 
-`valid_until` does nothing at all in this module, and the lesson says so rather than leaving you to wonder why a column is dead. It is there because of what happens in М11. With many Nodes, a *revoke* that cannot reach a Node is silent and unbounded — the removed administrator keeps access until someone successfully talks to that box, which may be weeks, and they have every incentive not to mention it. The fix is that grants expire and are renewed, which turns an unbounded window into a number the product states.
+`valid_until` does nothing at all in this module, and the lesson says so rather than leaving you to wonder why a column is dead. It is there because of what happens in М11. With many recorders, a *revoke* that cannot reach a recorder is silent and unbounded — the removed administrator keeps access until someone successfully talks to that box, which may be weeks, and they have every incentive not to mention it. The fix is that grants expire and are renewed, which turns an unbounded window into a number the product states.
 
 **Adding that column now costs nothing. Adding it later is a migration against live authorization data on every appliance in the field.** That is the whole argument for dead columns you can justify, and it is a narrow licence — not a reason to speculatively add fifteen.
 
@@ -365,7 +365,7 @@ Three releases to rename a column. That is what shipping to hardware you cannot 
 ```ini
 # /etc/containers/systemd/postgres.container
 [Unit]
-Description=Node database
+Description=recorder database
 
 [Container]
 Image=docker.io/library/postgres:16
@@ -382,7 +382,7 @@ WantedBy=multi-user.target
 
 `/data/pg`, not anywhere in a rootfs slot. Get this wrong and the first OS update destroys every camera the operator configured — and because the new slot boots perfectly, **nothing rolls back**. М9 Lesson 3's health check would catch it only if it reaches all the way to *is footage being written*, which is precisely why that lesson pushed it that far.
 
-`PublishPort` binds to loopback only. Nothing outside the box talks to this database in this module, and in М11 nothing outside the Node does either.
+`PublishPort` binds to loopback only. Nothing outside the box talks to this database in this module, and in М11 nothing outside the recorder does either.
 
 **Deliverable:** schema and migrations applied, then simulate an A/B update — replace the root filesystem, reboot, and confirm every camera row and every segment is still there.
 
@@ -403,7 +403,7 @@ WantedBy=multi-user.target
 ## Recap
 
 - М8 was right to forbid a database and the answer flips on-premises: if the box does not remember what it should be doing, nothing does.
-- **The Node owns this database — it is not a cache.** Nothing above ever writes these rows, which is what lets configuration travel with the Node in М11 without ownership being rewritten.
+- **The recorder owns this database — it is not a cache.** Nothing above ever writes these rows, which is what lets configuration travel with the recorder in М11 without ownership being rewritten.
 - Three kinds of data, one engine. Only **configuration** cannot be re-derived; the index and the events can.
 - **Operator-owned versus controller-owned columns is a security boundary**, not a naming convention. `phase` and `observed_revision` must never be settable by a client.
 - `revision` is a monotonic integer because ordering expresses *distance*; a hash expresses only difference and a timestamp needs clocks to agree.
@@ -414,7 +414,7 @@ WantedBy=multi-user.target
 
 ## Exercises
 
-1. Build the partition-creation job. Decide how far ahead it runs and what happens if it fails — then work out how long the Node keeps recording before the first `no partition found` error. That number is an alert threshold.
+1. Build the partition-creation job. Decide how far ahead it runs and what happens if it fails — then work out how long the recorder keeps recording before the first `no partition found` error. That number is an alert threshold.
 2. Write the query the console needs — *is camera 7 recording right now, and how far behind is it?* — as a single statement. Then explain why `revision - observed_revision` is more useful on a dashboard than a boolean.
 3. Add a `CHECK` constraint that makes an empty or backwards `span` impossible to insert. Then argue whether that belongs in the database or the application, and be specific about who else writes to this table.
 4. Attempt a rename the naive way — `ALTER TABLE cameras RENAME COLUMN rtsp_url TO source_url` — then work out precisely what happens if М9 Lesson 3's rollback fires afterwards. Write the three-release plan that avoids it.

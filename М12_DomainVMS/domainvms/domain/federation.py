@@ -7,19 +7,26 @@ partial, stale by a bounded amount, sometimes incomplete — and the honest
 response to "where is camera 7" when a cluster is unreachable is "not found
 in the clusters I could reach", never a short list rendered as complete.
 
-`Cluster` is the domain's handle on one region: a name, its Variables, its
-object store, and whether the last read reached it. `Federation` is the
-list. `DomainDirectory` is М11's Directory, once per cluster, merged with
-the incompleteness kept as a first-class field of every answer.
+What a cluster publishes for the domain to read (М11 Lesson 5): ONE object,
+`vms/snapshot` — its controller's copy of every camera row with the worker
+and server it is placed on, carrying a timestamp — and its workers'
+heartbeats. The domain never reads a cluster's Variables: the rows stay in
+raft with one writer, and what leaves is a copy with an age.
+
+`Cluster` is the domain's handle on one region; `Federation` is the list;
+`DomainDirectory` merges the snapshots with the incompleteness kept as a
+first-class field of every answer.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 
-from cluster.directory import NodeDirectory as Directory   # the first design's scan of nodes/*; goes with this module's rewrite to 2c
 from cluster.objectstore import ObjectStore
 from cluster.variables import Variables
+
+SNAPSHOT = "vms/snapshot"
 
 
 class Unreachable(Exception):
@@ -35,15 +42,29 @@ class Cluster:
     reaches: frozenset = frozenset()      # networks this cluster can see: {"vlan:cctv-a", ...}
     is_domain_cluster: bool = False       # the one that hosts the domain services — a stated decision
 
-    def directory(self, ttl: float = 5.0, clock=time.monotonic) -> Directory:
-        return Directory(self.vars, ttl=ttl, clock=clock)
+    def snapshot(self) -> dict | None:
+        """The controller's copy of the cluster's cameras and placement, with its age."""
+        raw = self.objects.get(SNAPSHOT)
+        return json.loads(raw) if raw else None
+
+    def heartbeats(self) -> dict[str, dict]:
+        """worker -> its last heartbeat (М10's shape: status, server, epoch per camera)."""
+        out = {}
+        for key in self.objects.list("vms/"):
+            if key.endswith("/heartbeat") and key.count("/") == 2:
+                raw = self.objects.get(key)
+                if raw:
+                    hb = json.loads(raw)
+                    out[hb["worker"]] = hb
+        return out
 
 
 @dataclass
 class Answer:
     """Where a camera is, and how much of the domain that claim covers."""
     camera: int
-    node: str | None
+    worker: str | None
+    server: str | None
     cluster: str | None
     searched: list[str]
     unreachable: list[str]
@@ -54,14 +75,14 @@ class Answer:
 
     @property
     def found(self) -> bool:
-        return self.node is not None
+        return self.cluster is not None
 
     def sentence(self) -> str:
         if self.found:
-            s = f"camera {self.camera} is on {self.node} in {self.cluster}"
+            s = f"camera {self.camera} is on {self.worker or 'no worker yet'} ({self.server or '?'}) in {self.cluster}"
             return s if self.complete else s + f" (and {', '.join(self.unreachable)} could not be asked)"
         if self.complete:
-            return f"camera {self.camera} is on no Node in the domain ({len(self.searched)} clusters searched)"
+            return f"camera {self.camera} is in no cluster of the domain ({len(self.searched)} clusters searched)"
         return (f"camera {self.camera} was not found in the {len(self.searched)} cluster(s) I could reach; "
                 f"{', '.join(self.unreachable)} unreachable — not 'not anywhere'")
 
@@ -82,31 +103,47 @@ class Federation:
 
 
 class DomainDirectory:
-    """A directory of directories. Reads each cluster's Variables through
-    М11's Directory; never copies; never claims more than it reached."""
+    """A directory of directories. Reads each cluster's snapshot; never
+    copies the rows; never claims more than it reached."""
 
-    def __init__(self, fed: Federation, ttl: float = 5.0, clock=time.monotonic):
-        self.fed, self.clock = fed, clock
-        self._dirs = {n: c.directory(ttl, clock) for n, c in fed.clusters.items()}
+    def __init__(self, fed: Federation, wall=time.time):
+        self.fed, self.wall = fed, wall
 
-    def scan(self) -> tuple[dict[str, dict[str, dict]], list[str]]:
-        """{cluster: {node: holdings}}, and the clusters that did not answer."""
+    def scan(self) -> tuple[dict[str, dict], list[str]]:
+        """{cluster: snapshot}, and the clusters that did not answer."""
         out, down = {}, []
-        for name, d in self._dirs.items():
+        for name, c in self.fed.clusters.items():
             try:
-                out[name] = d.scan(force=True)
+                out[name] = c.snapshot() or {"cameras": [], "ts": 0}
             except Unreachable:
                 down.append(name)
         return out, down
 
-    def where(self, camera: int) -> Answer:
+    def where(self, camera) -> Answer:
+        """`camera` is the DOMAIN's name for it — the `ref` the domain gave the
+        cluster when it forwarded the create. A cluster's own `id` is the
+        cluster's: two clusters both have an id 7, and the domain never asks by it."""
         scan, down = self.scan()
-        hits = [(cl, node) for cl, nodes in scan.items() for node, h in nodes.items() if camera in h["cameras"]]
+        hits = [(cl, row) for cl, snap in scan.items() for row in snap.get("cameras", []) if str(row.get("ref", "")) == str(camera)]
         if len(hits) > 1:
-            raise RuntimeError(f"camera {camera} claimed by {hits}: a placement or fencing failure, not a tie")
-        node, cl = (hits[0][1], hits[0][0]) if hits else (None, None)
-        return Answer(camera, node, cl, sorted(scan), sorted(down))
+            raise RuntimeError(f"camera {camera} claimed by {[h[0] for h in hits]}: a placement failure, not a tie")
+        if hits:
+            cl, row = hits[0]
+            return Answer(camera, row.get("worker"), row.get("server"), cl, sorted(scan), sorted(down))
+        return Answer(camera, None, None, None, sorted(scan), sorted(down))
 
     def holdings(self) -> tuple[dict[str, dict[str, list[int]]], list[str]]:
+        """{cluster: {worker: [cameras]}} from the snapshots, and the silent clusters."""
         scan, down = self.scan()
-        return {cl: {n: h["cameras"] for n, h in nodes.items()} for cl, nodes in scan.items()}, down
+        out: dict[str, dict[str, list[int]]] = {}
+        for cl, snap in scan.items():
+            out[cl] = {}
+            for row in snap.get("cameras", []):
+                out[cl].setdefault(row.get("worker") or "(unplaced)", []).append(row.get("ref") or f"{cl}/{row['id']}")
+        return out, down
+
+    def ages(self) -> dict[str, float]:
+        """How old each cluster's snapshot is — the domain's RPO, shown, never hidden."""
+        scan, _ = self.scan()
+        now = self.wall()
+        return {cl: max(0.0, now - float(snap.get("ts", 0))) for cl, snap in scan.items()}

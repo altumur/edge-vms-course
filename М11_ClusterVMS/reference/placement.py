@@ -1,11 +1,11 @@
-"""Lesson 5 — placement onto Nodes: capacity measured, constraints as
+"""Lesson 5 — placement onto recorders: capacity measured, constraints as
 labels, the placement STORED, and one rule with a property test:
 
-    adding a Node moves nothing.
+    adding a recorder moves nothing.
 
 Not consistent hashing: cameras are not uniform (a 4K stream is eight 720p
 streams), constraints break a ring, and at 3am "why is camera 812 on
-Node 3" must be a row with a reason and a timestamp, not a hash to recompute.
+recorder 3" must be a row with a reason and a timestamp, not a hash to recompute.
 """
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ class Camera:
 
 
 @dataclass
-class Node:
+class recorder:
     id: str
     capacity: float                   # cameras' worth of load this shard holds: (budget - B) / I from the probe
-    labels: frozenset = frozenset()   # which VLANs this Node's server can reach
+    labels: frozenset = frozenset()   # which VLANs this recorder's server can reach
     epoch: int = 0
 
 
@@ -35,7 +35,7 @@ class Placement:
 
 
 class Placer:
-    def __init__(self, nodes: dict[str, Node]):
+    def __init__(self, nodes: dict[str, recorder]):
         self.nodes = nodes
         self.placed: dict[int, Placement] = {}     # STORED, never derived
         self.rev = 0
@@ -44,7 +44,7 @@ class Placer:
     def load_of(self, node_id: str, cameras: dict[int, Camera]) -> float:
         return sum(cameras[c].load for c, p in self.placed.items() if p.node == node_id and c in cameras)
 
-    def eligible(self, cam: Camera) -> list[Node]:
+    def eligible(self, cam: Camera) -> list[recorder]:
         return [n for n in self.nodes.values() if cam.labels <= n.labels]
 
     # -- placement ---------------------------------------------------------
@@ -59,7 +59,7 @@ class Placer:
             if free >= cam.load and free > best_free:
                 best, best_free = n, free
         if best is None:
-            return None                           # "the system is full" — never "Node 3 is full"
+            return None                           # "the system is full" — never "recorder 3 is full"
         why = f"most free capacity ({best_free:.1f}) among {len(self.eligible(cam))} eligible"
         self.placed[cam.id] = Placement(best.id, why, self.rev)
         return self.placed[cam.id]
@@ -67,11 +67,11 @@ class Placer:
     def remove(self, cam_id: int) -> None:
         self.placed.pop(cam_id, None)
 
-    def add_node(self, node: Node) -> None:
+    def add_node(self, node: recorder) -> None:
         self.nodes[node.id] = node                # nothing moves. That is the rule.
 
     def remove_node(self, node_id: str, cameras: dict[int, Camera]) -> list[int]:
-        """A Node retired ON PURPOSE (not a failover — failover moves the Node).
+        """A recorder retired ON PURPOSE (not a failover — failover moves the recorder).
         Its cameras are re-placed; returns those that found no home."""
         del self.nodes[node_id]
         orphans = [c for c, p in self.placed.items() if p.node == node_id]
@@ -84,9 +84,9 @@ class Placer:
 
     # -- rebalance: explicit, budgeted, observable, interruptible -----------
     def rebalance(self, cameras: dict[int, Camera], budget: int) -> list[tuple[int, str, str]]:
-        """Move at most `budget` cameras from the most loaded Node to the least,
+        """Move at most `budget` cameras from the most loaded recorder to the least,
         only while that reduces the spread. Returns the moves as (cam, from, to).
-        Every move is the ONE two-writer operation in this module — the old Node
+        Every move is the ONE two-writer operation in this module — the old recorder
         must stop and the new one start — which is why it needs the epoch."""
         moves = []
         for _ in range(budget):
@@ -111,8 +111,8 @@ class Placer:
 
 def check_invariants(p: Placer, cameras: dict[int, Camera]) -> None:
     for cid, pl in p.placed.items():
-        assert pl.node in p.nodes, f"camera {cid} placed on a Node that does not exist"
+        assert pl.node in p.nodes, f"camera {cid} placed on a recorder that does not exist"
         assert cameras[cid].labels <= p.nodes[pl.node].labels, f"camera {cid} violates its constraint"
     for n in p.nodes.values():
         assert p.load_of(n.id, cameras) <= n.capacity + 1e-9, f"{n.id} over capacity"
-    assert len(p.placed) == len(set(p.placed)), "a camera on two Nodes"
+    assert len(p.placed) == len(set(p.placed)), "a camera on two recorders"

@@ -2,7 +2,7 @@
 
 Lessons 1–4 assembled: the bench, the PKI, the RAUC configuration and
 bundle builder, the GRUB state machine, the health check, the Quadlet units,
-and the spool. None of this is code the Node runs; it is the box the Node
+and the spool. None of this is code the recorder runs; it is the box the recorder
 runs on.
 
 ```
@@ -22,7 +22,7 @@ edgevms/
     grub.cfg               L3 — ORDER / OK / TRY; one attempt per slot; env on the ESP
     seed-grubenv.sh        L3 — grub-editenv create + set
   health/
-    rauc-health-check      L3 — the ladder, with row 3 now REAL: the Node's own signal
+    rauc-health-check      L3 — the ladder, with row 3 now REAL: the recorder's own signal
     rauc-mark-good.service L3 — ExecStartPost only on success; the rollback needs no code
   quadlet/
     storage.conf           L4 — graphroot on /data, in the image
@@ -38,17 +38,17 @@ edgevms/
 ## The seam this closes
 
 Lesson 3's health check has to reach *is footage actually being written*,
-and Lesson 3 was written before the Node existed, so its third row was a
+and Lesson 3 was written before the recorder existed, so its third row was a
 stand-in: "a segment appeared in the spool in the last N seconds". That
 check is weak on purpose (a fast uploader empties the spool) and the lesson
 marks it.
 
-`health/rauc-health-check` now prefers the real thing. М9's Node exports
-`nodevms_camera_silent_seconds_max` on `127.0.0.1:8080/metrics` — the same
+`health/rauc-health-check` now prefers the real thing. М9's recorder exports
+`recorder_camera_silent_seconds_max` on `127.0.0.1:8080/metrics` — the same
 number М13 alarms on — and the health check reads it **locally**, with the
 uplink down, and decides:
 
-| Node says | Verdict |
+| recorder says | Verdict |
 |---|---|
 | AppHost not reporting | fail — the console is up and nobody is home |
 | cameras configured, none has ever written a segment | fail — boots perfectly, records nothing (Lesson 3, failure two) |
@@ -56,11 +56,11 @@ uplink down, and decides:
 | no cameras configured | pass, and says so — a stated product decision, not a hidden one |
 | otherwise | pass |
 
-Without a Node (an М9-only bench) it falls back to the agent's `/health`
+Without a recorder (an М9-only bench) it falls back to the agent's `/health`
 plus the spool stand-in, exactly as Lesson 3 wrote it. It touches nothing
 outside the box either way.
 
-The window is `2 × SEGMENT_SECONDS + 60` because a healthy Node is silent
+The window is `2 × SEGMENT_SECONDS + 60` because a healthy recorder is silent
 for up to one segment length between closes; a 120-second window against
 ten-minute segments would roll back every good update. `rauc-mark-good.service`'s
 `ExecStartPre` sleep must clear a segment length for the same reason.
@@ -100,7 +100,7 @@ slot.
 
 ## What was verified where
 
-- **Run, output real:** `pki/make-ca.sh` and `pki/verify-chain.sh` against OpenSSL 3.0.13 (the three refusals come out exactly as Lesson 2 prints them; note `openssl cms -verify` exits 4 on a refusal, which is why the script judges by message). `spool/test_spool.py`, six tests. `health/rauc-health-check` against a fake Node serving seven `/metrics` scenarios — healthy, silent 45 min, never recorded, AppHost not reporting, no cameras, no Node and no agent, agent-plus-spool — each giving the verdict in the table above.
+- **Run, output real:** `pki/make-ca.sh` and `pki/verify-chain.sh` against OpenSSL 3.0.13 (the three refusals come out exactly as Lesson 2 prints them; note `openssl cms -verify` exits 4 on a refusal, which is why the script judges by message). `spool/test_spool.py`, six tests. `health/rauc-health-check` against a fake recorder serving seven `/metrics` scenarios — healthy, silent 45 min, never recorded, AppHost not reporting, no cameras, no recorder and no agent, agent-plus-spool — each giving the verdict in the table above.
 - **Written to the documentation, not executed here:** `bench/build-disk.sh` (needs KVM/nbd/debootstrap and root), `rauc/build-bundle.sh` (needs `rauc`), `boot/grub.cfg` (RAUC's reference logic, copied from Lesson 3), the Quadlet units (need Podman's generator — `quadlet/check-quadlet.sh` is the check). They pass `bash -n`; the first run belongs on your bench.
 
 ## Known gaps, named

@@ -2,7 +2,7 @@
 
 The cloud VMS from [Module 8](../М8_KVS_VMS/README.md) runs on a computer somebody administers. This module turns it into one that nobody does — a box in a ceiling void that updates itself over a network, recovers from its own bad updates, and keeps recording when the link goes down.
 
-Nine lessons, one box, in two halves. **Lessons 1–4** ship the VMS as an appliance: an A/B root under RAUC, rollback decided by a health check, Podman under Quadlet, and a spool that survives the uplink. **Lessons 5–9** make the box own its truth: a database holding what it should be, a reconcile loop making it so, fifty pipelines in one process, failure as the feature, and the console — the design that [М11](../М11_ClusterVMS/README.md) puts under a scheduler. The design briefs are [`module-design.md`](module-design.md) for the appliance and [`node-design.md`](node-design.md) for the Node.
+Nine lessons, one box, in two halves. **Lessons 1–4** ship the VMS as an appliance: an A/B root under RAUC, rollback decided by a health check, Podman under Quadlet, and a spool that survives the uplink. **Lessons 5–9** make the box own its truth: a database holding what it should be, a reconcile loop making it so, fifty pipelines in one process, failure as the feature, and the console — the design that [М11](../М11_ClusterVMS/README.md) puts under a scheduler. The design briefs are [`module-design.md`](module-design.md) for the appliance and [`recorder-design.md`](recorder-design.md) for the recorder.
 
 ## The thesis
 
@@ -63,11 +63,11 @@ Written alongside the module, with their costs attached rather than quietly omit
 - [RAUC alternatives](rauc-alternatives.md) — SWUpdate, Mender, bootc, systemd-sysupdate, and where each wins. RAUC is taught because A/B slots are legible and its signature verification is unconditional; **bootc may well be the better choice for a product shipping on x86-64 UEFI**, and the document says so.
 - [One container per camera?](apphost-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle. Lesson 4's second sidebar sets this up; М11 Lesson 1 breaks the pattern deliberately.
 
-The multi-node half of this module moved to [М11](../М11_ClusterVMS/module-design.md), where Nodes are scheduled across servers. A module called EdgeVMS should not build a raft cluster. The orchestrator comparison that shaped it is recorded in [Kubernetes vs Nomad](../М11_ClusterVMS/kubernetes-vs-nomad.md).
+The multi-node half of this module moved to [М11](../М11_ClusterVMS/module-design.md), where recorders are scheduled across servers. A module called EdgeVMS should not build a raft cluster. The orchestrator comparison that shaped it is recorded in [Kubernetes vs Nomad](../М11_ClusterVMS/kubernetes-vs-nomad.md).
 
 ## The artifacts, whole
 
-[`edgevms/`](./edgevms/README.md) assembles what the four lessons leave on the box: `bench/build-disk.sh` builds the A/B disk with everything that must be *in the image* installed before slot A is copied to B; `pki/` is the two-level CA and the three `openssl cms` proofs; `rauc/` is `system.conf`, the manifest and a bundle builder with `--broken-kernel`, `--broken-config`, `--rogue` and `--wrong-hardware` for Lessons 2 and 3; `boot/grub.cfg` is the ORDER/OK/TRY state machine; `quadlet/` and `spool/` are Lesson 4. One thing in it is newer than the lessons: **the health check's third row is no longer a stand-in.** When М9's Node is installed it reads `nodevms_camera_silent_seconds_max` from the Node's own `/metrics`, locally, with the uplink down — so Lesson 3's rollback decision is finally made on *is footage being written*, which is what the lesson said it had to be.
+[`edgevms/`](./edgevms/README.md) assembles what the four lessons leave on the box: `bench/build-disk.sh` builds the A/B disk with everything that must be *in the image* installed before slot A is copied to B; `pki/` is the two-level CA and the three `openssl cms` proofs; `rauc/` is `system.conf`, the manifest and a bundle builder with `--broken-kernel`, `--broken-config`, `--rogue` and `--wrong-hardware` for Lessons 2 and 3; `boot/grub.cfg` is the ORDER/OK/TRY state machine; `quadlet/` and `spool/` are Lesson 4. One thing in it is newer than the lessons: **the health check's third row is no longer a stand-in.** When М9's recorder is installed it reads `recorder_camera_silent_seconds_max` from the recorder's own `/metrics`, locally, with the uplink down — so Lesson 3's rollback decision is finally made on *is footage being written*, which is what the lesson said it had to be.
 
 ```bash
 cd edgevms && pki/make-ca.sh && pki/verify-chain.sh && python3 spool/test_spool.py   # no VM needed
@@ -76,7 +76,7 @@ cd edgevms && pki/make-ca.sh && pki/verify-chain.sh && python3 spool/test_spool.
 
 ---
 
-## Part 2 — The Node: Lessons 5–9
+## Part 2 — The recorder: Lessons 5–9
 
 Lessons 1–4 leave you with an appliance that updates itself safely and keeps recording through an outage — and that has no idea what it is *supposed* to be doing. Every camera is configured by editing a file and restarting a container.
 
@@ -109,13 +109,13 @@ Two corrections worth knowing before you start, both found by running the thing 
 
 ### The code, whole (Lessons 5–9)
 
-[`nodevms/`](./nodevms/README.md) is the five lessons assembled into one runnable Node: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, AppHost glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
+[`recorder/`](./recorder/README.md) is the five lessons assembled into one runnable recorder: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, AppHost glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
 
 ```bash
-cd nodevms && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
+cd recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
 ```
 
-[`nodevms-go/`](./nodevms-go/README.md) is Lesson 9's rewrite argument made into a number: the reconciler in Go, the same eight tests passing, and the two controllers measured at idle — 6.0 MB against 25.7 MB, one 5.5 MB static binary against an interpreter and its packages.
+[`recorder-go/`](./recorder-go/README.md) is Lesson 9's rewrite argument made into a number: the reconciler in Go, the same eight tests passing, and the two controllers measured at idle — 6.0 MB against 25.7 MB, one 5.5 MB static binary against an interpreter and its packages.
 
 ### The stand-ins, and where they get collected
 
@@ -124,17 +124,17 @@ The course names its temporary things where they appear rather than discovering 
 1. М9 Lesson 4 — AWS credentials in a file on the data partition
 2. **Lesson 5 — the database password**
 3. **Lesson 9 — one hand-provisioned operator account**
-4. М12 Lesson 4 — a per-Node credential, and a self-signed domain CA
+4. М12 Lesson 4 — a per-recorder credential, and a self-signed domain CA
 
 М12 collects them all — four replaced, one promoted. The `valid_until` column in Lesson 5's `grants` table is the mirror image: dead code here, present so that М12 *populates* rather than *migrates*.
 
-**And the AppHost itself is a stand-in of a different kind.** It is the worker's own controller, built in Python because the course has no media worker of its own; in the product that controller lives inside DriverPack, the process that holds the pipeline, and the platform supplies the rest — assignment, fencing tokens, storage, the web tier. What survives the move is the contract this module's tests define: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons. [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md) draws the boundary row by row; `nodevms/` is the reference implementation the worker's tests are ported from.
+**And the AppHost itself is a stand-in of a different kind.** It is the worker's own controller, built in Python because the course has no media worker of its own; in the product that controller lives inside DriverPack, the process that holds the pipeline, and the platform supplies the rest — assignment, fencing tokens, storage, the web tier. What survives the move is the contract this module's tests define: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons. [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md) draws the boundary row by row; `recorder/` is the reference implementation the worker's tests are ported from.
 
-### Where the Node goes
+### Where the recorder goes
 
 Everything in this module holds because there is exactly one box — one writer, one AppHost, a convention where М11 needs a fencing token, and one API surface to protect.
 
-[**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box. A Node becomes a scheduler allocation that moves between servers, and nothing built here changes — that is the design working. But two instances of one Node can briefly exist during a failover, and Lesson 8's one-line rule (*on restart, never resume the previous segment*) has to become an epoch the archive itself enforces.
+[**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box. A recorder becomes a scheduler allocation that moves between servers, and nothing built here changes — that is the design working. But two instances of one recorder can briefly exist during a failover, and Lesson 8's one-line rule (*on restart, never resume the previous segment*) has to become an epoch the archive itself enforces.
 
 ---
 
@@ -142,4 +142,4 @@ Everything in this module holds because there is exactly one box — one writer,
 
 **М9 has no desired state.** You flash an image and containers run; actual state is the only state there is, and this module's entire job is making that replaceable safely.
 
-[**М9 — NodeVMS**](../М9_EdgeVMS/node-design.md) introduces the wish: a row saying a camera *should* be recording, and a loop that closes the gap. Its first act is to put an index over the segments Lesson 4 started writing — turning a spool into an archive.
+[**М9 — Recorder**](../М9_EdgeVMS/recorder-design.md) introduces the wish: a row saying a camera *should* be recording, and a loop that closes the gap. Its first act is to put an index over the segments Lesson 4 started writing — turning a spool into an archive.

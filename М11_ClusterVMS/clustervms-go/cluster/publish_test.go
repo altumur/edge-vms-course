@@ -107,7 +107,7 @@ func seen(t *testing.T, v *FakeVariables, objs ObjectStore, node string, cams ..
 	for _, c := range cams {
 		ids = append(ids, c.ID)
 	}
-	return Identity{Node: node, ConfigObject: items["config"], ConfigRevision: atoi(items["revision"]), CameraIDs: ids}
+	return Identity{recorder: node, ConfigObject: items["config"], ConfigRevision: atoi(items["revision"]), CameraIDs: ids}
 }
 
 func TestTheSixStepsRestoreASeenNode(t *testing.T) {
@@ -135,7 +135,7 @@ func TestTheRPOIsTheUnpublishedEdit(t *testing.T) {
 	}
 	items, _, _ := v.Get("nodes/node-3")
 	b := NewFakeClusterStore()
-	r, err := Rehydrate(Identity{Node: "node-3", ConfigObject: items["config"], ConfigRevision: atoi(items["revision"])}, b, objs)
+	r, err := Rehydrate(Identity{recorder: "node-3", ConfigObject: items["config"], ConfigRevision: atoi(items["revision"])}, b, objs)
 	must(t, err)
 	if r.Revision != 1 || b.Rows[7].RetentionDays != 30 { // the edit is gone. That is the RPO.
 		t.Fatal("RPO")
@@ -144,7 +144,7 @@ func TestTheRPOIsTheUnpublishedEdit(t *testing.T) {
 
 func TestNeverSeenComesUpUnconfigured(t *testing.T) {
 	_, objs := world(t)
-	r, err := Rehydrate(Identity{Node: "node-9"}, NewFakeClusterStore(), objs)
+	r, err := Rehydrate(Identity{recorder: "node-9"}, NewFakeClusterStore(), objs)
 	must(t, err)
 	if r.State != "unconfigured" {
 		t.Fatal(r.State)
@@ -154,12 +154,12 @@ func TestNeverSeenComesUpUnconfigured(t *testing.T) {
 func TestDanglingPointerAndRevisionMismatchAreRefused(t *testing.T) {
 	v, objs := world(t)
 	var refused *RestoreRefused
-	_, err := Rehydrate(Identity{Node: "node-3", ConfigObject: "node-3/rev-812", ConfigRevision: 812}, NewFakeClusterStore(), objs)
+	_, err := Rehydrate(Identity{recorder: "node-3", ConfigObject: "node-3/rev-812", ConfigRevision: 812}, NewFakeClusterStore(), objs)
 	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "no such object") {
 		t.Fatalf("must refuse: %v", err)
 	}
 	seen(t, v, objs, "node-3", Cam(7, 4))
-	_, err = Rehydrate(Identity{Node: "node-3", ConfigObject: "node-3/rev-4", ConfigRevision: 5}, NewFakeClusterStore(), objs)
+	_, err = Rehydrate(Identity{recorder: "node-3", ConfigObject: "node-3/rev-4", ConfigRevision: 5}, NewFakeClusterStore(), objs)
 	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "revision 4") {
 		t.Fatalf("must refuse: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestDanglingPointerAndRevisionMismatchAreRefused(t *testing.T) {
 func TestRestartOnTheSameServerRestoresNothing(t *testing.T) {
 	_, objs := world(t)
 	a := NewFakeClusterStore(Cam(7, 4))
-	r, err := Rehydrate(Identity{Node: "node-3", ConfigObject: "node-3/rev-1", ConfigRevision: 1}, a, objs)
+	r, err := Rehydrate(Identity{recorder: "node-3", ConfigObject: "node-3/rev-1", ConfigRevision: 1}, a, objs)
 	must(t, err)
 	if r.State != "already-configured" || a.Rows[7].Revision != 4 {
 		t.Fatal(r.State)
@@ -177,7 +177,7 @@ func TestRestartOnTheSameServerRestoresNothing(t *testing.T) {
 
 // The blob is format 1 on both sides: this is what Python's FakeClusterStore
 // published for cameras 7 (rev 4) and 8 (rev 2), captured verbatim. A Go
-// Node restores it — and a Python Node restores Go's (the README shows the
+// recorder restores it — and a Python recorder restores Go's (the README shows the
 // round trip).
 const pythonBlob = `{"cameras": [{"cred_secret": null, "cred_username": null, "enabled": true, "id": 7, "name": "cam7", "priority": 100, "retention_days": 30, "revision": 4, "rtsp_url": "rtsp://10.0.0.7/s", "site_id": "hq"}, {"cred_secret": null, "cred_username": null, "enabled": true, "id": 8, "name": "cam8", "priority": 100, "retention_days": 30, "revision": 2, "rtsp_url": "rtsp://10.0.0.8/s", "site_id": "hq"}], "format": 1, "grants": [], "operators": [], "revision": 4, "sites": [{"id": "hq", "name": "hq"}]}`
 
@@ -185,7 +185,7 @@ func TestAGoNodeRestoresWhatAPythonNodePublished(t *testing.T) {
 	_, objs := world(t)
 	must(t, objs.Put("node-3/rev-4", []byte(pythonBlob)))
 	b := NewFakeClusterStore()
-	r, err := Rehydrate(Identity{Node: "node-3", ConfigObject: "node-3/rev-4", ConfigRevision: 4}, b, objs)
+	r, err := Rehydrate(Identity{recorder: "node-3", ConfigObject: "node-3/rev-4", ConfigRevision: 4}, b, objs)
 	must(t, err)
 	if r.State != "restored" || r.Cameras != 2 || b.Rows[8].RtspURL != "rtsp://10.0.0.8/s" || b.Rows[7].CredSecret != nil {
 		t.Fatalf("%+v %+v", r, b.Rows)

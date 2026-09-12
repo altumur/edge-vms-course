@@ -71,7 +71,7 @@ class VmsController(Controller):
              "enabled": bool(fields.get("enabled", True)), "retention_days": int(fields.get("retention_days", 30)),
              "events_retention_days": int(fields.get("events_retention_days", 365)),
              "priority": int(fields.get("priority", 100)), "revision": 1,
-             "labels": list(fields.get("labels", []))}
+             "labels": list(fields.get("labels", [])), "ref": str(fields.get("ref", "") or "")}
         self.vars.put(VMS.config("cameras", str(cid)), items(r), cas=0)
         self._retention(cid, r["events_retention_days"])
         return r

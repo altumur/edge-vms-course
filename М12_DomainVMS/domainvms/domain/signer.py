@@ -83,7 +83,7 @@ class VerifyError(Exception):
 
 
 class TrustBundle:
-    """What every Node and service holds: the roots it accepts, each with
+    """What every server and service holds: the roots it accepts, each with
     a retirement time. Rotation = add the new root, retire the old on a date."""
 
     def __init__(self, roots: list[x509.Certificate] | None = None):
@@ -130,7 +130,7 @@ class Signer:
     """The domain signer. `vars_` is the domain cluster's Variables; the
     keys are loaded from domain/signer or created on first start (the cold
     start Lesson 1 walks: Nomad up → signer scheduled → certificates issued
-    → Nodes publish)."""
+    → workers heartbeat)."""
 
     def __init__(self, domain: str, vars_, org: str = "customer", now=time.time):
         self.domain, self.org, self.now = domain, org, now
@@ -170,8 +170,8 @@ class Signer:
         return Root(cert, key)
 
     def issue(self, cn: str, kind: str, public_key: Ed25519PublicKey, lifetime: float | None = None) -> x509.Certificate:
-        """A leaf. `cn` names the NODE or service, never the server it runs
-        on — failover relocates it and a hostname would need reissuing."""
+        """A leaf. `cn` names the SERVER or the service, never a worker — a worker
+        is an allocation named by a slot, and Nomad's workload identity is its token."""
         now = self.now()
         life = lifetime if lifetime is not None else LIFETIMES[kind]["lifetime"]
         self.serial += 1
@@ -212,7 +212,7 @@ class Signer:
 
     def backup(self) -> bytes:
         """What goes beyond the domain cluster (another cluster's object
-        store, or offline). Losing this loses the domain's trust: every Node
+        store, or offline). Losing this loses the domain's trust: every server
         re-enrolls."""
         import json
         return json.dumps({"ca_key": _key_bytes(self.root.key).hex(), "ca_cert": self.root.pem.decode(),

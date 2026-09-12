@@ -68,7 +68,7 @@ func Monotonic() Clock {
 // Variable; MayWrite is a purely local decision on a monotonic clock.
 type Lease struct {
 	Vars        Variables
-	Node        string
+	recorder        string
 	Epoch       int64
 	TTL, Margin float64
 	Clock       Clock
@@ -78,7 +78,7 @@ type Lease struct {
 }
 
 func NewLease(v Variables, node string, epoch int64, ttl, margin float64, clock Clock) *Lease {
-	return &Lease{Vars: v, Node: node, Epoch: epoch, TTL: ttl, Margin: margin, Clock: clock, LastRenewal: clock()}
+	return &Lease{Vars: v, recorder: node, Epoch: epoch, TTL: ttl, Margin: margin, Clock: clock, LastRenewal: clock()}
 }
 
 // Renew reports whether the lease still holds. False (and Fenced) if the
@@ -88,7 +88,7 @@ func (l *Lease) Renew() bool {
 	if l.Fenced {
 		return false
 	}
-	live, err := CurrentEpoch(l.Vars, l.Node)
+	live, err := CurrentEpoch(l.Vars, l.recorder)
 	if err != nil { // the cluster is unreachable; keep going until TTL − margin
 		return l.MayWrite()
 	}

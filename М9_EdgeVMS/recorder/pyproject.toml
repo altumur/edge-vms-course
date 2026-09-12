@@ -1,0 +1,20 @@
+[project]
+name = "recorder"
+version = "0.10.0"
+description = "М9 Recorder — one recorder learns what it should be"
+requires-python = ">=3.10"
+dependencies = [
+    "asyncpg>=0.29",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "argon2-cffi>=23",
+    "cryptography>=42",
+]
+# GStreamer comes from the OS: python3-gi + gstreamer1.0-plugins-{base,good,bad}.
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

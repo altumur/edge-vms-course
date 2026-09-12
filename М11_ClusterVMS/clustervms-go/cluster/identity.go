@@ -1,7 +1,7 @@
 package cluster
 
 // Lesson 2 — who am I? Never the allocation index. The scheduler delivers
-// the Node's own Variable through its template as environment; this reads
+// the recorder's own Variable through its template as environment; this reads
 // it, and can also read the Variable directly for the values a template did
 // not carry (the column key).
 //
@@ -23,8 +23,8 @@ import (
 )
 
 type Identity struct {
-	Node           string
-	ConfigObject   string // "" when the directory has never seen this Node
+	recorder           string
+	ConfigObject   string // "" when the directory has never seen this recorder
 	ConfigRevision int64
 	CameraIDs      []int64
 	ColumnKey      []byte
@@ -51,9 +51,9 @@ func FromEnvironment(v Variables) (Identity, error) {
 		node = os.Getenv("NOMAD_JOB_NAME")
 	}
 	if node == "" {
-		return Identity{}, errors.New("NODE_ID is not set: a Node must know what it is before it does anything")
+		return Identity{}, errors.New("NODE_ID is not set: a recorder must know what it is before it does anything")
 	}
-	id := Identity{Node: node, ConfigObject: os.Getenv("CONFIG_OBJECT"),
+	id := Identity{recorder: node, ConfigObject: os.Getenv("CONFIG_OBJECT"),
 		ConfigRevision: atoi(os.Getenv("CONFIG_REVISION")), CameraIDs: parseIDs(os.Getenv("CAMERA_IDS"))}
 	if v == nil {
 		return id, nil

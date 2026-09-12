@@ -7,7 +7,7 @@ import cluster                                            # noqa: E402
 from cluster.configio import decode, encode               # noqa: E402
 from cluster.directory import Directory                   # noqa: E402
 from cluster.epoch import next_epoch                      # noqa: E402
-from cluster.placement import Camera, Node, Placer        # noqa: E402
+from cluster.placement import Camera, recorder, Placer        # noqa: E402
 from cluster.reindex import parse                         # noqa: E402
 from cluster.s3 import sign                               # noqa: E402
 from cluster.variables import FakeVariables               # noqa: E402
@@ -27,7 +27,7 @@ def bench(name, fn, setup=lambda: None, min_seconds=0.5):
 
 def pworld(seed):
     r = random.Random(seed)
-    nodes = {f"node-{i}": Node(f"node-{i}", r.choice([48, 64, 80]), frozenset(r.sample(VLANS, r.randint(1, 3))))
+    nodes = {f"node-{i}": recorder(f"node-{i}", r.choice([48, 64, 80]), frozenset(r.sample(VLANS, r.randint(1, 3))))
              for i in range(1, 5)}
     cams = {c: Camera(c, r.choice([1.0, 1.0, 1.0, 2.0, 8.0]), frozenset([r.choice(VLANS)]) if r.random() < 0.5 else frozenset())
             for c in range(1, 121)}
@@ -46,7 +46,7 @@ for n in range(1, 1001):
                                "cameras": ",".join(str(n * 100 + c) for c in range(20))})
     v2.put(f"nodes/node-{n}/epoch", {"epoch": 1})
 d = Directory(v2, ttl=0)
-bench("DirectoryScan1000Nodes", lambda _: (d.scan(force=True), d.where(70007)))
+bench("DirectoryScan1000recorders", lambda _: (d.scan(force=True), d.where(70007)))
 
 seed = [0]
 def place_world(arg):

@@ -1,67 +1,67 @@
-"""Lesson 3 — the camera list from snapshots; staleness shown; one cause per
-dead server; the API refuses placement and is idempotent; the gateway
-fans out and the Node's viewer count stays zero."""
+"""Lesson 3 — the camera list from the workers' heartbeats; staleness shown;
+one cause per dead server; the API refuses placement at both levels and is
+idempotent; the gateway fans out and the worker sees one viewer."""
 import json
 import urllib.request
 from domain.api import ApiError, ConsoleAPI
 from domain.console import Console
 from domain.federation import DomainDirectory
-from domain.gateway import Forbidden, Gateway, LiveTee, NodeLiveEndpoint
+from domain.gateway import Forbidden, Gateway, LiveTee, WorkerLiveEndpoint
 from domain.readview import ReadView
-from tests.conftest import Clock, heartbeat, make_domain, publish_node
+from tests.conftest import Clock, Running, heartbeat, make_domain, snapshot
 
 
-async def _four_nodes():
+def _four_workers(wall):
     fed, links = make_domain({"north": (), "south": ()}, "north")
     n, s = fed.clusters["north"], fed.clusters["south"]
-    await publish_node(n, "node-1", list(range(1, 51)));  await publish_node(n, "node-2", list(range(51, 101)))
-    await publish_node(n, "node-3", list(range(101, 151))); await publish_node(s, "node-4", list(range(151, 201)))
+    for cl, w, srv, cams in (("north", "w-0", "srv-1", range(1, 51)), ("north", "w-1", "srv-1", range(51, 101)),
+                             ("north", "w-2", "srv-2", range(101, 151)), ("south", "w-0", "srv-9", range(151, 201))):
+        heartbeat(fed.clusters[cl], w, list(cams), ts=wall(), server=srv)
     return fed, links
 
 
-async def test_two_hundred_cameras_from_snapshots_no_node_called():
-    fed, links = await _four_nodes()
-    wall = Clock(10_000.0)
-    for node, cl, srv, cams in (("node-1", "north", "srv-1", range(1, 51)), ("node-2", "north", "srv-1", range(51, 101)),
-                                ("node-3", "north", "srv-2", range(101, 151)), ("node-4", "south", "srv-9", range(151, 201))):
-        heartbeat(fed.clusters[cl], node, list(cams), ts=wall() - 3, server=srv)
+def test_two_hundred_cameras_from_heartbeats_nobody_called():
+    wall = Clock(10_000.0); fed, links = _four_workers(lambda: wall() - 3)
     view = ReadView(fed, lost_after=45, wall=wall)
     view.refresh()
     page = view.list(page=1, size=50)
     assert page["total"] == 200 and len(page["rows"]) == 50 and page["complete"]
-    assert page["rows"][0]["as_of"] == "as of 3 s ago" and page["rows"][0]["node_state"] == "live"
-    assert view.list(q="cam175")["rows"][0]["cluster"] == "south"
+    assert page["rows"][0]["as_of"] == "as of 3 s ago" and page["rows"][0]["worker_state"] == "live"
+    assert view.list(q="cam175")["rows"][0]["cluster"] == "south" and view.list(q="cam175")["rows"][0]["worker"] == "w-0"
     assert view.list(cluster="south")["total"] == 50
     assert view.causes() == []
 
 
-async def test_kill_a_server_one_cause_displayed():
-    fed, links = await _four_nodes()
-    wall = Clock(10_000.0)
-    heartbeat(fed.clusters["north"], "node-1", list(range(1, 51)), ts=wall(), server="srv-1")
-    heartbeat(fed.clusters["north"], "node-2", list(range(51, 101)), ts=wall(), server="srv-1")
-    heartbeat(fed.clusters["north"], "node-3", list(range(101, 151)), ts=wall(), server="srv-2")
-    heartbeat(fed.clusters["south"], "node-4", list(range(151, 201)), ts=wall(), server="srv-9")
+def test_the_list_from_a_real_cluster():
+    """М11's controller and workers running; the domain's view is exactly their heartbeats."""
+    fed, _ = make_domain({"north": (), "south": ()}, "north"); wall = Clock(10_000.0)
+    n = Running(fed.clusters["north"], wall, workers=(("w-0", "srv-1"), ("w-1", "srv-2")), capacity=2)
+    n.create(1, 2, 3)
+    view = ReadView(fed, wall=wall); view.refresh()
+    rows = view.list(size=10)["rows"]
+    assert [r["phase"] for r in rows] == ["running"] * 3 and {r["server"] for r in rows} == {"srv-1", "srv-2"}
+    assert {r["worker"] for r in rows} == {"w-0", "w-1"} and rows[0]["observed_revision"] == rows[0]["revision"] == 1
+
+
+def test_kill_a_server_one_cause_displayed():
+    wall = Clock(10_000.0); fed, links = _four_workers(wall)
     view = ReadView(fed, lost_after=45, wall=wall)
     view.refresh()
-    wall.advance(100)                                                       # srv-1 died: node-1 and node-2 go silent together
-    heartbeat(fed.clusters["north"], "node-3", list(range(101, 151)), ts=wall(), server="srv-2")
-    heartbeat(fed.clusters["south"], "node-4", list(range(151, 201)), ts=wall(), server="srv-9")
+    wall.advance(100)                                                       # srv-1 died: w-0 and w-1 go silent together
+    heartbeat(fed.clusters["north"], "w-2", list(range(101, 151)), ts=wall(), server="srv-2")
+    heartbeat(fed.clusters["south"], "w-0", list(range(151, 201)), ts=wall(), server="srv-9")
     view.refresh()
     causes = view.causes()
     assert len(causes) == 1 and causes[0].scope == "server" and causes[0].name == "north/srv-1"
-    assert causes[0].nodes == ["node-1", "node-2"] and causes[0].cameras == 100
+    assert causes[0].workers == ["w-0", "w-1"] and causes[0].cameras == 100
     assert causes[0].sentence().startswith("server silent: north/srv-1 for 100 s")
     rows = view.list(size=200)["rows"]
-    stale = [r for r in rows if r["node_state"] == "stale"]
+    stale = [r for r in rows if r["worker_state"] == "stale"]
     assert len(stale) == 100 and "last known state" in stale[0]["as_of"]   # still listed, greyed, with their age
 
 
-async def test_unreachable_cluster_keeps_last_known_rows_and_says_so():
-    fed, links = await _four_nodes()
-    wall = Clock(10_000.0)
-    heartbeat(fed.clusters["south"], "node-4", list(range(151, 201)), ts=wall(), server="srv-9")
-    heartbeat(fed.clusters["north"], "node-1", list(range(1, 51)), ts=wall(), server="srv-1")
+def test_unreachable_cluster_keeps_last_known_rows_and_says_so():
+    wall = Clock(10_000.0); fed, links = _four_workers(wall)
     view = ReadView(fed, lost_after=45, wall=wall)
     view.refresh()
     links["south"].up = False
@@ -69,26 +69,27 @@ async def test_unreachable_cluster_keeps_last_known_rows_and_says_so():
     view.refresh()
     page = view.list(cluster="south", size=100)
     assert page["total"] == 50 and page["clusters"]["south"] == "unreachable" and not page["complete"]
-    assert page["rows"][0]["node_state"] == "unreachable"
+    assert page["rows"][0]["worker_state"] == "unreachable"
     assert view.causes()[0].scope == "cluster" and view.causes()[0].cameras == 50
 
 
-class FakeNodeConsole:
-    def __init__(self): self.edits = []
+class FakeClusterConsole:
+    def __init__(self): self.edits = []; self.creates = []
     def update_camera(self, camera, fields, subject):
-        self.edits.append((camera, fields, subject)); return {"revision": len(self.edits)}
-    def create_camera(self, fields, subject): return {"id": 999}
+        self.edits.append((camera, fields, subject)); return {"revision": len(self.edits) + 1}
+    def create_camera(self, fields, subject):
+        self.creates.append(fields); return {"id": len(self.creates), "worker": "w-0"}
 
 
-async def test_api_refuses_placement_and_is_idempotent():
+def test_api_refuses_placement_at_both_levels_and_is_idempotent():
     fed, _ = make_domain({"north": (), "south": ()}, "north")
-    await publish_node(fed.clusters["south"], "node-4", [7])
-    consoles = {"node-4": FakeNodeConsole()}
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=0)
+    consoles = {"south": FakeClusterConsole()}
     api = ConsoleAPI(DomainDirectory(fed), consoles.__getitem__)
     r1 = api.update_camera(7, {"name": "gate"}, idempotency_key="k1")
     r2 = api.update_camera(7, {"name": "gate"}, idempotency_key="k1")            # the same PUT, not a second edit
-    assert r1 is r2 and len(consoles["node-4"].edits) == 1 and r1["node"] == "node-4" and not r1["authenticated"]
-    for bad in ({"node": "node-1"}, {"cluster": "north"}, {"placement": {}}, {"phase": "running"}):
+    assert r1 is r2 and len(consoles["south"].edits) == 1 and r1["cluster"] == "south" and r1["worker"] == "w-0" and not r1["authenticated"]
+    for bad in ({"worker": "w-1"}, {"cluster": "north"}, {"server": "srv-1"}, {"placement": {}}, {"phase": "running"}, {"epoch": 9}):
         try:
             api.update_camera(7, bad, idempotency_key="k2"); raise AssertionError("must refuse")
         except ApiError as e:
@@ -97,30 +98,32 @@ async def test_api_refuses_placement_and_is_idempotent():
         api.update_camera(99, {"name": "x"}, idempotency_key="k3"); raise AssertionError("must 404")
     except ApiError as e:
         assert e.status == 404
+    c = api.create_camera({"name": "new", "source": "driverpack://file/n.mp4", "ref": "12"}, cluster="south", idempotency_key="k4")
+    assert c["cluster"] == "south" and c["result"]["worker"] == "w-0"              # the cluster chose the worker; the domain forwarded
 
 
-async def test_api_says_503_not_404_when_a_cluster_is_unreachable():
+def test_api_says_503_not_404_when_a_cluster_is_unreachable():
     fed, links = make_domain({"north": (), "south": ()}, "north")
-    await publish_node(fed.clusters["south"], "node-4", [7])
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=0)
     links["south"].up = False
-    api = ConsoleAPI(DomainDirectory(fed), lambda n: FakeNodeConsole())
+    api = ConsoleAPI(DomainDirectory(fed), lambda n: FakeClusterConsole())
     try:
         api.update_camera(7, {"name": "x"}, idempotency_key="k"); raise AssertionError()
     except ApiError as e:
         assert e.status == 503 and "unreachable" in e.detail
 
 
-def test_gateway_fans_out_and_the_node_sees_one_viewer():
+def test_gateway_fans_out_and_the_worker_sees_one_viewer():
     tees = {7: LiveTee(7)}
     def authorise(token, camera):
         if token != "alice-token": raise Forbidden(token)
         return "alice"
-    ep = NodeLiveEndpoint("node-4", tees, authorise)
-    gw = Gateway("gw-1", where=lambda c: "node-4", endpoint=lambda n: ep)
+    ep = WorkerLiveEndpoint("w-0", tees, authorise)
+    gw = Gateway("gw-1", where=lambda c: "w-0", endpoint=lambda n: ep)
     viewers = [gw.watch(7, "alice-token", f"browser-{i}", maxsize=5) for i in range(50)]
-    assert tees[7].viewers == 1 and gw.viewers(7) == 50                  # ONE subscription on the Node, fifty out
+    assert tees[7].viewers == 1 and gw.viewers(7) == 50                  # ONE subscription on the worker, fifty out
     try:
-        gw.watch(7, "bad-token", "browser-x"); raise AssertionError("the Node decides")
+        gw.watch(7, "bad-token", "browser-x"); raise AssertionError("the cluster's authoriser decides")
     except Forbidden:
         pass
     for f in range(100):
@@ -133,21 +136,21 @@ def test_gateway_fans_out_and_the_node_sees_one_viewer():
 
 
 def test_gateway_follows_a_failover():
-    eps = {"node-4": NodeLiveEndpoint("node-4", {7: LiveTee(7)}, lambda t, c: "alice"),
-           "node-5": NodeLiveEndpoint("node-5", {7: LiveTee(7)}, lambda t, c: "alice")}
-    home = {"cam": "node-4"}
+    eps = {"w-0": WorkerLiveEndpoint("w-0", {7: LiveTee(7)}, lambda t, c: "alice"),
+           "w-1": WorkerLiveEndpoint("w-1", {7: LiveTee(7)}, lambda t, c: "alice")}
+    home = {"cam": "w-0"}
     gw = Gateway("gw", where=lambda c: home["cam"], endpoint=eps.__getitem__)
     gw.watch(7, "t", "b1")
-    home["cam"] = "node-5"                                                # the Node moved; the directory says so
-    assert gw.reconnect(7, "t") == "node-5" and eps["node-5"].tees[7].viewers == 1 and gw.viewers(7) == 1
+    home["cam"] = "w-1"                                                   # the controller moved it; the directory says so
+    assert gw.reconnect(7, "t") == "w-1" and eps["w-1"].tees[7].viewers == 1 and gw.viewers(7) == 1
 
 
-async def test_console_over_http():
+def test_console_over_http():
     fed, _ = make_domain({"north": (), "south": ()}, "north")
-    await publish_node(fed.clusters["south"], "node-4", [7])
-    heartbeat(fed.clusters["south"], "node-4", [7], ts=1000.0)
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=1000.0)
+    heartbeat(fed.clusters["south"], "w-0", [7], ts=1000.0, server="srv-9")
     view = ReadView(fed, wall=lambda: 1002.0)
-    api = ConsoleAPI(DomainDirectory(fed), lambda n: FakeNodeConsole())
+    api = ConsoleAPI(DomainDirectory(fed), lambda n: FakeClusterConsole())
     con = Console(DomainDirectory(fed), view, api, refresh_interval=0.05)
     srv = con.serve(port=0)
     port = srv.server_address[1]
@@ -156,11 +159,11 @@ async def test_console_over_http():
         body = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/cameras"))
         assert body["total"] == 1 and body["rows"][0]["as_of"] == "as of 2 s ago"
         w = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/where/7"))
-        assert w["node"] == "node-4" and w["complete"]
+        assert w["cluster"] == "south" and w["worker"] == "w-0" and w["complete"]
         req = urllib.request.Request(f"http://127.0.0.1:{port}/api/cameras/7", data=b'{"name":"x"}', method="PUT",
                                      headers={"Idempotency-Key": "abc"})
-        assert json.load(urllib.request.urlopen(req))["node"] == "node-4"
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/cameras/7", data=b'{"node":"node-1"}', method="PUT",
+        assert json.load(urllib.request.urlopen(req))["cluster"] == "south"
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/cameras/7", data=b'{"worker":"w-1"}', method="PUT",
                                      headers={"Idempotency-Key": "def"})
         try:
             urllib.request.urlopen(req); raise AssertionError()

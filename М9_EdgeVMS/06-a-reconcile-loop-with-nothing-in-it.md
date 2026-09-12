@@ -128,7 +128,7 @@ async def watch(self, poll_interval=2.0):
 
 The poll is what guarantees convergence eventually; the notify is what makes `INSERT` feel instant instead of taking two seconds. Delete the notify and the system is slower. Delete the timer and the system is broken in a way that only appears in production.
 
-This same pairing returns in М11, where a Node watching the domain has a streaming watch **and** a periodic full read, for exactly this reason.
+This same pairing returns in М11, where a recorder watching the domain has a streaming watch **and** a periodic full read, for exactly this reason.
 
 ## Step 4 — One task per concern, not one per camera
 
@@ -140,9 +140,9 @@ AppHost (one process)
     report()       every 5 s                   write observed_revision + conditions back
 ```
 
-Three tasks, whether the Node has five cameras or five hundred.
+Three tasks, whether the recorder has five cameras or five hundred.
 
-The instinct is a task per camera, and it is wrong here for a reason worth having: **per-camera state is a state machine, not a coroutine.** A coroutine per camera means five hundred places that can independently decide to talk to the database, five hundred backoff timers you cannot inspect together, and no single point where you can ask *what is this Node doing right now*. A dict of state machines driven by one loop gives you all three.
+The instinct is a task per camera, and it is wrong here for a reason worth having: **per-camera state is a state machine, not a coroutine.** A coroutine per camera means five hundred places that can independently decide to talk to the database, five hundred backoff timers you cannot inspect together, and no single point where you can ask *what is this recorder doing right now*. A dict of state machines driven by one loop gives you all three.
 
 `report()` being separate is what keeps the loop honest: reconciling and reporting are different concerns, and if reporting is slow or fails, convergence must not stop.
 
@@ -230,11 +230,11 @@ The console will need words, and picking them now stops them being invented ad h
 | **converged** | what is running is what was asked for | `observed_revision >= revision` |
 | **lagging** | a change has not been applied yet, and that is normal | `observed_revision < revision`, few failures |
 | **stalled** | it has been trying and failing | repeated failures past a threshold |
-| **unreachable** | the Node itself is not reporting | no status write within a window |
+| **unreachable** | the recorder itself is not reporting | no status write within a window |
 
 The distinction that costs you if you skip it is **lagging versus stalled**. Both mean *not applied*. One is the system working — a change made 300 ms ago has not reached the worker — and one is the system failing. An interface that shows the same amber for both trains its operators to ignore amber, which is how a genuinely stalled camera stays stalled for a fortnight.
 
-And one thing to keep *out* of that list. `unreachable` is about the Node; the other three are about a camera. **A camera that cannot converge because the disk is full is not a fourth phase** — it is `lagging` with a *reason*. Positions and reasons are different axes, and Lesson 9 keeps them apart properly. Kubernetes shipped a phase enum and then documented why it was a mistake; this is the cheap moment to not repeat it.
+And one thing to keep *out* of that list. `unreachable` is about the recorder; the other three are about a camera. **A camera that cannot converge because the disk is full is not a fourth phase** — it is `lagging` with a *reason*. Positions and reasons are different axes, and Lesson 9 keeps them apart properly. Kubernetes shipped a phase enum and then documented why it was a mistake; this is the cheap moment to not repeat it.
 
 **Deliverable:** an AppHost that converges a fake world, is silent once converged, spreads its retries, and passes a test that kills it mid-change and confirms it rebuilds from the store alone.
 

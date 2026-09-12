@@ -6,7 +6,7 @@ package cluster
 //	publish on change, with a floor — the RPO is the floor
 //	acknowledge on local commit, and SHOW durability: the `replicated` condition
 //
-// The directory is each Node's off-box backup. It never writes back.
+// The directory is each recorder's off-box backup. It never writes back.
 
 import (
 	"errors"
@@ -17,7 +17,7 @@ import (
 )
 
 type Publisher struct {
-	Node    string
+	recorder    string
 	Store   Store
 	Vars    Variables
 	Objects ObjectStore
@@ -31,13 +31,13 @@ type Publisher struct {
 }
 
 func NewPublisher(node string, store Store, v Variables, objects ObjectStore, floor float64, clock Clock) *Publisher {
-	return &Publisher{Node: node, Store: store, Vars: v, Objects: objects, Floor: floor, Clock: clock,
+	return &Publisher{recorder: node, Store: store, Vars: v, Objects: objects, Floor: floor, Clock: clock,
 		LastPublish: -1e9, FailedSince: -1}
 }
 
 // PublishOnce publishes if the local revision moved past what the directory
 // holds. True if a publish happened or nothing was needed; false if it was
-// attempted and failed (the Node keeps running, the edit stays local).
+// attempted and failed (the recorder keeps running, the edit stays local).
 func (p *Publisher) PublishOnce() bool {
 	rev, err := p.Store.ConfigRevision()
 	if err != nil {
@@ -53,11 +53,11 @@ func (p *Publisher) PublishOnce() bool {
 	if err != nil {
 		return p.failed(err)
 	}
-	key := fmt.Sprintf("%s/rev-%d", p.Node, rev)
+	key := fmt.Sprintf("%s/rev-%d", p.recorder, rev)
 	if err := p.Objects.Put(key, blob); err != nil { // 1. the object, first
 		return p.failed(err)
 	}
-	items, idx, err := p.Vars.Get("nodes/" + p.Node)
+	items, idx, err := p.Vars.Get("nodes/" + p.recorder)
 	if err != nil {
 		return p.failed(err)
 	}
@@ -72,11 +72,11 @@ func (p *Publisher) PublishOnce() bool {
 	for _, c := range cams {
 		ids = append(ids, strconv.FormatInt(c.ID, 10))
 	}
-	items["node"], items["config"] = p.Node, key
+	items["node"], items["config"] = p.recorder, key
 	items["revision"], items["cameras"] = strconv.FormatInt(rev, 10), strings.Join(ids, ",")
-	if _, err := p.Vars.Put("nodes/"+p.Node, items, idx); err != nil { // 2. then the pointer
+	if _, err := p.Vars.Put("nodes/"+p.recorder, items, idx); err != nil { // 2. then the pointer
 		if errors.Is(err, ErrConflict) {
-			log.Printf("publish: cas conflict on nodes/%s — somebody else wrote our Variable; retrying next tick", p.Node)
+			log.Printf("publish: cas conflict on nodes/%s — somebody else wrote our Variable; retrying next tick", p.recorder)
 			return false
 		}
 		return p.failed(err)
@@ -90,7 +90,7 @@ func (p *Publisher) failed(err error) bool {
 	if p.FailedSince < 0 {
 		p.FailedSince = p.Clock()
 	}
-	log.Printf("publish failed (%v); the Node keeps running, the edit stays local", err)
+	log.Printf("publish failed (%v); the recorder keeps running, the edit stays local", err)
 	return false
 }
 

@@ -1,6 +1,6 @@
 """An S3 object store with Signature Version 4, in the standard library.
 
-The Node image carries no boto3 (Lesson 2's image is small on purpose), and
+The appliance image carries no boto3 (Lesson 2's image is small on purpose), and
 the restore point only needs two verbs. This is SigV4 for PUT and GET with
 the payload hash in the request, against MinIO or S3, path-style addressing.
 
@@ -57,7 +57,7 @@ def sign(method: str, host: str, path: str, query: str, headers: dict, payload: 
 
 class S3ObjectStore:
     """Path-style: <endpoint>/<bucket>/<key>. Credentials from the
-    environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), which on a Node
+    environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), which on a server
     means from its Variable through the template — never a file in the image."""
 
     def __init__(self, endpoint: str, bucket: str, region: str = "us-east-1",

@@ -4,7 +4,7 @@
 
 Modules 1–7 built a VMS that runs when you type `make serve`. Four lessons turn it into an appliance: an operating system that can be replaced atomically and rolled back with nobody on site, and an application that survives that replacement.
 
-> **Revision note.** This module originally ran to nine lessons and carried a Part B on multi-node scheduling. That work moved to [М11](../М11_ClusterVMS/module-design.md), where Nodes are scheduled across servers and made to survive one dying. What is left here is one box, which is what the name promises. The orchestrator comparison that shaped Part B is still recorded in [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md), and its verdict now applies to М9.
+> **Revision note.** This module originally ran to nine lessons and carried a Part B on multi-node scheduling. That work moved to [М11](../М11_ClusterVMS/module-design.md), where recorders are scheduled across servers and made to survive one dying. What is left here is one box, which is what the name promises. The orchestrator comparison that shaped Part B is still recorded in [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md), and its verdict now applies to М9.
 
 ---
 
@@ -129,7 +129,7 @@ capture ──▶ splitmuxsink ──▶ /data/spool/<camera>/<ts>.mp4
 - **The spool needs a bound, and hitting it is a decision the student makes, not the disk.** When the partition fills: drop the oldest, or stop recording? Both are defensible and they are different products. Pick one, write it down, and make the appliance say which it did rather than failing silently
 - **Catch-up is its own outage if you let it be.** Ten minutes of backlog from every camera arrives the instant the link returns, competing with live upload — and the live stream is the one someone is watching. Rate-limit the drain, prioritise live over backlog, and know how long full recovery takes. A recovery that saturates the uplink for an hour has turned a ten-minute fault into a seventy-minute one
 
-> **Why this is not premature.** The spool exists here because the link can fail here. **М9 does not throw it away** — it puts an index over the same files and they become the archive. **М12 makes the upload conditional**: an on-prem Node has nobody to upload to, and a cloud Node *is* the destination. Same segments, three meanings.
+> **Why this is not premature.** The spool exists here because the link can fail here. **М9 does not throw it away** — it puts an index over the same files and they become the archive. **М12 makes the upload conditional**: an on-prem recorder has nobody to upload to, and a cloud recorder *is* the destination. Same segments, three meanings.
 
 **Deliverable:** the VMS running under systemd on the appliance, surviving reboot, publishing to KVS — and then the uplink pulled for ten minutes with **nothing lost**, plus a stated number for how long the spool can survive an outage before the policy you chose takes effect.
 

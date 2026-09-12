@@ -36,38 +36,3 @@ class Directory:
     def holdings(self, worker: str) -> list[int]:
         return sorted(int(u) for u in self.scan().get(worker, []))
 
-
-class NodeDirectory:
-    """The FIRST design's directory — a scan of `nodes/<node>` Variables each
-    carrying `cameras`. Kept only because М12's `domain/federation.py` still
-    aggregates it; it goes when М12 is rewritten to 2c, where the domain
-    reads `vms/snapshot` and the heartbeats instead."""
-
-    def __init__(self, vars_, ttl: float = 5.0, clock=time.monotonic):
-        self.vars, self.ttl, self.clock = vars_, ttl, clock
-        self._cache: dict[str, dict] | None = None
-        self._at = -1e9
-
-    def scan(self, force: bool = False) -> dict[str, dict]:
-        if not force and self._cache is not None and self.clock() - self._at < self.ttl:
-            return self._cache
-        out: dict[str, dict] = {}
-        for path in self.vars.list("nodes/"):
-            if path.count("/") != 1:
-                continue
-            items, _ = self.vars.get(path)
-            if not items or "node" not in items:
-                continue
-            out[items["node"]] = {"cameras": [int(c) for c in items.get("cameras", "").split(",") if c.strip()],
-                                  "config": items.get("config", ""), "revision": int(items.get("revision", "0") or 0)}
-        self._cache, self._at = out, self.clock()
-        return out
-
-    def where(self, camera_id: int) -> str | None:
-        hits = [n for n, d in self.scan().items() if camera_id in d["cameras"]]
-        if len(hits) > 1:
-            raise RuntimeError(f"camera {camera_id} listed by {hits}: one-writer-per-key is not being enforced")
-        return hits[0] if hits else None
-
-    def holdings(self, node: str) -> list[int]:
-        return self.scan().get(node, {}).get("cameras", [])

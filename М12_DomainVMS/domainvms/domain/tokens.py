@@ -1,8 +1,8 @@
-"""Lesson 4 — a token signed by the domain signer; Nodes hold the public
+"""Lesson 4 — a token signed by the domain signer; clusters hold the public
 key, never a password hash.
 
     Alice -> signer: short-lived signed token (sub: alice, exp, jti)
-    Node 3: verify signature (public key, OFFLINE), check expiry, check the
+    the cluster's console: verify signature (public key, OFFLINE), check expiry, check the
             revocation list it holds, then look up ITS OWN grants for "alice"
 
 The token names the subject and nothing else. Rights are not in it (the
@@ -10,7 +10,7 @@ Authorization row): a token that carried rights would be a lookup that
 expired with the domain.
 
 Format: base64url(header).base64url(payload).base64url(Ed25519 signature)
-— the JWS shape with one algorithm and no library, so a Node verifies it
+— the JWS shape with one algorithm and no library, so a console verifies it
 with forty lines and a public key. Keys are a SET (kid -> public key) so
 rotation overlaps: a token signed by the previous key verifies until that
 key's retirement time passes.
@@ -57,7 +57,7 @@ def _unb64(s: str) -> bytes:
 
 @dataclass
 class KeySet:
-    """What every Node and agent holds: current kid, and every public key
+    """What every cluster and agent holds: current kid, and every public key
     still trusted with the time after which each is retired (0 = never)."""
     current: str
     keys: dict[str, bytes] = field(default_factory=dict)       # kid -> raw 32-byte public key

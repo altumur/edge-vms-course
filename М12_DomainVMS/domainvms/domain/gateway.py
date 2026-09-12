@@ -1,12 +1,16 @@
-"""Lesson 3 — who serves browsers: never a Node.
+"""Lesson 3 — who serves browsers: never a worker.
 
-A Node serves few, trusted, internal clients; the live gateway serves many,
-untrusted, external ones. The Node's media worker carries a `tee` after the
-parser with a LEAKY queue on the live branch — a stalled subscriber loses
-frames, the recorder behind it never stalls. The gateway subscribes to that
-tee ONCE per camera and fans out to N viewers, each with its own leaky
-queue. The gateway relays the viewer's token to the Node and the Node's
-grants decide — the gateway never authorises.
+A worker serves few, trusted, internal clients; the live gateway serves
+many, untrusted, external ones. The worker's pipeline carries a `tee` after
+the parser with a LEAKY queue on the live branch (М10 Lesson 4) — a stalled
+subscriber loses frames, the recorder behind it never stalls. The gateway
+subscribes to that tee ONCE per camera and fans out to N viewers, each with
+its own leaky queue. The gateway relays the viewer's token and the CLUSTER's
+authoriser — its grants, held in its own Variables, verified offline —
+decides; the gateway never authorises. It finds the worker through the
+directory (*where is camera 7*: cluster, worker) and service discovery
+(*where is that worker's endpoint*), so a failover moves the endpoint and
+`reconnect` follows it.
 
 This file is the model of that contract (subscriptions, fan-out, leaky
 queues, viewer counts, the token handed through). WebRTC, fMP4 and TURN are
@@ -38,7 +42,7 @@ class LeakyQueue:
 
 
 class LiveTee:
-    """The Node side: one per camera, inside the media worker. Subscribers
+    """The worker side: one per camera, inside the pipeline. Subscribers
     are the gateway (one) — never a browser. `push` is called once per
     access unit by the pipeline; it is fire-and-forget."""
 
@@ -69,11 +73,11 @@ class Forbidden(Exception):
 
 
 @dataclass
-class NodeLiveEndpoint:
-    """A Node's live endpoint, found by service discovery. `authorise(token,
-    camera) -> subject` is the Node's own check: signature against the
-    signer's public key, then its local grants."""
-    node: str
+class WorkerLiveEndpoint:
+    """A worker's live endpoint, found by service discovery. `authorise(token,
+    camera) -> subject` is the cluster's check, run at the endpoint: signature
+    against the signer's public key it holds, then the cluster's grants."""
+    worker: str
     tees: dict[int, LiveTee]
     authorise: Callable[[str, int], str]
 
@@ -81,36 +85,36 @@ class NodeLiveEndpoint:
         subject = self.authorise(token, camera)        # raises Forbidden
         tee = self.tees.get(camera)
         if tee is None:
-            raise KeyError(f"camera {camera} is not on {self.node}")
+            raise KeyError(f"camera {camera} is not on {self.worker}")
         return tee.subscribe(who)
 
 
 @dataclass
 class Upstream:
-    node: str
+    worker: str
     queue: LeakyQueue
     viewers: dict[str, LeakyQueue] = field(default_factory=dict)
 
 
 class Gateway:
-    """`where(camera) -> node` is the directory; `endpoint(node)` is service
-    discovery. Both are looked up per subscription, so a failover moves the
-    endpoint and `reconnect` follows it."""
+    """`where(camera) -> worker` is the directory; `endpoint(worker)` is
+    service discovery. Both are looked up per subscription, so a failover
+    moves the endpoint and `reconnect` follows it."""
 
-    def __init__(self, name: str, where: Callable[[int], str | None], endpoint: Callable[[str], NodeLiveEndpoint]):
+    def __init__(self, name: str, where: Callable[[int], str | None], endpoint: Callable[[str], WorkerLiveEndpoint]):
         self.name, self.where, self.endpoint = name, where, endpoint
         self.upstreams: dict[int, Upstream] = {}
 
     def watch(self, camera: int, token: str, viewer: str, maxsize: int = 30) -> LeakyQueue:
-        node = self.where(camera)
-        if node is None:
-            raise KeyError(f"camera {camera} is on no Node this domain can reach")
+        worker = self.where(camera)
+        if worker is None:
+            raise KeyError(f"camera {camera} is on no worker this domain can reach")
         up = self.upstreams.get(camera)
-        if up is None or up.node != node:
-            q = self.endpoint(node).open(camera, token, who=self.name)      # ONE subscription per camera
-            up = self.upstreams[camera] = Upstream(node, q)
+        if up is None or up.worker != worker:
+            q = self.endpoint(worker).open(camera, token, who=self.name)    # ONE subscription per camera
+            up = self.upstreams[camera] = Upstream(worker, q)
         else:
-            self.endpoint(node).authorise(token, camera)                    # every viewer is still checked by the Node
+            self.endpoint(worker).authorise(token, camera)                  # every viewer is still checked at the endpoint
         vq = up.viewers[viewer] = LeakyQueue(maxsize)
         return vq
 
@@ -119,7 +123,7 @@ class Gateway:
         if up and viewer in up.viewers:
             del up.viewers[viewer]
             if not up.viewers:
-                self.endpoint(up.node).tees[camera].unsubscribe(self.name)
+                self.endpoint(up.worker).tees[camera].unsubscribe(self.name)
                 del self.upstreams[camera]
 
     def pump(self) -> int:
@@ -135,12 +139,12 @@ class Gateway:
 
     def reconnect(self, camera: int, token: str) -> str:
         """After a failover: the directory says the camera moved; resubscribe there."""
-        node = self.where(camera)
+        worker = self.where(camera)
         up = self.upstreams.get(camera)
-        if up and up.node != node:
-            q = self.endpoint(node).open(camera, token, who=self.name)
-            self.upstreams[camera] = Upstream(node, q, up.viewers)
-        return node
+        if up and up.worker != worker:
+            q = self.endpoint(worker).open(camera, token, who=self.name)
+            self.upstreams[camera] = Upstream(worker, q, up.viewers)
+        return worker
 
     def viewers(self, camera: int) -> int:
         up = self.upstreams.get(camera)

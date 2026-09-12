@@ -21,7 +21,7 @@ job "console" {
     task "console" {
       driver = "podman"
       config { image = "vms/domainvms:latest"; args = ["python3", "-m", "domain.console"] }
-      identity { env = true }    # reads nodes/* and domain/keys; writes nothing
+      identity { env = true }    # reads vms/snapshot, vms/*/heartbeat and domain/*; forwards writes to the owning cluster
       template {
         data        = <<-EOT
           # One line per cluster the console aggregates. The cluster-level

@@ -1,4 +1,4 @@
-# reference/node-3-policy.hcl — Lesson 2/28: Node 3 may write ONLY under
+# reference/node-3-policy.hcl — Lesson 2/28: recorder 3 may write ONLY under
 # its own prefix. Bind it to the job's workload identity:
 #   nomad acl policy apply -namespace default -job node-3 node-3 node-3-policy.hcl
 # This is what makes "one writer per key" a property of the cluster rather

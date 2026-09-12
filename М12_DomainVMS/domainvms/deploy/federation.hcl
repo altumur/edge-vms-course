@@ -1,7 +1,7 @@
 # Several clusters, one domain: each cluster is a Nomad REGION; regions
 # share no state and gossip-couple. `nomad server join` across regions
 # federates them; a request to any region is forwarded to the right one.
-# Nothing here replicates a Node, a Variable or an object between clusters.
+# Nothing here replicates a worker, a Variable or an object between clusters.
 #
 # Servers of the south cluster (north is the domain cluster and the
 # authoritative region for ACL policies):

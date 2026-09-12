@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-Somebody has to write configuration, and the module's answer is: exactly one thing, and it is not the worker and not the console. М9 gave the Node its own database so that an operator could edit a camera with everything above the Node unreachable — an argument about the *domain*, which may be down. Inside a cluster the store is one raft, the workers are stateless, and a single writer keeps every property М9 wanted while dropping the one it paid for. The controller is that writer.
+Somebody has to write configuration, and the module's answer is: exactly one thing, and it is not the worker and not the console. М9 gave the recorder its own database so that an operator could edit a camera with everything above the recorder unreachable — an argument about the *domain*, which may be down. Inside a cluster the store is one raft, the workers are stateless, and a single writer keeps every property М9 wanted while dropping the one it paid for. The controller is that writer.
 
 It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on the proof that the shape is not special: a second subsystem, a controller and a worker that count seconds, dropped onto the same platform with a different prefix.
 

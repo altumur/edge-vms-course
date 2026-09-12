@@ -200,7 +200,7 @@ class VmsWorker(Worker):
             pos, lag = st.get(cid, (CONVERGED, 0))
             phase = "running" if cid in self.reconciler.actual else ("pending" if not cam["enabled"] else
                                                                      ("failed" if cid in self.reconciler.failures else "pending"))
-            out.append({"id": cid, "name": cam["name"], "enabled": cam["enabled"], "phase": phase, "position": pos,
+            out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam["name"], "enabled": cam["enabled"], "phase": phase, "position": pos,
                         "revision": cam["revision"], "observed_revision": self.reconciler.actual.get(cid, {}).get("revision", 0),
                         "epoch": self.epochs.get(str(cid), 0)})
         return out

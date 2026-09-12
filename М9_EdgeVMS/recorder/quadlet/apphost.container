@@ -1,0 +1,24 @@
+# /etc/containers/systemd/apphost.container — Lessons 6–9.
+# One process: reconcile, pump_buses, report, retention, console.
+# Ordering is expressed in unit dependencies, not with sleep (Lesson 5).
+[Unit]
+Description=Recorder AppHost
+Requires=postgres.service
+After=postgres.service
+
+[Container]
+Image=localhost/recorder-apphost:latest
+Volume=/data/archive:/data/archive:z
+Volume=/data/config:/data/config:ro,z
+EnvironmentFile=/data/config/apphost.env
+Network=host
+# SIGTERM lets every splitmuxsink finalize its open segment; the kill test
+# in Lesson 8 uses SIGKILL on purpose and loses exactly that segment.
+StopTimeout=20
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

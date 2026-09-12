@@ -1,4 +1,4 @@
-// Package cluster is ClusterVMS — М11 — in Go: what a Node needs to outlive
+// Package cluster is ClusterVMS — М11 — in Go: what a recorder needs to outlive
 // its server. Identity from a Nomad Variable, the epoch by check-and-set,
 // configuration published upward object-first, the restore, a lease that
 // fences the zombie, the cluster directory, placement by measured capacity,

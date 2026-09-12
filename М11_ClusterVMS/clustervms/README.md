@@ -14,7 +14,6 @@ clustervms/
     eventindex.py    L3  a name for vmsplatform.eventindex — the platform's index over every subsystem's buckets on every resource
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console, standard library: /cameras /where /timeline /resources /unplaceable /events /metrics; /marks into the console's own bucket
-    publish.py, configio.py   the first design's Node-shaped snapshot — kept only because М12's fixture reads it; goes with М12's rewrite
     __main__.py      python3 -m cluster worker | controller | resource   (the controller job also runs the eventindex beside the console)
   deploy/
     server.hcl, client.hcl     L1  three servers, ACLs on, meta.labels and meta.archive, the Podman plugin

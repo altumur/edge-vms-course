@@ -1,7 +1,7 @@
 """Lesson 1 — placement at the level above the one М11 built.
 
-    Nomad     picks the SERVER   on resources        because it knows the servers
-    Cluster   picks the NODE     on capacity         because only it measures its Nodes (М11 Lesson 5)
+    Nomad     picks the SERVER   on resources        because it knows the servers — and how many workers, and where
+    Cluster   picks the WORKER   on capacity         because only its controller sees its workers' headroom (М11 Lesson 5)
     Domain    picks the CLUSTER  on REACHABILITY     because only it knows which clusters exist and what each can see
 
 Reachability, not capacity: a camera on the warehouse VLAN can be reached
@@ -9,8 +9,9 @@ from the warehouse cluster and from nowhere else. Capacity only breaks ties
 among clusters that can see the camera at all.
 
 Only place when you must: the camera is new, or an operator asked. A dead
-server is not a trigger (the Node moves). A dead cluster is not a trigger
-either — its cameras cannot be reached from anywhere else.
+server is not a trigger (Nomad moves the worker; its cameras follow its
+name). A dead cluster is not a trigger either — its cameras cannot be
+reached from anywhere else.
 
 The placement is STORED, with a reason and a time, in the domain cluster's
 Variables under domain/placement/<camera> — by check-and-set, which is why
@@ -108,5 +109,5 @@ class ClusterPlacer:
         return rev
 
     def rebalance_across_clusters(self, *a, **k):
-        raise NotImplementedError("a Node never crosses a cluster (М11); the domain moves placements only "
-                                  "when an operator asks, and then as a stop-here/start-there with the epoch")
+        raise NotImplementedError("a worker never crosses a cluster (М11); the domain moves a camera between "
+                                  "clusters only when an operator asks, and then as delete-here/create-there")

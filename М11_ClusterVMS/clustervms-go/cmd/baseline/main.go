@@ -1,4 +1,4 @@
-// cmd/baseline — the Go Node at idle: the whole ClusterAppHost (reconcile,
+// cmd/baseline — the Go recorder at idle: the whole ClusterAppHost (reconcile,
 // report, publish, lease, heartbeat, reindex, console) against in-memory
 // fakes for Nomad and Postgres and a directory for the object store, with
 // fifty cameras, doing nothing. Prints its own proportional set size (PSS)
@@ -54,7 +54,7 @@ func main() {
 	}
 	cluster.NewPublisher("node-3", cluster.NewFakeClusterStore(cams...), vars, objs, 0, cluster.Monotonic()).PublishOnce()
 	items, _, _ := vars.Get("nodes/node-3")
-	ident := cluster.Identity{Node: "node-3", ConfigObject: items["config"], ConfigRevision: 1}
+	ident := cluster.Identity{recorder: "node-3", ConfigObject: items["config"], ConfigRevision: 1}
 
 	host := cluster.NewClusterAppHost(settings, cluster.NewFakeClusterStore(), vars, objs, ident, cluster.NewFakeActuator(), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -89,7 +89,7 @@ func Sign(method, host, path, query string, headers map[string]string, payload [
 }
 
 // S3ObjectStore is path-style: <endpoint>/<bucket>/<key>. Credentials from
-// the environment, which on a Node means from its Variable through the
+// the environment, which on a recorder means from its Variable through the
 // template — never a file in the image.
 type S3ObjectStore struct {
 	Scheme, Host, Bucket, Region string

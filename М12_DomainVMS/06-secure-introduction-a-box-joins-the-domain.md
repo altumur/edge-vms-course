@@ -14,7 +14,7 @@ It belongs in this module rather than М9 because a box joins a *domain*. The se
 
 ## Prerequisites
 
-- **Lesson 4** — the signer, the mTLS channel, and the per-Node credential marked temporary. This lesson deletes it.
+- **Lesson 4** — the signer, the mTLS channel, and the per-server credential marked temporary. This lesson deletes it.
 - **М9 Lesson 2** — signatures and chains, from the RAUC bundle.
 - **М9 Lesson 1** — the identical image, and why.
 
@@ -76,7 +76,7 @@ ldevid: CN=SN-0001,O=customer   issuer: CN=acme root g1,O=customer   temp_creden
 audit:  [{'serial': 'SN-0001', 'how': 'voucher', 'ldevid_serial': 1, 'at': ...}]
 ```
 
-The certificate names the **serial** — the box, not a server, not a Node. The Node's certificate (Lesson 4) names the Node; the box's names the box; a box may host different Nodes over its life and one credential should not have to be reissued for the other's reasons.
+The certificate names the **serial** — the physical box, before it has a role. The server certificate (Lesson 4) names the server as the domain knows it; the LDevID names the hardware; a box may be re-imaged, re-clustered or re-purposed over its life and its manufacturer's identity should not have to be reissued for any of those reasons. The workers that run on it are allocations and get their tokens from Nomad's workload identity; nothing about a worker is ever in a certificate.
 
 ## Step 4 — Registration with approval, built properly
 
@@ -95,7 +95,7 @@ What approval trusts that the voucher does not: the network at first contact. A 
 
 ## Step 5 — Delete the stand-in, and nothing stops
 
-`finish()` verifies the LDevID under the domain's trust bundle, hands it to the box, and sets `temp_credential = None`. Then the test asserts what the deliverable asks: the box still authenticates. It authenticates *better* — its certificate chains to the domain's root, expires on Lesson 7's schedule, renews against the signer without anyone typing anything, and can be revoked by not being renewed. Lesson 4's per-Node credential is one of the course's five hand-provisioned stand-ins ([`COURSE-PLAN.md`](../COURSE-PLAN.md) audits them against what resolves each), and this is the one that enrollment resolves.
+`finish()` verifies the LDevID under the domain's trust bundle, hands it to the box, and sets `temp_credential = None`. Then the test asserts what the deliverable asks: the box still authenticates. It authenticates *better* — its certificate chains to the domain's root, expires on Lesson 7's schedule, renews against the signer without anyone typing anything, and can be revoked by not being renewed. Lesson 4's per-server credential is one of the course's five hand-provisioned stand-ins ([`COURSE-PLAN.md`](../COURSE-PLAN.md) audits them against what resolves each), and this is the one that enrollment resolves.
 
 ## Step 6 — What a TPM proves, and does not
 
@@ -105,7 +105,7 @@ A TPM 2.0 gives the box a key that cannot be exported — the IDevID's private h
 
 What it does not prove: anything after boot that was not measured; that the software is *correct* rather than *expected*; or that the person who approved it read the label. Attestation moves judgement from a human to a measurement; it does not remove it.
 
-**Deliverable:** a box enrolls from cold with nobody typing a secret, receives an LDevID from the domain signer, and the enrollment is auditable afterwards. Then the hand-provisioned per-Node credential is deleted, and nothing stops. Both paths — voucher and approval — and a stranger refused by each.
+**Deliverable:** a box enrolls from cold with nobody typing a secret, receives an LDevID from the domain signer, and the enrollment is auditable afterwards. Then the hand-provisioned per-server credential is deleted, and nothing stops. Both paths — voucher and approval — and a stranger refused by each.
 
 ---
 
@@ -117,7 +117,7 @@ What it does not prove: anything after boot that was not measured; that the soft
 | *the pledge does not hold the IDevID's key* | The hello was replayed or relayed — the proof is over the nonce, and the nonce is per attempt. Possibly an attack; certainly not the box. |
 | *voucher does not name this registrar* | The MASA was told a different domain, or the registrar id changed after a re-host. The registrar's id is `<domain>/registrar`, and `domain` does not change on re-host. |
 | A request expired before anyone saw it | `approval_ttl` is shorter than the time it takes a human to notice. The console should show the queue on its front page; the number is yours. |
-| The LDevID verifies but the mTLS channel refuses it | The Node's service certificate (Lesson 4) and the box's LDevID are different certificates for different things. Check which one the channel asked for. |
+| The LDevID verifies but the mTLS channel refuses it | The server's service certificate (Lesson 4) and the box's LDevID are different certificates for different things. Check which one the channel asked for. |
 
 ## Recap
 

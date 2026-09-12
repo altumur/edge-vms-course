@@ -8,7 +8,7 @@
 
 Two things close this module, and they are less unrelated than they look.
 
-The first is that everything built so far is invisible. The Node converges, survives four kinds of failure, and the only way to see any of it is `psql`. A console is not decoration: it is where the desired/actual distinction stops being an architecture diagram and becomes something an operator can act on — or, done badly, a screen that shows amber for both "changed 300 ms ago" and "broken since Tuesday".
+The first is that everything built so far is invisible. The recorder converges, survives four kinds of failure, and the only way to see any of it is `psql`. A console is not decoration: it is where the desired/actual distinction stops being an architecture diagram and becomes something an operator can act on — or, done badly, a screen that shows amber for both "changed 300 ms ago" and "broken since Tuesday".
 
 The second is the question you should be asking by now. Fifty pipelines in Python worked. Does that mean the product should ship in Python? **No** — and the interesting part is precisely which parts change, because it turns out to be a much smaller set than "the slow ones", and the reconcile loop you wrote by hand is not in it.
 
@@ -103,13 +103,13 @@ Then the vocabulary from Lesson 6, now with a home on the screen:
 | **converged** | `observed_revision >= revision` | green |
 | **lagging** | behind, few failures, recent | amber, **with the lag number** |
 | **stalled** | behind, repeated failures | red, **with the failing condition** |
-| **unreachable** | no status write within the window | grey — the *Node*, not the camera |
+| **unreachable** | no status write within the window | grey — the *recorder*, not the camera |
 
-That last row is about the Node, and greying it out is deliberate: when the AppHost is not reporting, you do not know what the cameras are doing. Showing them green because they were green four minutes ago is precisely the lie Lesson 6's persisted-actual bug produced, arriving through the interface instead of the data model.
+That last row is about the recorder, and greying it out is deliberate: when the AppHost is not reporting, you do not know what the cameras are doing. Showing them green because they were green four minutes ago is precisely the lie Lesson 6's persisted-actual bug produced, arriving through the interface instead of the data model.
 
-### The Node's two exported signals
+### The recorder's two exported signals
 
-The console renders these for a human. The same two numbers are what the Node **exports** for a machine, and М9 Lesson 4 already established the pattern with `spool_oldest_seconds`:
+The console renders these for a human. The same two numbers are what the recorder **exports** for a machine, and М9 Lesson 4 already established the pattern with `spool_oldest_seconds`:
 
 | Signal | Question it answers | Why this one |
 |---|---|---|
@@ -140,32 +140,32 @@ Three things worth being explicit about:
 
 **The same 401 for an unknown user and a wrong password.** Distinguishing them hands an attacker a username oracle for free.
 
-**This account is superseded in М12, not extended.** With N Nodes, a local `operators` table means N accounts for one person, N password hashes to steal, and — the part that matters — **a grant that expires attached to a credential that does not.** М12 Lesson 4 removes the hash from the Node entirely: the Node holds an issuer's *public key*, verifies a short-lived signed token offline, and looks up its own grants for the subject that token names. A student who keeps this table and adds a `node_id` column has built the problem on purpose.
+**This account is superseded in М12, not extended.** With N recorders, a local `operators` table means N accounts for one person, N password hashes to steal, and — the part that matters — **a grant that expires attached to a credential that does not.** М12 Lesson 4 removes the hash from the recorder entirely: the recorder holds an issuer's *public key*, verifies a short-lived signed token offline, and looks up its own grants for the subject that token names. A student who keeps this table and adds a `node_id` column has built the problem on purpose.
 
-**This is the course's fourth temporary secret**, and the count is deliberate — М9's AWS credentials, М9's database password, this operator account, and М12 will add a per-Node credential and a self-signed domain CA. **М12 collects all five** — this account becomes a token from the domain signer (М12 Lesson 4), and the self-signed CA is the one stand-in that gets *promoted* rather than replaced, because it turns out to be the customer's own root. Naming a stand-in where it appears is what stops it becoming permanent by silence — or, in that one case, what lets it become permanent on purpose.
+**This is the course's fourth temporary secret**, and the count is deliberate — М9's AWS credentials, М9's database password, this operator account, and М12 will add a per-recorder credential and a self-signed domain CA. **М12 collects all five** — this account becomes a token from the domain signer (М12 Lesson 4), and the self-signed CA is the one stand-in that gets *promoted* rather than replaced, because it turns out to be the customer's own root. Naming a stand-in where it appears is what stops it becoming permanent by silence — or, in that one case, what lets it become permanent on purpose.
 
-This is also the last module where there is exactly **one** surface to protect. М11 gives every Node its own API, which is N endpoints where there used to be one, and that is where authorization stops being trivial.
+This is also the last module where there is exactly **one** surface to protect. М11 gives every recorder its own API, which is N endpoints where there used to be one, and that is where authorization stops being trivial.
 
 ## Step 4 — What the operator is never asked
 
 The instinct is right: an operator wants to assign cameras, not machines. The useful part is knowing exactly where that stops being true.
 
-**Which Node owns a camera is decided for the operator, never by them.** Lesson 5 made that concrete — the `cameras` table has no Node column a client may write. An operator assigns a camera to a **site**, which is where it physically is; the controller turns that into placement.
+**Which recorder owns a camera is decided for the operator, never by them.** Lesson 5 made that concrete — the `cameras` table has no recorder column a client may write. An operator assigns a camera to a **site**, which is where it physically is; the controller turns that into placement.
 
 But servers are physical, and physics leaks in four places where hiding it would be a lie:
 
 | Where it surfaces    | What the operator actually needs to know                                                                                                                                    |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Capacity**         | *"You cannot add camera 1001."* Expressed as **the system is full**, not *Node 3 is full* — but the number has to come from somewhere real                                  |
-| **Storage locality** | Recordings live on the **server** that wrote them, and a Node moving does not move them. A dead server means unavailable footage, and that must be visible *before* it dies |
-| **Failure grouping** | When a server fails, its Nodes move and two hundred cameras go red together. The console must show **one cause**, not two hundred faults                                    |
+| **Capacity**         | *"You cannot add camera 1001."* Expressed as **the system is full**, not *recorder 3 is full* — but the number has to come from somewhere real                                  |
+| **Storage locality** | Recordings live on the **server** that wrote them, and a recorder moving does not move them. A dead server means unavailable footage, and that must be visible *before* it dies |
+| **Failure grouping** | When a server fails, its recorders move and two hundred cameras go red together. The console must show **one cause**, not two hundred faults                                    |
 | **Reachability**     | A camera on an isolated VLAN may be reachable from only some servers. The operator expresses this as a **site**; the controller turns it into a placement constraint        |
 
-> **Site is a first-class operator concept. Server is not, and Node barely is.**
+> **Site is a first-class operator concept. Server is not, and recorder barely is.**
 
 The same relationship a filesystem has to disks: you do not assign files to spindles, and you certainly see the spindle when one fails.
 
-None of the four bites in this module — one Node, one server. All four bite in М11, and the schema that survives that is the one that never let a client write placement in the first place.
+None of the four bites in this module — one recorder, one server. All four bite in М11, and the schema that survives that is the one that never let a client write placement in the first place.
 
 **Write the list down as a deliverable.** "Every decision the operator is never asked to make" is a one-page document, and it is the most useful page in a product specification, because every entry is a support call that will not happen and a form field that does not exist.
 
@@ -216,7 +216,7 @@ That is the honest defence of building it in Python first, and it is not "Python
 
 ### The claim, measured
 
-That argument is cheap to make and cheap to check, so the module checks it. [`nodevms-go/`](./nodevms-go/README.md) ports Lesson 6's reconciler to Go — the same `>=`, the same stop loop over *actual*, the same jitter — and runs **the Python suite's seven tests plus the cap test against it, unchanged in meaning**. All eight pass. Then it puts a controller-shaped process in each language at idle — fifty converged cameras, a status map, a JSON encoder, an HTTP listener, no GStreamer in either — and reads PSS:
+That argument is cheap to make and cheap to check, so the module checks it. [`recorder-go/`](./recorder-go/README.md) ports Lesson 6's reconciler to Go — the same `>=`, the same stop loop over *actual*, the same jitter — and runs **the Python suite's seven tests plus the cap test against it, unchanged in meaning**. All eight pass. Then it puts a controller-shaped process in each language at idle — fifty converged cameras, a status map, a JSON encoder, an HTTP listener, no GStreamer in either — and reads PSS:
 
 | | Go | Python |
 |---|---|---|
@@ -226,7 +226,7 @@ That argument is cheap to make and cheap to check, so the module checks it. [`no
 
 Four times the controller's share of `B`, and the thing М9's bundle carries shrinks by an interpreter. What the table does *not* show is the media worker, because GStreamer's 24 MB of libraries cost the same in every language and the per-frame rule from Lesson 7 survives in Go — which is why the worker is the C++ half of the split, not the Go half.
 
-**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make. Then `go test ./reconciler/` in `nodevms-go/` — and `measure.sh`, to produce the table above on your own hardware.
+**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make. Then `go test ./reconciler/` in `recorder-go/` — and `measure.sh`, to produce the table above on your own hardware.
 
 ---
 
@@ -238,19 +238,19 @@ Four times the controller's share of `B`, and the thing М9's bundle carries shr
 | Everything shows amber | `lagging` and `stalled` collapsed into one state. Split them on failure count, and show the lag number. |
 | A camera shows green but records nothing | You are reading control-plane fields only. `silent_for` is the column that catches this. |
 | Conditions and phase disagree | Something is writing `phase` from a condition. They are separate axes — a condition never sets a phase. |
-| The console shows stale green during an AppHost outage | Not handling `unreachable`. When the Node stops reporting, you do not know — say so, do not imply health. |
+| The console shows stale green during an AppHost outage | Not handling `unreachable`. When the recorder stops reporting, you do not know — say so, do not imply health. |
 | Login works with any password | `argon2.verify` argument order, or an exception being swallowed. Test the negative case explicitly. |
-| The operator asks which Node a camera is on | The UI leaked a controller-owned field. Step 4. |
+| The operator asks which recorder a camera is on | The UI leaked a controller-owned field. Step 4. |
 
 ## Recap
 
 - One query, not three round trips — and `lag` as a **number**, because ordering is what `revision` was made an integer for.
-- The Node exports exactly two signals: **`camera_lag`** as a distribution, never per-camera, and **`camera_silent_seconds`**, which is the one to alarm on.
+- The recorder exports exactly two signals: **`camera_lag`** as a distribution, never per-camera, and **`camera_silent_seconds`**, which is the one to alarm on.
 - **`silent_for` is the only column describing the product.** Everything else describes the control plane, and all of it can look healthy while nothing records.
 - **Positions and reasons are different axes.** Phase says where an object is; conditions say why it cannot get further, and `since` turns a ticket into a fix. Kubernetes shipped the merged enum and documented why it was wrong.
-- `unreachable` greys the Node out rather than showing its cameras green. Stale green is Lesson 6's lying cache, arriving through the interface.
+- `unreachable` greys the recorder out rather than showing its cameras green. Stale green is Lesson 6's lying cache, arriving through the interface.
 - The login is the course's **fourth temporary secret**, named where it appears. This is the last module with exactly one surface to protect.
-- **Site is a first-class operator concept; server is not, and Node barely is** — but physics leaks in four places, and hiding it there would be a lie.
+- **Site is a first-class operator concept; server is not, and recorder barely is** — but physics leaks in four places, and hiding it there would be a lie.
 - Python ends for three reasons: baseline memory, blast radius, and per-frame work being fatal. **Go for the controller, C++ for the worker** — and `gstreamermm` is archived, so C++ means the C API directly.
 - **Only the actuator gets rewritten.** The schema, the loop, the state machine, the backoff policy and the desired/actual contract all survive — which is the real defence of prototyping in Python.
 
@@ -268,4 +268,4 @@ The module is complete. `INSERT INTO cameras` starts a recording, `DELETE` stops
 
 **And there is exactly one box.** Every claim here — one writer, one AppHost, a convention instead of a fencing token, one API to protect — holds only because there is nothing to disagree with.
 
-[**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box, and everything gets harder in one specific way: a Node becomes a scheduler allocation that **moves between servers**, carrying its cameras with it. Nothing you built here changes — that is the design working — but two instances of the same Node can briefly exist during a failover, and Lesson 8's one-line convention has to become a fencing token that the archive itself enforces.
+[**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box, and everything gets harder in one specific way: a recorder becomes a scheduler allocation that **moves between servers**, carrying its cameras with it. Nothing you built here changes — that is the design working — but two instances of the same recorder can briefly exist during a failover, and Lesson 8's one-line convention has to become a fencing token that the archive itself enforces.

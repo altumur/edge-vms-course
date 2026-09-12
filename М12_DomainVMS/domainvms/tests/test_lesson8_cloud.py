@@ -1,6 +1,6 @@
-"""Lesson 8 — the bandwidth arithmetic before the demo, and a Node that
+"""Lesson 8 — the bandwidth arithmetic before the demo, and a worker that
 cannot tell where it runs."""
-from domain.cloud import node_stanza, recommend, render_three_ways, storage_tb, tb_per_day
+from domain.cloud import worker_stanza, recommend, render_three_ways, storage_tb, tb_per_day
 
 
 def test_fifty_cameras_at_four_megabit():
@@ -14,8 +14,8 @@ def test_fifty_cameras_at_four_megabit():
     assert big.shape == "edge" and "loses money per camera" in big.reason
 
 
-def test_a_node_deployed_three_ways_is_the_same_artifact():
-    jobs = render_three_ways("node-3")
+def test_a_worker_deployed_three_ways_is_the_same_artifact():
+    jobs = render_three_ways("vmsworker")
     assert jobs["local"] != jobs["rented"]                            # the datacenter and the object store differ...
-    assert node_stanza(jobs["local"]) == node_stanza(jobs["rented"]) == node_stanza(jobs["split"])   # ...and nothing about the Node does
+    assert worker_stanza(jobs["local"]) == worker_stanza(jobs["rented"]) == worker_stanza(jobs["split"])   # ...and nothing about the worker does
     assert 'lost_after           = "45s"' in jobs["rented"] and "EPOCH" not in jobs["rented"]

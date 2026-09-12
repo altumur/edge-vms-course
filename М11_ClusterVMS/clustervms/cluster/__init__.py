@@ -12,7 +12,6 @@ package supplies what a cluster adds and nothing else:
     timeline.py     one camera across two resources; *unavailable*, never *lost*
     directory.py    where is camera 7 — one scan of vms/workers/*
     console.py      the cluster console, standard library
-    publish.py      the Node-shaped snapshot М12's fixture still reads (kept until М12 is rewritten)
 """
 import os
 import sys

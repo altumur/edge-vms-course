@@ -1,4 +1,4 @@
-# The live gateway: one subscription per camera to a Node's live tee, N
+# The live gateway: one subscription per camera to the owning worker's live tee, N
 # browser sessions out. Runs in EVERY cluster. This is the one place a
 # specific server comes back into the design — as a CONSTRAINT: a gateway
 # that transcodes wants the GPU; one that faces the internet wants the
@@ -36,9 +36,9 @@ job "live-gateway" {
       template {
         data        = <<-EOT
           NOMAD_ADDR=http://127.0.0.1:4646
-          DIRECTORY=nodes/                  # where is camera N -> which Node's tee to subscribe to
+          DIRECTORY=vms/workers/            # where is camera N -> which worker's tee to subscribe to (url from its heartbeat)
           PUBLIC_ADDR={{ env "meta.public_addr" }}
-          UPSTREAM_QUEUE=30                 # frames; leaky — a stalled viewer loses frames, never stalls the Node
+          UPSTREAM_QUEUE=30                 # frames; leaky — a stalled viewer loses frames, never stalls the worker
         EOT
         destination = "local/gateway.env"
         env         = true

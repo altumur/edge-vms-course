@@ -164,7 +164,7 @@ This is М8 Lesson 6's rule — configuration is read, credentials are injected 
 
 It is also **a stand-in, and the course says so where it appears.** A long-lived static AWS key in a plaintext file on a device in a warehouse is not a security design; it is a placeholder with a note attached. Somebody has to type it during commissioning, it never rotates, and extracting it needs physical access and about a minute.
 
-Three modules from now, М12 replaces it: the domain provisions its own object storage (М12 Lesson 8) and the box reaches it by workload identity, so there is no key to store. **Mark it in your own notes as the first of the course's temporary secrets** — М9 adds a database password and an operator account, М12 adds a per-Node credential and a self-signed CA, and **М12 collects all five**: four replaced by giving things identities, and the fifth *promoted* rather than replaced, because the self-signed CA turned out to be the customer's own root.
+Three modules from now, М12 replaces it: the domain provisions its own object storage (М12 Lesson 8) and the box reaches it by workload identity, so there is no key to store. **Mark it in your own notes as the first of the course's temporary secrets** — М9 adds a database password and an operator account, М12 adds a per-recorder credential and a self-signed CA, and **М12 collects all five**: four replaced by giving things identities, and the fifth *promoted* rather than replaced, because the self-signed CA turned out to be the customer's own root.
 
 ## Step 5 — The failure this module has been shipping
 
@@ -378,7 +378,7 @@ You have just built a buffer in a module about operating-system updates. That de
 The spool exists here because **the link can fail here**, and nothing else in the course is yet in a position to catch it. But it is not thrown away:
 
 - **М9 puts an index over the same files and they become the archive.** The same `splitmuxsink` writes the same segments; nothing deletes them on upload; a database row is written instead. The pipeline barely changes — what changes is who owns the footage.
-- **М12 makes the upload conditional.** An on-prem Node has nobody to upload to. A cloud Node *is* the destination. A cloud site with no appliance has no spool at all, which is why the camera's own SD card becomes the buffer there.
+- **М12 makes the upload conditional.** An on-prem recorder has nobody to upload to. A cloud recorder *is* the destination. A cloud site with no appliance has no spool at all, which is why the camera's own SD card becomes the buffer there.
 
 Same segments, three meanings. It is the first thing in this course that a later module **upgrades rather than replaces**, and it is worth noticing as a design property: the parts that survive contact with later requirements are usually the ones that were forced by a physical fact rather than chosen for convenience.
 

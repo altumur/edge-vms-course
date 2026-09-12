@@ -1,10 +1,10 @@
-"""Lesson 3 — a Node's state outlives its server: the rehydration sequence,
+"""Lesson 3 — a recorder's state outlives its server: the rehydration sequence,
 against fakes, and the RPO measured rather than promised.
 
     Server A dies
-      └─ Nomad reschedules Node 3's allocation → Server B
+      └─ Nomad reschedules recorder 3's allocation → Server B
            1. empty Postgres; migrations run
-           2. read its own Nomad Variable — "I am Node 3; my configuration
+           2. read its own Nomad Variable — "I am recorder 3; my configuration
               is object node-3/rev-812, and these are my camera ids"
            3. fetch that object from the CLUSTER's object store
            4. restore it; check the revision against the Variable
@@ -36,7 +36,7 @@ class ObjectStore:
 
 
 class Postgres:
-    """The Node's own database: configuration rows with a revision."""
+    """The recorder's own database: configuration rows with a revision."""
     def __init__(self):
         self.cameras: dict[int, dict] = {}
         self.revision = 0
@@ -96,7 +96,7 @@ class NodeInstance:
 
 
 def measure_rpo(publish_interval: float, edits_per_hour: float, trials: int, seed: int = 1):
-    """Operator edits arrive at random; Node publishes every publish_interval
+    """Operator edits arrive at random; recorder publishes every publish_interval
     seconds; the server dies at a random moment. What did the operator see
     acknowledged, and what came back?"""
     r = random.Random(seed)
@@ -104,7 +104,7 @@ def measure_rpo(publish_interval: float, edits_per_hour: float, trials: int, see
     for _ in range(trials):
         vars_, store = Variables(), ObjectStore()
         n = NodeInstance("node-3", vars_, store)
-        n.save_camera(1, name="lobby"); n.publish()           # a seen Node
+        n.save_camera(1, name="lobby"); n.publish()           # a seen recorder
         t, next_pub = 0.0, publish_interval
         death = r.uniform(0, 3600)
         last_edit_t = None
@@ -137,12 +137,12 @@ if __name__ == "__main__":
     n.publish()
     print(f"published rev {n.published_rev}: object {list(store.objects)[-1]}, Variable -> {vars_.get('nodes/node-3')[0]['config']}")
     print(n.save_camera(7, retention_days=14), "   <- rev 2, not yet published")
-    print("\n-- Server A dies. Node 3 is rescheduled to Server B --")
+    print("\n-- Server A dies. recorder 3 is rescheduled to Server B --")
     n2 = NodeInstance("node-3", vars_, store)
     print(json.dumps(n2.rehydrate()))
     print(f"camera 7 came back with retention_days={n2.db.cameras[7].get('retention_days', 30)} "
           f"— the rev-2 edit the operator saw as 'not yet replicated' is gone. That is the RPO.")
-    print("\n-- a Node the directory has never seen --")
+    print("\n-- a recorder the directory has never seen --")
     print(json.dumps(NodeInstance("node-9", vars_, store).rehydrate()))
     print("\n-- RPO measured: 1000 random deaths, 20 edits/hour --")
     for interval in (300, 60, 10, 2):

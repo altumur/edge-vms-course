@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"nodevms/reconciler"
+	"recorder/reconciler"
 )
 
 func actionsOf(a []reconciler.Action) string {
@@ -105,7 +105,7 @@ func TestZombieIsFencedWhenTheReplacementTakesTheEpoch(t *testing.T) {
 
 func TestUnseenNodeRecordsNothingAndSaysSo(t *testing.T) {
 	v, objs := world(t)
-	host := NewClusterAppHost(testSettings(), NewFakeClusterStore(), v, objs, Identity{Node: "node-9"}, NewFakeActuator(), nil, nil)
+	host := NewClusterAppHost(testSettings(), NewFakeClusterStore(), v, objs, Identity{recorder: "node-9"}, NewFakeActuator(), nil, nil)
 	r, err := host.Prologue()
 	must(t, err)
 	acts, _ := host.ReconcileOnce()
@@ -117,7 +117,7 @@ func TestUnseenNodeRecordsNothingAndSaysSo(t *testing.T) {
 	}
 }
 
-// М12: the console's camera list is built from this object, never from a call to the Node.
+// М12: the console's camera list is built from this object, never from a call to the recorder.
 func TestHeartbeatCarriesTheStatusSnapshot(t *testing.T) {
 	v, objs := world(t)
 	clk, wall := &fakeClock{1000}, &fakeClock{10_000}

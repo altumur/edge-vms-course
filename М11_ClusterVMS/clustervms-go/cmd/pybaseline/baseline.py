@@ -2,12 +2,12 @@
 running (reconcile, pump_buses, report, retention, publish, lease,
 heartbeat, reindex) against the same fakes, plus an asyncio HTTP listener
 standing in for the console (uvicorn is not on the measuring machine), at
-idle with fifty cameras. Run with NODEVMS_PATH and CLUSTERVMS_PATH set."""
+idle with fifty cameras. Run with RECORDER_PATH and CLUSTERVMS_PATH set."""
 import asyncio, gc, logging, os, sys, tempfile
 logging.disable(logging.CRITICAL)                 # idle means idle: no log lines either
 sys.path.insert(0, os.environ.get("CLUSTERVMS_PATH", "../clustervms"))
 sys.path.insert(0, os.path.join(os.environ.get("CLUSTERVMS_PATH", "../clustervms"), "tests"))
-import cluster                                    # noqa: E402  (puts nodevms on sys.path)
+import cluster                                    # noqa: E402  (puts recorder on sys.path)
 from cluster.apphost import ClusterAppHost        # noqa: E402
 from cluster.identity import Identity             # noqa: E402
 from cluster.objectstore import FsObjectStore     # noqa: E402

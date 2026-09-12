@@ -1,12 +1,12 @@
 package cluster
 
-// Lesson 5 — placement onto Nodes: capacity measured, constraints as
+// Lesson 5 — placement onto recorders: capacity measured, constraints as
 // labels, the placement STORED in Variables (placement/<camera>), and one
-// rule with a property test: adding a Node moves nothing.
+// rule with a property test: adding a recorder moves nothing.
 //
 // Rebalance is explicit, budgeted, observable, interruptible, with a dead
 // band — and each move is the one two-writer operation in the module, so
-// the caller performs it with the epoch: stop on the old Node, start on
+// the caller performs it with the epoch: stop on the old recorder, start on
 // the new, never both at once without a fence.
 
 import (
@@ -17,7 +17,7 @@ import (
 )
 
 // Labels is a set: "vlan:cctv-b". A camera's labels must be a subset of
-// its Node's.
+// its recorder's.
 type Labels map[string]bool
 
 func NewLabels(ls ...string) Labels {
@@ -50,7 +50,7 @@ type PNode struct {
 }
 
 type Placement struct {
-	Node   string
+	recorder   string
 	Reason string
 	Rev    int64
 }
@@ -63,13 +63,13 @@ type Move struct {
 // Placer keeps placements in Variables under placement/<camera_id>: small,
 // one writer (the placement service), exact lookups only.
 type Placer struct {
-	Nodes  map[string]PNode
+	recorders  map[string]PNode
 	Vars   Variables
 	Placed map[int64]Placement
 }
 
 func NewPlacer(nodes map[string]PNode, v Variables) (*Placer, error) {
-	p := &Placer{Nodes: nodes, Vars: v, Placed: map[int64]Placement{}}
+	p := &Placer{recorders: nodes, Vars: v, Placed: map[int64]Placement{}}
 	paths, err := v.List("placement/")
 	if err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (p *Placer) store(cam int64, pl Placement) error {
 	if err != nil {
 		return err
 	}
-	if _, err := p.Vars.Put(path, Items{"node": pl.Node, "reason": pl.Reason, "rev": itoa(pl.Rev)}, idx); err != nil {
+	if _, err := p.Vars.Put(path, Items{"node": pl.recorder, "reason": pl.Reason, "rev": itoa(pl.Rev)}, idx); err != nil {
 		return err
 	}
 	p.Placed[cam] = pl
@@ -112,8 +112,8 @@ func (p *Placer) rev() (int64, error) {
 }
 
 func (p *Placer) nodeIDs() []string {
-	ids := make([]string, 0, len(p.Nodes))
-	for id := range p.Nodes {
+	ids := make([]string, 0, len(p.recorders))
+	for id := range p.recorders {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids) // deterministic where Python relied on insertion order
@@ -123,7 +123,7 @@ func (p *Placer) nodeIDs() []string {
 func (p *Placer) LoadOf(node string, cameras map[int64]PCamera) float64 {
 	var sum float64
 	for c, pl := range p.Placed {
-		if cam, ok := cameras[c]; ok && pl.Node == node {
+		if cam, ok := cameras[c]; ok && pl.recorder == node {
 			sum += cam.Load
 		}
 	}
@@ -133,15 +133,15 @@ func (p *Placer) LoadOf(node string, cameras map[int64]PCamera) float64 {
 func (p *Placer) Eligible(cam PCamera) []PNode {
 	var out []PNode
 	for _, id := range p.nodeIDs() {
-		if cam.Labels.SubsetOf(p.Nodes[id].Labels) {
-			out = append(out, p.Nodes[id])
+		if cam.Labels.SubsetOf(p.recorders[id].Labels) {
+			out = append(out, p.recorders[id])
 		}
 	}
 	return out
 }
 
 // Place places ONE new camera; existing placements are never touched.
-// nil means "the system is full" — never "Node 3 is full".
+// nil means "the system is full" — never "recorder 3 is full".
 func (p *Placer) Place(cam PCamera, cameras map[int64]PCamera) (*Placement, error) {
 	if pl, ok := p.Placed[cam.ID]; ok {
 		return &pl, nil
@@ -188,15 +188,15 @@ func (p *Placer) Remove(cam int64) error {
 }
 
 // AddNode: nothing moves. That is the rule.
-func (p *Placer) AddNode(n PNode) { p.Nodes[n.ID] = n }
+func (p *Placer) AddNode(n PNode) { p.recorders[n.ID] = n }
 
-// RetireNode is a Node retired ON PURPOSE (a failover moves the Node, not
+// RetireNode is a recorder retired ON PURPOSE (a failover moves the recorder, not
 // its cameras). Returns the cameras that found no home.
 func (p *Placer) RetireNode(node string, cameras map[int64]PCamera) ([]int64, error) {
-	delete(p.Nodes, node)
+	delete(p.recorders, node)
 	var orphans []int64
 	for c, pl := range p.Placed {
-		if pl.Node == node {
+		if pl.recorder == node {
 			orphans = append(orphans, c)
 		}
 	}
@@ -215,7 +215,7 @@ func (p *Placer) RetireNode(node string, cameras map[int64]PCamera) ([]int64, er
 	return homeless, nil
 }
 
-// Rebalance moves at most budget cameras from the fullest Node to the
+// Rebalance moves at most budget cameras from the fullest recorder to the
 // emptiest, stopping inside the dead band. Every move carries a reason and
 // a revision.
 func (p *Placer) Rebalance(cameras map[int64]PCamera, budget int, deadBand float64) ([]Move, error) {
@@ -228,7 +228,7 @@ func (p *Placer) Rebalance(cameras map[int64]PCamera, budget int, deadBand float
 		loads := map[string]float64{}
 		hi, lo := ids[0], ids[0]
 		for _, id := range ids {
-			loads[id] = p.LoadOf(id, cameras) / p.Nodes[id].Capacity
+			loads[id] = p.LoadOf(id, cameras) / p.recorders[id].Capacity
 			if loads[id] > loads[hi] {
 				hi = id
 			}
@@ -242,7 +242,7 @@ func (p *Placer) Rebalance(cameras map[int64]PCamera, budget int, deadBand float
 		var candidate int64 = -1
 		for c, pl := range p.Placed {
 			cam, ok := cameras[c]
-			if !ok || pl.Node != hi || !cam.Labels.SubsetOf(p.Nodes[lo].Labels) {
+			if !ok || pl.recorder != hi || !cam.Labels.SubsetOf(p.recorders[lo].Labels) {
 				continue
 			}
 			if candidate < 0 || cam.Load < cameras[candidate].Load || (cam.Load == cameras[candidate].Load && c < candidate) {
@@ -252,7 +252,7 @@ func (p *Placer) Rebalance(cameras map[int64]PCamera, budget int, deadBand float
 		if candidate < 0 {
 			break
 		}
-		if p.LoadOf(lo, cameras)+cameras[candidate].Load > p.Nodes[lo].Capacity {
+		if p.LoadOf(lo, cameras)+cameras[candidate].Load > p.recorders[lo].Capacity {
 			break
 		}
 		rev, err := p.rev()
@@ -270,15 +270,15 @@ func (p *Placer) Rebalance(cameras map[int64]PCamera, budget int, deadBand float
 // CheckInvariants is the property test's oracle.
 func CheckInvariants(p *Placer, cameras map[int64]PCamera) error {
 	for c, pl := range p.Placed {
-		n, ok := p.Nodes[pl.Node]
+		n, ok := p.recorders[pl.recorder]
 		if !ok {
-			return fmt.Errorf("camera %d placed on a Node that does not exist", c)
+			return fmt.Errorf("camera %d placed on a recorder that does not exist", c)
 		}
 		if !cameras[c].Labels.SubsetOf(n.Labels) {
 			return fmt.Errorf("camera %d violates its constraint", c)
 		}
 	}
-	for _, n := range p.Nodes {
+	for _, n := range p.recorders {
 		if p.LoadOf(n.ID, cameras) > n.Capacity+1e-9 {
 			return fmt.Errorf("%s over capacity", n.ID)
 		}

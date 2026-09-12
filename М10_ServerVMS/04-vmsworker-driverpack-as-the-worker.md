@@ -91,7 +91,7 @@ def _actuate(self, verb, cam):
     ok = self.actuator("stop", cam); self.release(unit); return ok
 ```
 
-Why per camera and not per worker, as М11 did for the Node: because a **reassignment** is the one legitimate case of two writers on one camera — the controller moves camera 7 from `w-1` to `w-2`, and for a few seconds both may be writing — and the epoch has to separate those too. A restart of a running pipeline (an edit) keeps its epoch: same writer, same segment directory. A *start* takes the next one: `archivesink` opens a new directory, and whatever the previous writer was doing lands in the old one.
+Why per camera and not per worker, as М11 did for the recorder: because a **reassignment** is the one legitimate case of two writers on one camera — the controller moves camera 7 from `w-1` to `w-2`, and for a few seconds both may be writing — and the epoch has to separate those too. A restart of a running pipeline (an edit) keeps its epoch: same writer, same segment directory. A *start* takes the next one: `archivesink` opens a new directory, and whatever the previous writer was doing lands in the old one.
 
 `lease_pass` renews the slot first and the camera leases second; a slot held by another instance fences everything before any epoch is read. The lease is the other half. `may_write(unit)` is a purely local decision on a monotonic clock — TTL 30, margin 5, the numbers М11 Lesson 4 derived — and a start without a live lease is refused before the actuator is asked. `test_lease_expiry_without_renewal_stops_starts` runs the clock 26 seconds forward, shows `may_write` false, and shows the next start taking a *fresh* epoch and a fresh lease rather than reusing the stale one.
 
@@ -120,7 +120,7 @@ The element never knows about buckets, epochs or files; it posts what it saw, an
              "revision": 2, "observed_revision": 2, "epoch": 1}, ...]}
 ```
 
-One object, `vms/w-1/heartbeat`, every ten seconds, carrying the Node's `/status` as М9 Lesson 9 defined it — positions apart from reasons — plus the epoch per camera and the server it runs on. Nobody calls the worker for its status: the controller reads this to know which workers exist (`workers_seen`), the console reads it for the camera list, М12's read model reads the same object across clusters. This is the shape М11 Lesson 4 chose for the heartbeat and М12 Lesson 3 grew; here it is the worker's from the start.
+One object, `vms/w-1/heartbeat`, every ten seconds, carrying the recorder's `/status` as М9 Lesson 9 defined it — positions apart from reasons — plus the epoch per camera and the server it runs on. Nobody calls the worker for its status: the controller reads this to know which workers exist (`workers_seen`), the console reads it for the camera list, М12's read model reads the same object across clusters. This is the shape М11 Lesson 4 chose for the heartbeat and М12 Lesson 3 grew; here it is the worker's from the start.
 
 ## Step 5 — The controller is never on the recovery path
 

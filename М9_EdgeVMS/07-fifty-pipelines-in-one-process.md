@@ -213,9 +213,9 @@ That is it. The spool became an archive because **somebody started keeping a rec
 
 Two things follow that are worth saying out loud:
 
-**The uploader becomes optional.** On an on-prem Node there is nobody to upload to — footage lives where it was recorded and the console reads the index. In М12 a cloud Node *is* the destination and the upload comes back. Same segments, different meaning, no rewrite.
+**The uploader becomes optional.** On an on-prem recorder there is nobody to upload to — footage lives where it was recorded and the console reads the index. In М12 a cloud recorder *is* the destination and the upload comes back. Same segments, different meaning, no rewrite.
 
-**`epoch` is 1 and never changes in this module.** It is in the path, and in the index, and it does nothing. It is there because in М11 two instances of the same Node can briefly exist during failover, and the epoch in the path is what stops the stale one writing over the live one's files. Adding it now costs a directory level; adding it later means moving every file in the archive.
+**`epoch` is 1 and never changes in this module.** It is in the path, and in the index, and it does nothing. It is there because in М11 two instances of the same recorder can briefly exist during failover, and the epoch in the path is what stops the stale one writing over the live one's files. Adding it now costs a directory level; adding it later means moving every file in the archive.
 
 Use `splitmuxsink`'s `format-location` signal to build the path — **once per segment**, which is control rate and therefore allowed.
 

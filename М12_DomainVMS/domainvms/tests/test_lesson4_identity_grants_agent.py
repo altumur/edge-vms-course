@@ -1,10 +1,10 @@
 """Lesson 4 — who may call it: tokens verified offline; users never reach a
-Node; the agent carries keys and revocations and nothing else; grants are
-Node-local with expiry; the revocation window is stated then measured;
-break-glass is one account, audited."""
+worker; the agent carries keys, revocations and the cluster's grants and
+nothing else; grants are cluster-local with expiry; the revocation window
+is stated then measured; break-glass is one account, audited."""
 from cluster.variables import Forbidden
-from domain.agent import KEYS_PATH, DomainAgent, DomainPublisher, NodeTrust
-from domain.grants import GRANT_LIFETIME, Grant, NodeAuthoriser, NodeGrants, revocation_window
+from domain.agent import KEYS_PATH, DomainAgent, DomainPublisher, ClusterTrust
+from domain.grants import GRANT_LIFETIME, ClusterAuthoriser, ClusterGrants, Grant, revocation_window
 from domain.identity import TOKEN_LIFETIME, AuthError, BreakGlass, IdentityStore
 from domain.signer import Signer
 from domain.tokens import Expired, Revoked, RevocationList, UnknownKey, verify
@@ -26,7 +26,7 @@ def test_login_ends_in_a_token_naming_the_subject_and_nothing_else():
     tok = ids.login("alice", "correct horse")
     payload = verify(tok, signer.tokens.keyset(), now=clk())
     assert payload["sub"] == "alice" and payload["exp"] == 1000.0 + TOKEN_LIFETIME
-    assert "roles" not in payload and "grants" not in payload            # rights are the Node's, not the token's
+    assert "roles" not in payload and "grants" not in payload            # rights are the cluster's grants, not the token's
     try:
         ids.login("alice", "wrong"); raise AssertionError()
     except AuthError:
@@ -41,7 +41,7 @@ def test_login_ends_in_a_token_naming_the_subject_and_nothing_else():
         pass
 
 
-def test_nothing_about_a_user_reaches_a_node_only_trust_does():
+def test_nothing_about_a_user_reaches_a_worker_only_trust_does():
     clk = Clock(1000.0)
     fed, links, dc, signer = _domain(clk)
     south = fed.clusters["south"]
@@ -52,16 +52,17 @@ def test_nothing_about_a_user_reaches_a_node_only_trust_does():
     south.vars.acl = {"agent": ["domain/*"]}
     assert agent.sync()
     assert south.vars.list("identity/") == [] and south.vars.list("domain/") == ["domain/keys"]   # keys, no people
-    try:
-        south.vars.as_writer("agent").put("nodes/node-4/epoch", {"epoch": 99}); raise AssertionError()
-    except Forbidden:
-        pass                                                               # the agent's only right is domain/*
-    trust = NodeTrust(south.vars)
+    for path in ("vms/cameras/7", "vms/epoch/7", "vms/slots/w-0"):
+        try:
+            south.vars.as_writer("agent").put(path, {"x": 1}); raise AssertionError()
+        except Forbidden:
+            pass                                                           # the agent's only right is domain/*: not the controller's, not a worker's
+    trust = ClusterTrust(south.vars)
     tok = ids.login("alice", "pw")
-    assert verify(tok, trust.keyset(), trust.revoked(), now=clk())["sub"] == "alice"   # verified from the Node's OWN cluster
+    assert verify(tok, trust.keyset(), trust.revoked(), now=clk())["sub"] == "alice"   # verified by south's console from south's OWN Variables
 
 
-def test_domain_down_nodes_keep_verifying_nobody_new_logs_in():
+def test_domain_down_clusters_keep_verifying_nobody_new_logs_in():
     clk = Clock(1000.0)
     fed, links, dc, signer = _domain(clk)
     south = fed.clusters["south"]
@@ -73,7 +74,7 @@ def test_domain_down_nodes_keep_verifying_nobody_new_logs_in():
     tok = ids.login("alice", "pw")
     links["north"].up = False                                              # the domain cluster is gone
     assert agent.sync() is False and agent.last_synced == 1000.0           # the agent stops updating, writes nothing
-    trust = NodeTrust(south.vars)
+    trust = ClusterTrust(south.vars)
     assert verify(tok, trust.keyset(), now=clk())["sub"] == "alice"        # existing tokens: fine, offline
     try:
         ids.login("alice", "pw"); raise AssertionError()
@@ -91,14 +92,14 @@ def test_revocation_travels_by_the_agent_and_rotation_overlaps():
     tok = signer.tokens.issue("mallory", 900, now=clk())
     rl = RevocationList(); rl.revoke(verify(tok, signer.tokens.keyset(), now=clk()))
     pub.publish_revoked(rl); agent.sync()
-    trust = NodeTrust(south.vars)
+    trust = ClusterTrust(south.vars)
     try:
         verify(tok, trust.keyset(), trust.revoked(), now=clk()); raise AssertionError()
     except Revoked:
         pass
     old_tok = signer.tokens.issue("alice", 900, now=clk())
     signer.tokens.rotate(overlap=600, now=clk()); pub.publish_keys(signer.tokens.keyset()); agent.sync()
-    trust = NodeTrust(south.vars)
+    trust = ClusterTrust(south.vars)
     assert verify(old_tok, trust.keyset(), now=clk())["sub"] == "alice"    # the previous key is still in the set
     new_tok = signer.tokens.issue("alice", 900, now=clk())
     assert verify(new_tok, trust.keyset(), now=clk())["sub"] == "alice"
@@ -109,20 +110,24 @@ def test_revocation_travels_by_the_agent_and_rotation_overlaps():
         pass                                                               # overlap over: the old key is retired
 
 
-def test_grants_are_node_local_and_expiry_is_the_revocation_mechanism():
+def test_grants_are_cluster_local_carried_by_the_agent_and_expiry_is_the_revocation_mechanism():
     clk = Clock(1000.0)
     fed, links, dc, signer = _domain(clk)
-    g = NodeGrants("node-4", now=clk)
-    g.grant("alice", "view", None, valid_until=clk() + GRANT_LIFETIME)
-    g.grant("alice", "edit", 7, valid_until=clk() + GRANT_LIFETIME)
-    auth = NodeAuthoriser(g, signer.tokens.keyset(), now=clk)
+    south = fed.clusters["south"]
+    pub = DomainPublisher(dc.vars); pub.publish_keys(signer.tokens.keyset())
+    pub.publish_grants("south", [Grant("alice", "view", None, clk() + GRANT_LIFETIME), Grant("alice", "edit", 7, clk() + GRANT_LIFETIME)])
+    agent = DomainAgent("south", dc.vars, south.vars, now=clk); agent.sync()
+    assert sorted(south.vars.list("domain/")) == ["domain/grants", "domain/keys"]   # what reached the cluster: trust and grants, no user
+    g = ClusterGrants("south", now=clk)
+    g.renew_from_domain(ClusterTrust(south.vars).grants())                            # the console loads them from ITS cluster
+    auth = ClusterAuthoriser(g, signer.tokens.keyset(), now=clk)
     tok = signer.tokens.issue("alice", TOKEN_LIFETIME, now=clk())
     assert auth.authorise(tok, "view", 12) == "alice" and auth.authorise(tok, "edit", 7) == "alice"
     try:
         auth.authorise(tok, "edit", 12); raise AssertionError()
     except PermissionError as e:
-        assert "no edit grant on camera 12 at node-4" in str(e)
-    # The revoke cannot reach node-4 (unreachable). State in advance when access ends:
+        assert "no edit grant on camera 12 in south" in str(e)
+    # The revoke cannot reach south (unreachable). State in advance when access ends:
     stated = g.access_ends("alice", token_exp=clk() + TOKEN_LIFETIME)
     assert stated == clk() + TOKEN_LIFETIME                                  # the token is the shorter lifetime here
     assert revocation_window(TOKEN_LIFETIME, GRANT_LIFETIME) == TOKEN_LIFETIME
@@ -132,14 +137,14 @@ def test_grants_are_node_local_and_expiry_is_the_revocation_mechanism():
         auth.authorise(tok, "view", 12); raise AssertionError()
     except PermissionError as e:
         assert "expired" in str(e)
-    # And the other direction: a fresh token, but the Node could not renew its grants past their expiry.
+    # And the other direction: a fresh token, but south's agent could not renew its grants past their expiry.
     clk.advance(GRANT_LIFETIME)
     tok2 = signer.tokens.issue("alice", TOKEN_LIFETIME, now=clk())         # the domain is back and issues a fresh token...
     try:
         auth.authorise(tok2, "view", 12); raise AssertionError()
     except PermissionError as e:
         assert "no view grant" in str(e)
-    # The upward stream renews what the domain still grants — and drops what it does not.
+    # The agent renews what the domain still grants — and drops what it does not.
     g.renew_from_domain([Grant("alice", "view", None, clk() + GRANT_LIFETIME)])
     assert g.may("alice", "view", 12) and not g.may("alice", "edit", 7)
 

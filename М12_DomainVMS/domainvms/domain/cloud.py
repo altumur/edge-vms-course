@@ -1,9 +1,9 @@
-"""Lesson 8 — a cluster you rent, and a Node that does not know where it is.
+"""Lesson 8 — a cluster you rent, and a worker that does not know where it is.
 
 The bandwidth arithmetic, done before the demo: fifty cameras at 4 Mbit/s
 is 200 Mbit/s sustained upstream and ~2 TB a day. Most sites cannot buy
 that, so recording stays at the edge and operation moves to the cloud —
-MIXED is the shape a real deployment takes. And a Node deployed three ways
+MIXED is the shape a real deployment takes. And a worker deployed three ways
 — local server, rented instance, split — is the SAME artifact; if it is
 not, this lesson found a bug in М9 or М11.
 """
@@ -78,7 +78,7 @@ def _worker_jobspec() -> str:
     raise FileNotFoundError("clustervms/deploy/vmsworker.nomad.hcl")
 
 
-def render_three_ways(node: str = "vmsworker") -> dict[str, str]:
+def render_three_ways(job: str = "vmsworker") -> dict[str, str]:
     """The same worker job for a local rack, a rented instance, and a split
     site. What differs is the datacenter and the object store's address.
     What must never differ: everything about the worker."""
@@ -101,8 +101,8 @@ def render_three_ways(node: str = "vmsworker") -> dict[str, str]:
     }
 
 
-def node_stanza(jobspec: str) -> str:
-    """The part of a jobspec that is the Node: from `group` down, with the
+def worker_stanza(jobspec: str) -> str:
+    """The part of a jobspec that is the worker: from `group` down, with the
     two placement-specific lines masked."""
     body = jobspec[jobspec.index("group "):]
     return "\n".join("<placement>" if ("OBJECTS" in ln or "datacenters" in ln) else ln for ln in body.splitlines())

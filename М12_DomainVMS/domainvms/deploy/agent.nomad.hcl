@@ -1,7 +1,7 @@
 # The domain agent: one per cluster. Its only right is to write domain/* in
 # THIS cluster's Variables — the signer's public key set and the revocation
 # list, copied from the domain cluster. When the domain is unreachable it
-# stops updating; Nodes keep verifying with the keys they have.
+# stops updating; the cluster's console and gateway keep verifying with the keys they have.
 job "domain-agent" {
   datacenters = ["*"]
   type        = "service"

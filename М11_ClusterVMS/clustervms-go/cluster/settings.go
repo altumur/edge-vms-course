@@ -45,7 +45,7 @@ func envF(name string, def float64) float64 {
 
 func SettingsFromEnv() Settings {
 	return Settings{
-		DatabaseURL:       env("DATABASE_URL", "postgresql://nodevms@127.0.0.1:5432/nodevms"),
+		DatabaseURL:       env("DATABASE_URL", "postgresql://recorder@127.0.0.1:5432/recorder"),
 		ArchiveDir:        env("ARCHIVE_DIR", "/data/archive"),
 		ColumnKeyFile:     env("COLUMN_KEY_FILE", "/data/config/column.key"),
 		Epoch:             int64(envF("EPOCH", 1)),

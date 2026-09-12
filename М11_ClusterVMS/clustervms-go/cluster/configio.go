@@ -1,7 +1,7 @@
 package cluster
 
-// What travels: the Node's configuration, as one opaque blob — format 1,
-// byte-compatible with the Python version's, so a Node written in either
+// What travels: the recorder's configuration, as one opaque blob — format 1,
+// byte-compatible with the Python version's, so a recorder written in either
 // language restores what the other published.
 //
 // Lesson 3's table: footage stays, the index is rebuilt, events are

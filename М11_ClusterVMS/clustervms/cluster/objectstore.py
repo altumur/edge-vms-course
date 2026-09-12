@@ -18,7 +18,7 @@ endpoint that accepts plain HTTP object semantics (MinIO with a bucket
 policy, nginx with dav, an S3 presigned pattern behind a proxy).
 `FsObjectStore` is a directory — the tests, and a bench with a shared mount.
 An S3 adapter with signed requests is a twenty-line boto3 wrapper on the
-same two methods; it is not here because the Node image carries no boto3.
+same two methods; it is not here because the appliance image carries no boto3.
 """
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ class VariablesObjectStore:
 
 def open_store(url: str) -> ObjectStore:
     """file:///path · http(s)://host/bucket (anonymous) · s3+http(s)://host/bucket?region=r (SigV4,
-    credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a Node, from its Variable)."""
+    credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a server, from a Variable)."""
     if url.startswith(("s3+http://", "s3+https://")):
         from urllib.parse import parse_qs, urlsplit
         from .s3 import S3ObjectStore

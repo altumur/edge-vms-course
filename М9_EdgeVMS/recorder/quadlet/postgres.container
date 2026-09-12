@@ -1,0 +1,19 @@
+# /etc/containers/systemd/postgres.container — Lesson 5, Step 9.
+# PGDATA on the data partition, never in a rootfs slot: an A/B update that
+# destroyed every camera row would boot perfectly and never roll back.
+[Unit]
+Description=recorder database
+
+[Container]
+Image=docker.io/library/postgres:16
+Volume=/data/pg:/var/lib/postgresql/data:z
+EnvironmentFile=/data/config/pg.env
+PublishPort=127.0.0.1:5432:5432
+HealthCmd=pg_isready -U recorder
+HealthInterval=5s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

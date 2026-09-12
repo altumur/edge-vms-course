@@ -1,7 +1,7 @@
-// cmd/clustervms — the Node under a scheduler, in Go. The same environment
+// cmd/clustervms — the recorder under a scheduler, in Go. The same environment
 // the Python version reads (NODE_ID, CONFIG_OBJECT, NOMAD_ADDR/NOMAD_TOKEN,
 // OBJECT_STORE_URL, LEASE_TTL, …), the same Variables, the same objects:
-// a Go Node and a Python Node are interchangeable allocations of one job.
+// a Go recorder and a Python recorder are interchangeable allocations of one job.
 package main
 
 import (
@@ -43,7 +43,7 @@ func main() {
 	defer closeStore()
 	// The actuator is where a Go controller stops being a host of pipelines
 	// and becomes a client of a media worker (М9 Lesson 9). Until that
-	// worker exists, the fake records nothing and the rest of the Node is real.
+	// worker exists, the fake records nothing and the rest of the recorder is real.
 	host := cluster.NewClusterAppHost(settings, store, vars, objects, ident, cluster.NewFakeActuator(), nil, nil)
 	if err := host.Run(ctx, true); err != nil {
 		log.Fatal(err)

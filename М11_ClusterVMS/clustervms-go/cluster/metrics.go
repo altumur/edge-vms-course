@@ -10,7 +10,7 @@ package cluster
 import "fmt"
 
 func RenderMetrics(h *ClusterAppHost) string {
-	n := h.Identity.Node
+	n := h.Identity.recorder
 	conflicts, left := 0, 0.0
 	if h.Lease != nil {
 		conflicts, left = h.Lease.Conflicts, h.Lease.SecondsLeft()
@@ -23,13 +23,13 @@ func RenderMetrics(h *ClusterAppHost) string {
 # TYPE node_failover_seconds gauge
 node_failover_seconds{node=%q,kind="last"} %.1f
 node_failover_seconds{node=%q,kind="worst"} %.1f
-# HELP node_epoch_conflicts Times a stale instance of this Node was fenced. Should be zero forever.
+# HELP node_epoch_conflicts Times a stale instance of this recorder was fenced. Should be zero forever.
 # TYPE node_epoch_conflicts counter
 node_epoch_conflicts{node=%q} %d
 # HELP node_epoch The epoch this instance records into.
 # TYPE node_epoch gauge
 node_epoch{node=%q} %d
-# HELP node_config_replicated 1 if the directory holds this Node's current configuration revision.
+# HELP node_config_replicated 1 if the directory holds this recorder's current configuration revision.
 # TYPE node_config_replicated gauge
 node_config_replicated{node=%q} %d
 # HELP node_lease_seconds_left Seconds this instance may still write without renewing its lease.

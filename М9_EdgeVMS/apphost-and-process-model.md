@@ -101,7 +101,7 @@ Decode and encode. Live transcoding for an operator's 16-up wall, and analytics 
 | Transcode / analytics | Concurrent demand | Yes | 4–16 workers, GPU-pinned |
 | Control plane | Fixed | No | 1 controller |
 
-The middle tier is **demand-driven, not camera-driven** — sized by concurrent viewers and enabled detectors. (This tier becomes М12's *live gateway* — see *Who serves browsers* in [М12's design record](../М12_DomainVMS/module-design.md) — and the rule that a Node never serves a browser is stated there.) It is also hardware-bound, which is where Nomad's `exec2` and `virt` drivers earn the argument made in [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md): a native process needing direct device access does not have to be containerised.
+The middle tier is **demand-driven, not camera-driven** — sized by concurrent viewers and enabled detectors. (This tier becomes М12's *live gateway* — see *Who serves browsers* in [М12's design record](../М12_DomainVMS/module-design.md) — and the rule that a recorder never serves a browser is stated there.) It is also hardware-bound, which is where Nomad's `exec2` and `virt` drivers earn the argument made in [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md): a native process needing direct device access does not have to be containerised.
 
 ---
 
@@ -118,7 +118,7 @@ The instinct to put a supervisor in front of the camera processes is right. The 
 
 Adding a camera never touches Nomad. Adding *capacity* does — scale the job from 20 workers to 25. The orchestrator's state stays small, uniform and independent of the customer's camera count, which is what lets the same design serve an 8-camera site and an 8000-camera one.
 
-The controller is a reconciliation loop: desired state in Postgres, actual state reported by workers, and the controller closing the gap by assigning cameras to shards. **М11 sharpens this**: because a Node is a scheduler allocation with stable identity, a camera is assigned to a Node *once* and moves with it, so the controller places new cameras and rebalances on request rather than reassigning continuously. Inside each worker a thin supervisor owns its pipelines, watches each one's `GstBus`, and restarts them individually with per-camera backoff.
+The controller is a reconciliation loop: desired state in Postgres, actual state reported by workers, and the controller closing the gap by assigning cameras to shards. **М11 sharpens this**: because a recorder is a scheduler allocation with stable identity, a camera is assigned to a recorder *once* and moves with it, so the controller places new cameras and rebalances on request rather than reassigning continuously. Inside each worker a thin supervisor owns its pipelines, watches each one's `GstBus`, and restarts them individually with per-camera backoff.
 
 ### Why not extend the process supervisor to cover cameras
 

@@ -5,7 +5,7 @@ the domain cluster runs the same one pointed at every cluster.
     GET  /api/cameras?q=&page=&size=&cluster=   the read model, with each row's age and its cluster's state
     GET  /api/causes                            silence grouped by failure domain: one server, one cause
     GET  /api/where/<camera>                    the directory of directories, incompleteness included
-    PUT  /api/cameras/<camera>                  proxied to the owning Node; Idempotency-Key required;
+    PUT  /api/cameras/<camera>                  proxied to the owning cluster's console; Idempotency-Key required;
                                                 refuses placement fields
     GET  /healthz
 
@@ -65,7 +65,7 @@ class Console:
                     if u.path == "/api/causes":
                         return self._send(200, [c.__dict__ | {"sentence": c.sentence()} for c in console.view.causes()])
                     if u.path.startswith("/api/where/"):
-                        a = console.directory.where(int(u.path.rsplit("/", 1)[1]))
+                        a = console.directory.where(u.path.rsplit("/", 1)[1])
                         return self._send(200 if a.found else (404 if a.complete else 503),
                                           a.__dict__ | {"complete": a.complete, "sentence": a.sentence()})
                     self._send(404, {"detail": "no such route"})
@@ -82,7 +82,7 @@ class Console:
                 n = int(self.headers.get("Content-Length", 0))
                 fields = json.loads(self.rfile.read(n) or b"{}")
                 try:
-                    self._send(200, console.api.update_camera(int(u.path.rsplit("/", 1)[1]), fields, key, self._token()))
+                    self._send(200, console.api.update_camera(u.path.rsplit("/", 1)[1], fields, key, self._token()))
                 except ApiError as e:
                     self._send(e.status, {"detail": e.detail})
 
@@ -111,12 +111,12 @@ def main() -> None:
 
     from .runtime import federation_from_env
     from .tokens import verify
-    from .agent import NodeTrust
+    from .agent import ClusterTrust
 
     fed = federation_from_env()
     directory = DomainDirectory(fed)
     view = ReadView(fed, lost_after=float(os.environ.get("LOST_AFTER", "45")))
-    trust = NodeTrust(fed.domain_cluster.vars)
+    trust = ClusterTrust(fed.domain_cluster.vars)
 
     def verifier(token: str) -> str:
         ks = trust.keyset()
@@ -124,8 +124,8 @@ def main() -> None:
             raise ApiError(503, "no signer key set in this cluster yet (is the domain agent running?)")
         return verify(token, ks, trust.revoked())["sub"]
 
-    def consoles(node: str):
-        raise ApiError(501, f"forwarding to {node}'s console needs service discovery wired here (nomadService)")
+    def consoles(cluster: str):
+        raise ApiError(501, f"forwarding to {cluster}'s console needs service discovery wired here (nomadService)")
 
     api = ConsoleAPI(directory, consoles, verifier=verifier if os.environ.get("AUTH", "1") == "1" else None)
     console = Console(directory, view, api, refresh_interval=float(os.environ.get("REFRESH_INTERVAL", "5")))

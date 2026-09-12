@@ -3,7 +3,7 @@ package cluster
 // Lesson 5 — the cluster's questions, on the console.
 //
 //	GET /cluster/node               who am I, which epoch, lease, replicated, failover
-//	GET /cluster/directory          every Node's holdings, one scan
+//	GET /cluster/directory          every recorder's holdings, one scan
 //	GET /cluster/where/{camera_id}  where is camera 7
 //	GET /metrics                    node_failover_seconds, node_epoch_conflicts, …
 
@@ -27,7 +27,7 @@ func ConsoleMux(h *ClusterAppHost) *http.ServeMux {
 		w.Write([]byte(RenderMetrics(h)))
 	})
 	mux.HandleFunc("/cluster/node", func(w http.ResponseWriter, _ *http.Request) {
-		out := map[string]any{"node": h.Identity.Node, "epoch": h.Settings.Epoch, "replicated": h.ReplicatedNow,
+		out := map[string]any{"node": h.Identity.recorder, "epoch": h.Settings.Epoch, "replicated": h.ReplicatedNow,
 			"failover": h.Failover, "restore": nil, "lease_seconds_left": nil, "fenced": nil}
 		if h.Restore != nil {
 			out["restore"] = h.Restore.State
@@ -57,10 +57,10 @@ func ConsoleMux(h *ClusterAppHost) *http.ServeMux {
 			return
 		}
 		if node == "" {
-			http.Error(w, "camera "+strconv.FormatInt(id, 10)+" is on no Node this cluster knows", 404)
+			http.Error(w, "camera "+strconv.FormatInt(id, 10)+" is on no recorder this cluster knows", 404)
 			return
 		}
-		writeJSON(w, map[string]any{"camera": id, "node": node, "here": node == h.Identity.Node})
+		writeJSON(w, map[string]any{"camera": id, "node": node, "here": node == h.Identity.recorder})
 	})
 	return mux
 }

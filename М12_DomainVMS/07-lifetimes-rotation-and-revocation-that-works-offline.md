@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-The domain's root is self-signed and it is the top. That was decided in Lesson 4 for a security reason — a vendor-held root above it would be a vendor that can impersonate the customer's whole trust domain — and it has a consequence the module has to face rather than defer: **nobody above will re-issue anything.** If the domain loses its key, every Node re-enrolls. If a certificate expires during an outage, the outage becomes a dark building. If a stolen device's certificate is valid for a year, it is valid for a year.
+The domain's root is self-signed and it is the top. That was decided in Lesson 4 for a security reason — a vendor-held root above it would be a vendor that can impersonate the customer's whole trust domain — and it has a consequence the module has to face rather than defer: **nobody above will re-issue anything.** If the domain loses its key, every server re-enrolls. If a certificate expires during an outage, the outage becomes a dark building. If a stolen device's certificate is valid for a year, it is valid for a year.
 
 None of that is fixed by choosing carefully. It is fixed by arithmetic — lifetimes derived from the autonomy the product promises — and by drills: a rotation nobody has run is a plan, and a backup nobody has restored from is a hope. Everything in this lesson takes a `now` parameter so the drills run in milliseconds instead of years.
 
@@ -77,7 +77,7 @@ Overlapping validity is the whole trick. A process holding `c1` fetches `c2`, lo
 
 ## Step 4 — Root rotation as a drill
 
-The root's lifetime is years, and a root that has never been rotated is a root nobody knows how to rotate. So the domain rotates its root *while running*, and the mechanism is an overlap in the **trust bundle** every Node and service holds:
+The root's lifetime is years, and a root that has never been rotated is a root nobody knows how to rotate. So the domain rotates its root *while running*, and the mechanism is an overlap in the **trust bundle** every server and service holds:
 
 ```python
 new_root, cross = signer.rotate_root(bundle, overlap=7 * DAY)
@@ -99,7 +99,7 @@ CRLs and OCSP both assume you can reach something. The design's revocation is: *
 
 ## Step 6 — Clock skew, named
 
-A certificate is valid from *not before* to *not after* according to the verifier's clock. A Node whose clock is an hour behind rejects a freshly issued certificate as *not yet valid* and the symptom looks like every other TLS failure. `TrustBundle.verify()` names it:
+A certificate is valid from *not before* to *not after* according to the verifier's clock. A server whose clock is an hour behind rejects a freshly issued certificate as *not yet valid* and the symptom looks like every other TLS failure. `TrustBundle.verify()` names it:
 
 ```
 skew: not yet valid: starts in 3540s — clock skew?
@@ -114,7 +114,7 @@ Everything at the domain can be re-provisioned in another cluster from nothing �
 - `Signer.backup()` is the keys and the root, kept where the domain cluster's death cannot reach — another cluster's object store, or offline. `Signer.restore()` on another cluster brings the same root back, and Lesson 4's test shows old tokens still verifying afterwards.
 - The identity set is published object-first with a pointer (Lesson 4), backed up beside the key, and `IdentityStore.restore()` follows the pointer. The RPO for users is the publication interval.
 
-Re-hosting the domain is then М11's restore with different nouns: the backed-up key, the identity object the pointer names, then the domain agents pick up the new public key from the new domain cluster's Variables. And the honest cost, said with a number: **lose the key anyway and every Node re-enrolls** — Lesson 6's path, times N, and the module asks how long that takes at your N rather than leaving it as a feeling.
+Re-hosting the domain is then М11's restore with different nouns: the backed-up key, the identity object the pointer names, then the domain agents pick up the new public key from the new domain cluster's Variables. And the honest cost, said with a number: **lose the key anyway and every server re-enrolls** — Lesson 6's path, times N, and the module asks how long that takes at your N rather than leaving it as a feeling.
 
 **Deliverable:** simulate a thirty-day cluster outage — service certificates dark, devices fine, everything back on reconnection. Rotate the root under load, with the old-root-only peer served by the cross-certificate and the old root retired on its date. Revoke a device and show it losing access on the schedule stated in advance. Then restore the signer and the users on another cluster from the backup.
 
@@ -138,7 +138,7 @@ Re-hosting the domain is then М11's restore with different nouns: the backed-up
 - Root rotation is an overlap in the bundle, a cross-certificate for slow peers, and a retirement date. Run it on a live domain.
 - Revocation is expiry. The device certificate is the slow case and entitlement compensates.
 - Clock skew is a named failure with a tolerance.
-- Two pieces of state; backup, not delegation; lose the key and every Node re-enrolls.
+- Two pieces of state; backup, not delegation; lose the key and every server re-enrolls.
 
 ## Exercises
 
@@ -150,4 +150,4 @@ Re-hosting the domain is then М11's restore with different nouns: the backed-up
 
 ## Where this is going
 
-The domain can now look after its own trust with nothing above it. [**Lesson 8**](08-a-cluster-you-rent-and-a-node-that-does-not-know-where-it-is.md) changes one thing — where the servers come from — and proves the software cannot tell: a cluster rented from the customer's own cloud account, the bandwidth arithmetic done before the demo, and the same Node deployed three ways with identical artifacts.
+The domain can now look after its own trust with nothing above it. [**Lesson 8**](08-a-cluster-you-rent-and-a-worker-that-does-not-know-where-it-is.md) changes one thing — where the servers come from — and proves the software cannot tell: a cluster rented from the customer's own cloud account, the bandwidth arithmetic done before the demo, and the same worker deployed three ways with identical artifacts.

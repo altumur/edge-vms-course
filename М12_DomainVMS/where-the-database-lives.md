@@ -12,6 +12,8 @@ A sixth revision came from redefining the words above it. **Cluster and domain u
 
 Each revision is left visible rather than quietly edited out, because the sequence is the lesson — and this one is the sixth in a row that took state **out** of the domain.
 
+> **Seventh revision — the record is now historical below this line.** The 2c rewrite (М10 ServerVMS, М11 ClusterVMS, and this module) removed the last database this record kept, and retired the word it was written in. Where the text below says *Node* — a process with its own Postgres, its own disk and its own identity that Nomad moved between servers — read the unit that no longer exists. Under 2c a **server** holds the platform's stores, a **resource** (its disks, as a platform job) and whichever **workers** Nomad placed there; a cluster's **controller** owns every camera row in the cluster's raft; a worker holds an **epoch per camera** and claims its own identity by CAS. The verdicts that survive, and what happened to the others, are in [*The seventh revision*](#the-seventh-revision-the-last-database-goes) at the end. The body is left as written because the sequence is still the lesson — six revisions took state out of the domain, and the seventh took it out of the box.
+
 ---
 
 ## Verdict
@@ -292,6 +294,38 @@ Most events are never read. A filtered subset — alarms an operator must acknow
 
 **Product recommendation: the Node is the authority for its own configuration and owns the only database; the domain is a Variable, an object, and a certificate authority.** Nothing in that list has to be available for the product to *record*; the directory has to be available for the product to *recover*. Five revisions of this record moved in one direction throughout — **every one of them took state out of a database** — and the last one removed the database.
 
+
+---
+
+## The seventh revision: the last database goes
+
+*Added 12 September 2026, after the 2c rewrite. Everything above is the record as it stood; this section says what 2c did to each verdict.*
+
+The sixth revision ended with one database in the whole design — Postgres per Node, holding that Node's configuration, its archive index and its events — and called it the only one. The 2c rewrite looked at the three things in it and found that none of them was a database's workload once the *Node* stopped existing as a unit:
+
+| What the Node's Postgres held | Where it is under 2c | Why the shape changed |
+|---|---|---|
+| **Configuration** — camera rows, revision, placement | **The cluster's Variables**, written by one controller by CAS (`vms/cameras/<id>`, `vms/workers/<w>`) | Ownership was per Node because a Node was the thing that moved. A worker is `count = N` and interchangeable; its cameras are *placed* on it and can be redistributed, so the rows had to be somewhere every worker reads and one writer writes — raft's shape, already there |
+| **Archive index** — which segment holds which time range | **A cache on the resource** (М10 `Manifest`, per camera per epoch) and a **SQLite cache over every resource** (`vmsplatform/eventindex.py`) that can be dropped and rebuilt from the buckets | An index that is never the source of truth is a cache, and a cache that admits to being one needs no durability story. The manifest is beside the segments it names |
+| **Events** — observations written by the recorder | **Buckets on the resource** (`<resource>/<subsystem>/<unit>/e<epoch>/…events.jsonl`), written by the worker holding the unit's epoch, **copied to a peer resource** in the same cluster, restored by the owner | The write path had to survive the epoch moving between workers, and a bucket keyed by epoch does that by construction; a database on a server that just died does not |
+
+So the verdict *one database, and it belongs to a Node* became **no database at all in the product, and one SQLite file that is allowed to be deleted**. Verdict 2 (*the Node owns its configuration and replicates upward*) inverted once more: **the cluster's controller owns configuration**, and the domain reads the controller's snapshot and the workers' heartbeats, never the rows. Verdicts 3, 4 and 5 stand unchanged — destructive operations still never run from unreachable authority (retention is a row in the cluster's raft, applied by the resource's own policy pass), a worker still never crosses a cluster, and every store is still chosen by shape.
+
+**What the summary table looks like now:**
+
+| Criterion | Answer |
+|---|---|
+| Postgres anywhere? | **No.** Configuration is Variables; the archive index is a rebuildable cache; events are files |
+| Who owns camera 7's configuration? | **The cluster's controller** — one writer, CAS, in the cluster's raft. Not the worker recording it, and not the domain |
+| What does the domain read? | **Two objects per cluster**: the controller's `vms/snapshot` and each worker's `vms/<w>/heartbeat`. It asks by `ref`, never by a cluster-local id |
+| What survives a domain outage? | Recording, playback, edits at the cluster's console, **and failover** — a lapsed slot is inherited and the controller redistributes without anyone above |
+| What stops? | Creating a camera across clusters, choosing a cluster, issuing certificates and tokens |
+| Where does the epoch come from? | **A Nomad Variable per camera**, moved by CAS when a worker takes the camera. Unchanged since the fourth revision, and now the only fencing token there is |
+| What happens when a server dies? | Nomad brings its workers back elsewhere, or other workers inherit their slots and the controller redistributes; the resource's events are restored from its peer's copy; **nothing rewrites a row's owner because the owner was never a server** |
+| HA? | Still not a question the design asks. Raft for the rows, a peer copy for the events, and the archive itself stays on the disks that recorded it |
+
+**Product recommendation, seventh form: the cluster's controller is the authority for configuration and there is no database; a server is disks, stores and whatever runs on it; the domain is a reader of two objects, a placement row per ref, and a signer.** Seven revisions of this record moved in one direction throughout — every one of them took state out of a database — and the seventh took out the last one.
+
 ---
 
 ## Sources
@@ -302,4 +336,4 @@ Most events are never read. A filtered subset — alarms an operator must acknow
 - [`module-design.md`](module-design.md) — the epoch issuer, the fencing argument it comes from, and М12 Lesson 4's mTLS on the Node↔directory streams
 - [Nomad Variables](https://developer.hashicorp.com/nomad/api-docs/variables) — check-and-set against `ModifyIndex`, which is what makes the epoch monotonic without a second database
 
-*Written 5 September 2026.*
+*Written 5 September 2026. Seventh revision added 12 September 2026.*

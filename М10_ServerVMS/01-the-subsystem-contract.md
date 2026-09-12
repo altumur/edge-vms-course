@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-М9 ended with a Node that owns its truth: a Postgres holding what the box should be, an AppHost making it so. It works, it is tested, and it has a shape that does not survive the question an engineer asks first when a scheduler arrives — *why is there a controller process at all, when the scheduler supervises processes and the thing that holds the pipeline supervises itself?* The answer, worked out in [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md), split the AppHost in two: half of it was the worker's own and moves into DriverPack; half of it was never about video and belongs to a platform.
+М9 ended with a recorder that owns its truth: a Postgres holding what the box should be, an AppHost making it so. It works, it is tested, and it has a shape that does not survive the question an engineer asks first when a scheduler arrives — *why is there a controller process at all, when the scheduler supervises processes and the thing that holds the pipeline supervises itself?* The answer, worked out in [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md), split the AppHost in two: half of it was the worker's own and moves into DriverPack; half of it was never about video and belongs to a platform.
 
 This lesson builds that platform, on one box, and writes down the contract. The point is not the code — a file-backed key-value store with an index is an afternoon — but the property the code makes testable: **the platform knows nothing about a camera**, and a second subsystem can be dropped onto it without changing a line. Lesson 5 does exactly that.
 
@@ -14,7 +14,7 @@ This lesson builds that platform, on one box, and writes down the contract. The 
 
 ## Prerequisites
 
-- **М9 Lessons 5–9** — the Node: its schema, its loop, its numbers. This module keeps the loop and retires the database.
+- **М9 Lessons 5–9** — the recorder: its schema, its loop, its numbers. This module keeps the loop and retires the database.
 - **М9 Lesson 4** — the spool and *delete on acknowledgement, never on send*. The archive inherits it in Lesson 3.
 - **М11 Lesson 2** (read ahead if you like) — Nomad Variables and their `cas` parameter. This lesson builds the same semantics as files so that М11 can swap the implementation and keep the tests.
 
@@ -62,7 +62,7 @@ The store also survives a restart, which is the point of it being files: `FileVa
 
 ## Step 3 — The epoch and the lease, generic
 
-М11 Lesson 4 built the fencing token for a Node. Here it is a platform piece, because *any writer that can have two instances* needs it, and the platform does not know which writers those are:
+М11 Lesson 4 built the fencing token for a recorder. Here it is a platform piece, because *any writer that can have two instances* needs it, and the platform does not know which writers those are:
 
 ```python
 next_epoch(vars, "vms/epoch/7")     # by CAS: two callers racing get two DIFFERENT numbers, in order

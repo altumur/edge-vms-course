@@ -1,13 +1,13 @@
 """Lesson 5 — property tests. No cluster, no cameras, milliseconds."""
 import random
-from placement import Camera, Node, Placer, check_invariants
+from placement import Camera, recorder, Placer, check_invariants
 
 VLANS = ["vlan:a", "vlan:b", "vlan:c"]
 
 
 def world(seed, n_nodes=4, n_cams=200):
     r = random.Random(seed)
-    nodes = {f"node-{i}": Node(f"node-{i}", capacity=r.choice([48, 64, 80]),
+    nodes = {f"node-{i}": recorder(f"node-{i}", capacity=r.choice([48, 64, 80]),
                                labels=frozenset(r.sample(VLANS, r.randint(1, 3)))) for i in range(1, n_nodes + 1)}
     cams = {}
     for c in range(1, n_cams + 1):
@@ -35,7 +35,7 @@ def test_adding_a_node_moves_nothing():
         for c in cams.values():
             p.place(c, cams)
         before = dict(p.placed)
-        p.add_node(Node("node-9", capacity=80, labels=frozenset(VLANS)))
+        p.add_node(recorder("node-9", capacity=80, labels=frozenset(VLANS)))
         assert p.placed == before                           # the rule
         # and the NEXT camera may use it
         p.place(Camera(9999, 1.0), cams | {9999: Camera(9999, 1.0)})
@@ -67,9 +67,9 @@ def test_budgeted_rebalance_is_bounded_and_explainable():
     p = Placer(nodes)
     for c in cams.values():
         p.place(c, cams)
-    # skew it: retire a Node so its cameras pile onto the others, then add a fresh empty one
+    # skew it: retire a recorder so its cameras pile onto the others, then add a fresh empty one
     p.remove_node("node-2", cams)
-    p.add_node(Node("node-2", capacity=64, labels=frozenset(VLANS)))
+    p.add_node(recorder("node-2", capacity=64, labels=frozenset(VLANS)))
     moves = p.rebalance(cams, budget=5)
     assert len(moves) <= 5
     check_invariants(p, cams)
@@ -81,7 +81,7 @@ def test_budgeted_rebalance_is_bounded_and_explainable():
 
 
 def test_capacity_is_the_system_not_a_node():
-    nodes = {"node-1": Node("node-1", 2.0), "node-2": Node("node-2", 2.0)}
+    nodes = {"node-1": recorder("node-1", 2.0), "node-2": recorder("node-2", 2.0)}
     cams = {i: Camera(i, 1.0) for i in range(1, 6)}
     p = Placer(nodes)
     results = [p.place(c, cams) for c in cams.values()]

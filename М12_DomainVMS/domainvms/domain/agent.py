@@ -1,12 +1,14 @@
 """The domain agent: one small Nomad job per cluster whose only right is to
-write domain/* in that cluster's Variables — the way a Node's only right is
-to write nodes/<node>/*.
+write domain/* in that cluster's Variables — the way a worker's only right
+is to write its epochs and its slot, and the controller's is vms/*.
 
-It carries the two things every cluster needs from the domain and nothing
-else: the signer's public key set and the revocation list. When the domain
-is unreachable it stops updating; Nodes keep verifying with the keys they
-have, issued tokens run to expiry, nobody new logs in — the bounded outage
-the services table promises, with the mechanism named.
+It carries the three things a cluster needs from the domain and nothing
+else: the signer's public key set, the revocation list, and the grants for
+THIS cluster. When the domain is unreachable it stops updating; the
+cluster's console and gateway keep verifying with the keys they have,
+issued tokens run to expiry, grants run to theirs, nobody new logs in —
+the bounded outage the services table promises, with the mechanism named.
+Workers are not involved: nothing about a user reaches a worker, ever.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from cluster.variables import Variables
 from .federation import Unreachable
 from .tokens import KeySet, RevocationList
 
-KEYS_PATH, REVOKED_PATH = "domain/keys", "domain/revoked"
+KEYS_PATH, REVOKED_PATH, GRANTS_PATH = "domain/keys", "domain/revoked", "domain/grants"
 
 
 class DomainPublisher:
@@ -35,6 +37,14 @@ class DomainPublisher:
         _, idx = self.vars.get(REVOKED_PATH)
         self.vars.put(REVOKED_PATH, rl.to_items(), cas=idx)
 
+    def publish_grants(self, cluster: str, grants: list) -> None:
+        """The grants for one cluster, under domain/grants/<cluster> in the
+        domain cluster's Variables; the cluster's agent copies them home."""
+        from .grants import grants_to_items
+        path = f"{GRANTS_PATH}/{cluster}"
+        _, idx = self.vars.get(path)
+        self.vars.put(path, grants_to_items(grants), cas=idx)
+
 
 class DomainAgent:
     def __init__(self, cluster: str, domain_vars: Variables, cluster_vars: Variables, now=time.time):
@@ -47,9 +57,10 @@ class DomainAgent:
         try:
             keys, _ = self.domain_vars.get(KEYS_PATH)
             revoked, _ = self.domain_vars.get(REVOKED_PATH)
+            grants, _ = self.domain_vars.get(f"{GRANTS_PATH}/{self.cluster}")
         except Unreachable:
             return False
-        for path, items in ((KEYS_PATH, keys), (REVOKED_PATH, revoked)):
+        for path, items in ((KEYS_PATH, keys), (REVOKED_PATH, revoked), (GRANTS_PATH, grants)):
             if items is None:
                 continue
             have, idx = self.cluster_vars.get(path)
@@ -60,9 +71,10 @@ class DomainAgent:
         return True
 
 
-class NodeTrust:
-    """What a Node reads from ITS OWN cluster's Variables — never from the
-    domain — to verify tokens offline."""
+class ClusterTrust:
+    """What a cluster's console and gateway read from THEIR OWN cluster's
+    Variables — never from the domain — to verify tokens and decide grants
+    offline."""
 
     def __init__(self, cluster_vars: Variables):
         self.vars = cluster_vars
@@ -74,6 +86,11 @@ class NodeTrust:
     def revoked(self) -> set[str]:
         items, _ = self.vars.get(REVOKED_PATH)
         return RevocationList.from_items(items).jtis
+
+    def grants(self) -> list:
+        from .grants import grants_from_items
+        items, _ = self.vars.get(GRANTS_PATH)
+        return grants_from_items(items)
 
 
 def main() -> None:

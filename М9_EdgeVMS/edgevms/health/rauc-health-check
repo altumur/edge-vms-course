@@ -11,8 +11,8 @@
 #   2. the VMS answers                   (catches startup failures)
 #   3. FOOTAGE IS ACTUALLY BEING WRITTEN (catches the update that boots perfectly and records nothing)
 #
-# Row 3 has two sources. With М10's Node installed, it is the Node's own
-# exported signal, nodevms_camera_silent_seconds_max — the same number М13
+# Row 3 has two sources. With М10's recorder installed, it is the recorder's own
+# exported signal, recorder_camera_silent_seconds_max — the same number М13
 # alarms on, read locally. Without it (an М9-only bench) it is the Lesson 18
 # stand-in: a segment appeared in the spool recently.
 set -e
@@ -20,7 +20,7 @@ set -e
 NODE_METRICS="${NODE_METRICS:-http://127.0.0.1:8080/metrics}"
 AGENT_HEALTH="${AGENT_HEALTH:-http://127.0.0.1:8000/health}"
 SPOOL="${SPOOL:-/data/spool}"
-# Longer than one segment, or a healthy Node fails the check between segment
+# Longer than one segment, or a healthy recorder fails the check between segment
 # closes. Lesson 22 makes SEGMENT_SECONDS a product decision; this follows it.
 SEGMENT_SECONDS="${SEGMENT_SECONDS:-600}"
 WINDOW="${HEALTH_WINDOW:-$((SEGMENT_SECONDS * 2 + 60))}"
@@ -33,17 +33,17 @@ if systemctl --failed --no-legend 2>/dev/null | grep -q .; then
     fail "failed units present"
 fi
 
-# 2 + 3. Prefer the Node.
+# 2 + 3. Prefer the recorder.
 if METRICS="$(curl -fsS --max-time 5 "$NODE_METRICS" 2>/dev/null)"; then
     val() { printf '%s\n' "$METRICS" | awk -v k="$1" '$1==k {print $2; found=1} END {if (!found) print "MISSING"}'; }
-    reporting="$(val nodevms_node_reporting)"
-    cameras="$(val nodevms_cameras)"
-    silent="$(val nodevms_camera_silent_seconds_max)"
-    never="$(val nodevms_cameras_never_recorded)"
+    reporting="$(val recorder_node_reporting)"
+    cameras="$(val recorder_cameras)"
+    silent="$(val recorder_camera_silent_seconds_max)"
+    never="$(val recorder_cameras_never_recorded)"
     for v in "$reporting" "$cameras" "$silent" "$never"; do
-        [ "$v" = "MISSING" ] && fail "Node metrics answered but are missing a required series"
+        [ "$v" = "MISSING" ] && fail "recorder metrics answered but are missing a required series"
     done
-    [ "$reporting" = "1" ] || fail "Node console answers but the AppHost is not reporting"
+    [ "$reporting" = "1" ] || fail "recorder console answers but the AppHost is not reporting"
     if [ "$cameras" -eq 0 ]; then
         # A product decision, stated rather than hidden: a box with no cameras
         # configured cannot prove footage, so the OS update is judged on rows
@@ -53,12 +53,12 @@ if METRICS="$(curl -fsS --max-time 5 "$NODE_METRICS" 2>/dev/null)"; then
     fi
     [ "$never" -lt "$cameras" ] || fail "no camera has written a segment ($cameras configured)"
     [ "${silent%.*}" -le "$WINDOW" ] || fail "newest segment is ${silent}s old (window ${WINDOW}s)"
-    echo "health: OK (Node: $cameras cameras, newest segment ${silent}s ago)"
+    echo "health: OK (recorder: $cameras cameras, newest segment ${silent}s ago)"
     exit 0
 fi
 
 # М9-only: the М8 agent and the spool.
-curl -fsS --max-time 5 "$AGENT_HEALTH" >/dev/null 2>&1 || fail "no Node at $NODE_METRICS and the agent did not answer at $AGENT_HEALTH"
+curl -fsS --max-time 5 "$AGENT_HEALTH" >/dev/null 2>&1 || fail "no recorder at $NODE_METRICS and the agent did not answer at $AGENT_HEALTH"
 # Stand-in, as Lesson 18 marks it: a segment appeared in the spool recently.
 # Weak on purpose — a fast uploader empties the spool — and replaced above.
 find "$SPOOL" -name '*.mp4' -newermt "-${WINDOW} seconds" 2>/dev/null | grep -q . \

@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-The first ClusterVMS design spent a whole lesson on making a Node's state outlive its server: publish the configuration as an object, point a Variable at it, restore in six steps, measure the RPO. Under *workers, resources, one controller* that lesson dissolves, and it is worth spending an hour on *why*, because the reason is the module's central claim: **nothing has to travel.** The controller wrote the camera rows and the assignment into raft *before* the failure; raft is on every server; the replacement worker reads the same rows. Configuration did not survive the server — it was never on the server.
+The first ClusterVMS design spent a whole lesson on making a recorder's state outlive its server: publish the configuration as an object, point a Variable at it, restore in six steps, measure the RPO. Under *workers, resources, one controller* that lesson dissolves, and it is worth spending an hour on *why*, because the reason is the module's central claim: **nothing has to travel.** The controller wrote the camera rows and the assignment into raft *before* the failure; raft is on every server; the replacement worker reads the same rows. Configuration did not survive the server — it was never on the server.
 
 What *was* on the server is footage, and this lesson is honest about it. Footage stays on the resource, the resource stays with its disks, and while the server is down that footage is **unavailable** — a state with a server's name in it — and not lost. The manifest beside it returns when the disks do, and nothing is rebuilt.
 
@@ -35,9 +35,9 @@ What *was* on the server is footage, and this lesson is honest about it. Footage
 
 Worker `w-1` runs on Server A. Server A dies. Nomad places `w-1`'s replacement on Server B. What was on A?
 
-| On Server A | Under the Node model | Under 2c | The test |
+| On Server A | Under the recorder model | Under 2c | The test |
 |---|---|---|---|
-| **Configuration** — cameras, assignment, placement | in the Node's Postgres; published upward; restored with an RPO | **in raft already**; `w-1` reads it on B. Nothing travels | `test_an_edit_during_the_failover_is_simply_there` |
+| **Configuration** — cameras, assignment, placement | in the recorder's Postgres; published upward; restored with an RPO | **in raft already**; `w-1` reads it on B. Nothing travels | `test_an_edit_during_the_failover_is_simply_there` |
 | **Footage** | on the dead disk | **on the dead resource**: unavailable until A returns; `w-1` records into B's resource from its first segment | `test_a_timeline_spans_two_resources…` |
 | **The index** | in the dead Postgres; rebuilt by scanning | **the manifest, beside the footage**: returns with the disks; the timeline merges two | same |
 | **The open segment** | lost, up to one segment length | lost, up to one segment length — the number is the segment length | М10 Lesson 3 |
@@ -56,7 +56,7 @@ b.reconcile_once() -> [('start', 1)];  b.rows[0]["name"] == "edited during the f
 objects.get("vms/config") is None                                # nothing was published for this to work
 ```
 
-Read the last line twice. The first design had `publish.py`, `rehydrate.py`, a six-step restore and a measured RPO of a few seconds. All of it existed because the Node's truth was on the Node. Move the truth into the cluster's raft with one writer, and the replacement reads it the way the original did — the same call, the same rows, one index further on. There is no *saved · not yet replicated* inside a cluster: the write is in raft or it was refused.
+Read the last line twice. The first design had `publish.py`, `rehydrate.py`, a six-step restore and a measured RPO of a few seconds. All of it existed because the recorder's truth was on the recorder. Move the truth into the cluster's raft with one writer, and the replacement reads it the way the original did — the same call, the same rows, one index further on. There is no *saved · not yet replicated* inside a cluster: the write is in raft or it was refused.
 
 ## Step 3 — Why the resource is not a volume that follows the worker
 
@@ -104,7 +104,7 @@ And when A heartbeats again, three segments, nobody rebuilt anything: the manife
 
 ## Step 5a — Events: the database that is a cache
 
-There is no database per Node any more, and the question *where do events go* has an answer that follows from everything above rather than adding to it. An event is an observation — written by the worker that holds a unit's epoch, into that unit's bucket on its server's resource, recording or not (М10 Lesson 3, Step 5a). The VMS's buckets sit beside its footage under `vms/<cam>/`; a detector's sit under `det/<job>/` on the GPU server it runs on; a counter's under `counter/<unit>/`. On a cluster that means events live on **resources**, promoted, retained and fenced there, served by the resource job (`GET <resource>/buckets/<sub>/<unit>`, `GET <resource>/events/<path>`), unavailable when the server is and never lost.
+There is no database per recorder any more, and the question *where do events go* has an answer that follows from everything above rather than adding to it. An event is an observation — written by the worker that holds a unit's epoch, into that unit's bucket on its server's resource, recording or not (М10 Lesson 3, Step 5a). The VMS's buckets sit beside its footage under `vms/<cam>/`; a detector's sit under `det/<job>/` on the GPU server it runs on; a counter's under `counter/<unit>/`. On a cluster that means events live on **resources**, promoted, retained and fenced there, served by the resource job (`GET <resource>/buckets/<sub>/<unit>`, `GET <resource>/events/<path>`), unavailable when the server is and never lost.
 
 What a cluster adds is search — across cameras, and across subsystems — and `vmsplatform/eventindex.py` is that: one job, `count = 1`, a SQLite table it fills by reading every resource's buckets for every subsystem it finds in the heartbeat's `units`, and that it can throw away. Its two properties are the controller's, in the form that matters for a cache:
 
@@ -136,7 +136,7 @@ knob on:   pol[srv-a].once() -> mirrored: 2, peers: [srv-b]   closed buckets onl
 
 ## Step 6 — Where the acknowledgement problem went
 
-The first design had to explain what the operator is told when they save a camera, because the Node acknowledged on local commit and published later. Under 2c the controller acknowledges **after the CAS commit into raft**, which is replicated before it returns. The problem does not exist inside the cluster.
+The first design had to explain what the operator is told when they save a camera, because the recorder acknowledged on local commit and published later. Under 2c the controller acknowledges **after the CAS commit into raft**, which is replicated before it returns. The problem does not exist inside the cluster.
 
 It survives one level up. М12's read model is built from the snapshot the controller publishes as an object (`objects/vms/snapshot`, a Variable here — Lesson 5) and from the workers' heartbeats, and *that* copy is stale by the interval — which is why every row the domain's console shows carries an age. The RPO moved from the cluster to the domain and shrank to a display age.
 

@@ -13,7 +13,7 @@ import sys
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import domain  # noqa: E402,F401  — puts М11 and М9 on sys.path
+import domain  # noqa: E402,F401  — puts М11 and М10 on sys.path
 
 try:
     import pydantic  # noqa: F401

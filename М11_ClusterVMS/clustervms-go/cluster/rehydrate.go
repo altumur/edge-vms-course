@@ -9,7 +9,7 @@ package cluster
 //	5. request a new epoch                            (NextEpoch)
 //	6. begin recording into epoch-N+1                 (the AppHost, with the epoch in the path)
 //
-// A Node the directory has never seen comes up `unconfigured` and invents
+// A recorder the directory has never seen comes up `unconfigured` and invents
 // nothing. A pointer to a missing object is refused, loudly: that is the
 // publication order broken, and a human must look.
 
@@ -39,7 +39,7 @@ func Rehydrate(id Identity, store Store, objects ObjectStore) (RestoreResult, er
 		return RestoreResult{"already-configured", rev, 0}, err
 	}
 	if !id.SeenBefore() { // step 2
-		log.Printf("%s: the directory has never seen this Node; coming up unconfigured", id.Node)
+		log.Printf("%s: the directory has never seen this recorder; coming up unconfigured", id.recorder)
 		return RestoreResult{State: "unconfigured"}, nil
 	}
 	blob, err := objects.Get(id.ConfigObject) // step 3
@@ -65,6 +65,6 @@ func Rehydrate(id Identity, store Store, objects ObjectStore) (RestoreResult, er
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	log.Printf("%s: restored revision %d, %d cameras, from %s", id.Node, rev, len(cams), id.ConfigObject)
+	log.Printf("%s: restored revision %d, %d cameras, from %s", id.recorder, rev, len(cams), id.ConfigObject)
 	return RestoreResult{"restored", rev, len(cams)}, nil
 }

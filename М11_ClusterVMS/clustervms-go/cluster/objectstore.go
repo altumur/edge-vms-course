@@ -94,7 +94,7 @@ func (f *FsObjectStore) Get(key string) ([]byte, error) {
 
 // OpenStore: file:///path · http(s)://host/bucket (anonymous) ·
 // s3+http(s)://host/bucket?region=r (SigV4, credentials from
-// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a Node, from its Variable).
+// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a recorder, from its Variable).
 func OpenStore(raw string) (ObjectStore, error) {
 	switch {
 	case strings.HasPrefix(raw, "s3+http://"), strings.HasPrefix(raw, "s3+https://"):

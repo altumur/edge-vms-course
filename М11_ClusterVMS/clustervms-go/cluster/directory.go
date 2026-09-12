@@ -2,7 +2,7 @@ package cluster
 
 // Lesson 5 — the cluster directory you already built.
 //
-// Every Node's Variable lists its camera ids. Scan nodes/ and you have
+// Every recorder's Variable lists its camera ids. Scan nodes/ and you have
 // answered "where is camera 7" — tens of entries, one raft, strongly
 // consistent inside the cluster. Cached briefly by the console; invalidated
 // by time, because there is nothing else to invalidate it with and a few
@@ -63,7 +63,7 @@ func (d *Directory) Scan(force bool) (map[string]Holding, error) {
 	return out, nil
 }
 
-// Where answers "which Node has camera N" — "" for none, an error for two,
+// Where answers "which recorder has camera N" — "" for none, an error for two,
 // because two is one-writer-per-key not being enforced, not a tie to break.
 func (d *Directory) Where(camera int64) (string, error) {
 	scan, err := d.Scan(false)

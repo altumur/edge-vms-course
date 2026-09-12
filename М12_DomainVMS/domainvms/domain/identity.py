@@ -1,12 +1,13 @@
-"""Lesson 4 — where users live, and creating a user touches no Node.
+"""Lesson 4 — where users live, and creating a user touches no cluster.
 
     identity/users/<id>   in the domain cluster's Variables, the signer the only writer
                           local: a scrypt hash; federated: an IdP subject and no secret
     identity/pointer      -> identity/rev-N object: the whole set, published object-first
     users/<id>/prefs      per-user UI configuration as an object; last write wins, with a revision
 
-Nothing about a user ever reaches a Node. Authentication ends in a token
-naming the subject; what the subject may do is each Node's own grants.
+Nothing about a user ever reaches a worker. Authentication ends in a token
+naming the subject; what the subject may do is each cluster's grants,
+carried by the domain agent and decided by the cluster's console and gateway.
 The RPO for users is the publication interval, and it is stated.
 
 Break-glass is the honest residue: one local account, audited on every
@@ -123,7 +124,7 @@ class IdentityStore:
 
     def login_federated(self, idp_assertion: dict) -> str:
         """The IdP authenticated Alice; the signer issues a DOMAIN token naming
-        her, and the Nodes never learn the IdP exists."""
+        her, and the clusters never learn the IdP exists."""
         subj = idp_assertion["sub"]
         for u in self.users():
             if u.kind == "idp" and u.idp_subject == subj:

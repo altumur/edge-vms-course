@@ -10,14 +10,14 @@ echo "== 1. two regions, one gossip pool"
 nomad server members | grep -E "$DOMAIN|$OTHER" || { echo "regions not federated"; exit 1; }
 
 echo "== 2. a Variable in $OTHER read from $DOMAIN through forwarding (the federated read)"
-nomad var list -region "$OTHER" nodes/ | head -5
+nomad var list -region "$OTHER" vms/ | head -5
 
 echo "== 3. the agent in $OTHER may write domain/* and nothing else"
 TOKEN="$(nomad acl token create -region "$OTHER" -type client -policy domain-agent -json | python3 -c 'import sys,json; print(json.load(sys.stdin)["SecretID"])')"
 NOMAD_TOKEN="$TOKEN" nomad var put -region "$OTHER" -force domain/keys current=probe >/dev/null && echo "domain/keys: write ok"
-if NOMAD_TOKEN="$TOKEN" nomad var put -region "$OTHER" -force nodes/node-999 node=x 2>/dev/null; then
-  echo "FAIL: the agent could write nodes/node-999"; exit 1
-else echo "nodes/node-999: 403 (correct)"; fi
+if NOMAD_TOKEN="$TOKEN" nomad var put -region "$OTHER" -force vms/cameras/999 name=x 2>/dev/null; then
+  echo "FAIL: the agent could write vms/cameras/999"; exit 1
+else echo "vms/cameras/999: 403 (correct)"; fi
 
 echo "== 4. the domain cluster is a stated decision, visible in the directory"
 nomad var get -region "$DOMAIN" domain/signer >/dev/null && echo "signer keys in $DOMAIN's raft"

@@ -22,7 +22,7 @@ func BenchmarkNextEpochCAS(b *testing.B) {
 	}
 }
 
-func BenchmarkDirectoryScan1000Nodes(b *testing.B) {
+func BenchmarkDirectoryScan1000recorders(b *testing.B) {
 	v := NewFakeVariables()
 	for n := 1; n <= 1000; n++ {
 		cams := ""

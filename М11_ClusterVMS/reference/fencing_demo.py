@@ -4,7 +4,7 @@
     python3 fencing_demo.py [archive_dir]
     python3 fencing_demo.py --no-fencing     # the same run with one shared path: watch B's files change
 
-  1. start Node 3 (instance A) writing segments into epoch-000005
+  1. start recorder 3 (instance A) writing segments into epoch-000005
   2. kill -STOP it            <- "partitioned, paused, or dead: nobody can tell"
   3. issue epoch 6 by CAS; start instance B writing into epoch-000006
   4. kill -CONT A             <- the zombie wakes up and keeps writing

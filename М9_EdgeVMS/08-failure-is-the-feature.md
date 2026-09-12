@@ -1,7 +1,7 @@
 # Lesson 8 — Failure Is the Feature
 
 **Module:** EdgeVMS — the box owns its truth (Module 9)
-**You will build:** a test suite that kills, fills, stalls and unplugs — and a Node that converges after each.
+**You will build:** a test suite that kills, fills, stalls and unplugs — and a recorder that converges after each.
 **Time:** ~150 minutes.
 
 ## Why this lesson exists
@@ -145,7 +145,7 @@ Here it is **the archive**, and the answer changes: retention decides, and the r
 | **Degrade retention** | Shorten the window, oldest first, and record on | Recent footage matters most — usually true for security |
 | **Degrade by camera priority** | Sacrifice the car park before the safe room | The customer has actually ranked their cameras |
 
-Pick one, put it in the specification, and **make the Node say which it did** — as an event, in the table from Lesson 5, because a silent drop is indistinguishable from a bug. This is the first thing in the course that a Node needs to tell somebody about and has nowhere to send; М11 gives it one.
+Pick one, put it in the specification, and **make the recorder say which it did** — as an event, in the table from Lesson 5, because a silent drop is indistinguishable from a bug. This is the first thing in the course that a recorder needs to tell somebody about and has nowhere to send; М11 gives it one.
 
 ```python
 def test_disk_full_degrades_by_policy_and_says_so():
@@ -195,9 +195,9 @@ The AppHost was killed. It did not necessarily *stop*. `SIGKILL` reaches the pro
 
 So the restarted instance opens a *new* segment. The truncated one stays as it is: complete up to its last valid frame, indexed as such, and never touched again.
 
-**On one Node this is a convention.** Nothing enforces it; nothing needs to, because there is only one AppHost and systemd starts one at a time.
+**On one recorder this is a convention.** Nothing enforces it; nothing needs to, because there is only one AppHost and systemd starts one at a time.
 
-In М11 there are two instances of the same Node during a failover — the new one on a healthy server, and the old one on a server everybody believes is dead and which is actually just slow. Both believe they own camera 7. A convention is worthless against that, and the mechanism that replaces it is a **fencing token**: the `epoch` you put in the path in Lesson 7, issued by a single authority, checked *at the archive* so the stale writer's files land where nobody reads them.
+In М11 there are two instances of the same recorder during a failover — the new one on a healthy server, and the old one on a server everybody believes is dead and which is actually just slow. Both believe they own camera 7. A convention is worthless against that, and the mechanism that replaces it is a **fencing token**: the `epoch` you put in the path in Lesson 7, issued by a single authority, checked *at the archive* so the stale writer's files land where nobody reads them.
 
 You cannot stop a zombie from writing. You can only make its writes harmless — and that idea starts here, as a one-line rule on a box with no zombies yet.
 
@@ -216,9 +216,9 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 
 **It runs on every commit.** The Lesson 6 tests need no database, no GStreamer and no network, so they run in milliseconds. The rest need a Postgres container and a simulated camera — still no appliance.
 
-**Every test asserts convergence, not absence of error.** The question is never "did it throw?" It is: *after this failure, does the Node end up doing what the database says it should?* That is the only definition of correct this module has, and it is the one that transfers unchanged to М11, where the failure is a whole server rather than a camera.
+**Every test asserts convergence, not absence of error.** The question is never "did it throw?" It is: *after this failure, does the recorder end up doing what the database says it should?* That is the only definition of correct this module has, and it is the one that transfers unchanged to М11, where the failure is a whole server rather than a camera.
 
-**Deliverable:** a test suite that kills, fills, stalls and unplugs, and asserts convergence after each — plus two numbers written down: how much footage a hard kill loses, and what your Node does when the disk is full.
+**Deliverable:** a test suite that kills, fills, stalls and unplugs, and asserts convergence after each — plus two numbers written down: how much footage a hard kill loses, and what your recorder does when the disk is full.
 
 ---
 
@@ -240,7 +240,7 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 - The stall test asserts that the other 49 cameras are **still writing segments**, not merely in state RUNNING. A worker can be green and wedged.
 - `DELETE` freed **zero disk** in 231 ms; `DETACH` + `DROP TABLE` freed 38 MB in 5 ms. Postgres has no `DROP PARTITION` statement.
 - Drop the index **before** unlinking files: a crash then leaves orphaned files (wasteful, recoverable by a scan) rather than index rows pointing at nothing (a lie to the operator).
-- Disk-full is М9's question with a new answer — retention decides, but a full disk still needs a stated degradation policy, and the Node must **log an event saying which it did**.
+- Disk-full is М9's question with a new answer — retention decides, but a full disk still needs a stated degradation policy, and the recorder must **log an event saying which it did**.
 - A hard kill loses **the open segment and nothing else**, so segment length is a product decision. Measure the number; customers ask for it.
 - **On restart, never resume the previous segment.** A convention here, because there is one AppHost; a fencing token in М11, because there will briefly be two.
 
@@ -254,6 +254,6 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 
 ## Where this is going
 
-The Node now converges, and keeps converging through the four failures that actually happen. Nobody can see any of it — the only interface is `psql`.
+The recorder now converges, and keeps converging through the four failures that actually happen. Nobody can see any of it — the only interface is `psql`.
 
 **Lesson 9 builds the console**, with a login against Lesson 5's `operators` table, and a status vocabulary that keeps *positions* apart from *reasons*. It also closes the module by asking the uncomfortable question: now that the design is proven, which parts of it should not stay in Python — and the answer is more interesting than "the slow parts", because the reconcile loop you wrote by hand turns out to be the part that survives.

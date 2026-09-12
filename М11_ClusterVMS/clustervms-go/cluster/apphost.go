@@ -1,6 +1,6 @@
 package cluster
 
-// The Node under a scheduler: М9's AppHost plus what М11 adds.
+// The recorder under a scheduler: М9's AppHost plus what М11 adds.
 //
 //	Prologue      identity → migrate → rehydrate → epoch by CAS → lease
 //	publish       every second: publish on change, with a floor           (Lesson 3)
@@ -8,7 +8,7 @@ package cluster
 //	heartbeat     a timestamp in an OBJECT, for node_failover_seconds      (Lesson 4)
 //	reindex       files back into rows: the fenced instance's footage      (Lesson 4)
 //
-// What М9 does — reconcile, report — is the same loop (nodevms/reconciler,
+// What М9 does — reconcile, report — is the same loop (recorder/reconciler,
 // imported) driven by goroutines and tickers instead of asyncio tasks.
 // Only the actuator's gate and the report grow: a fenced instance starts
 // nothing, and `replicated` joins the conditions.
@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"nodevms/reconciler"
+	"recorder/reconciler"
 )
 
 type desired struct {
@@ -99,7 +99,7 @@ func NewClusterAppHost(settings Settings, store Store, v Variables, objects Obje
 		wake: make(chan struct{}, 1)}
 	h.Reconciler = reconciler.New(h.Desired, h.actuate)
 	h.Reconciler.MaxBackoff, h.Reconciler.StallFailures = settings.MaxBackoff, settings.StallFailures
-	h.Publisher = NewPublisher(id.Node, store, v, objects, settings.PublishFloor, clock)
+	h.Publisher = NewPublisher(id.recorder, store, v, objects, settings.PublishFloor, clock)
 	h.Directory = NewDirectory(v, 5, clock)
 	h.startedAt = clock()
 	act.SetSettings(settings)
@@ -109,7 +109,7 @@ func NewClusterAppHost(settings Settings, store Store, v Variables, objects Obje
 // -- prologue: the six steps ------------------------------------------------
 
 func (h *ClusterAppHost) Prologue() (RestoreResult, error) {
-	node := h.Identity.Node
+	node := h.Identity.recorder
 	r, err := Rehydrate(h.Identity, h.Store, h.Objects) // steps 2–4
 	if err != nil {
 		return r, err
@@ -182,14 +182,14 @@ func (h *ClusterAppHost) ReconcileOnce() ([]reconciler.Action, error) {
 		}
 		h.Failover = map[string]float64{"last": secs, "worst": worst}
 		h.resumeFromTS = 0
-		path := "nodes/" + h.Identity.Node + "/failover"
+		path := "nodes/" + h.Identity.recorder + "/failover"
 		if _, idx, err := h.Vars.Get(path); err == nil {
 			_, err = h.Vars.Put(path, Items{"last": fmtF(secs), "worst": fmtF(worst)}, idx)
 			if err != nil {
 				log.Printf("could not record failover time: %v", err)
 			}
 		}
-		log.Printf("%s: recording resumed %.1fs after the old instance's last heartbeat (worst %.1fs)", h.Identity.Node, secs, worst)
+		log.Printf("%s: recording resumed %.1fs after the old instance's last heartbeat (worst %.1fs)", h.Identity.recorder, secs, worst)
 	}
 	return actions, nil
 }
@@ -262,7 +262,7 @@ func (h *ClusterAppHost) Fence(why string) {
 	if !h.RecordingAllowed {
 		return
 	}
-	log.Printf("%s: FENCED (%s). Stopping every pipeline; this instance's epoch %d is stale.", h.Identity.Node, why, h.Settings.Epoch)
+	log.Printf("%s: FENCED (%s). Stopping every pipeline; this instance's epoch %d is stale.", h.Identity.recorder, why, h.Settings.Epoch)
 	h.RecordingAllowed = false
 	h.Actuator.StopAll()
 	h.Reconciler.Clear()
@@ -279,7 +279,7 @@ func (h *ClusterAppHost) Wake() {
 // -- the heartbeat is an object ------------------------------------------------
 //
 // Small and FREQUENT and never queried — the three-stores rule (Lesson 2)
-// says that is not raft. A thousand Nodes writing a raft entry every ten
+// says that is not raft. A thousand recorders writing a raft entry every ten
 // seconds is a hundred commits a second replicated to every server; a
 // thousand tiny objects a second is nothing to an object store.
 
@@ -291,8 +291,8 @@ type heartbeat struct {
 	Cameras  []cameraStatus `json:"cameras,omitempty"`
 }
 
-// cameraStatus is the Node's own /status row, carried in the heartbeat so
-// the cluster console builds the camera list without calling any Node
+// cameraStatus is the recorder's own /status row, carried in the heartbeat so
+// the cluster console builds the camera list without calling any recorder
 // (М12, "The camera list"). Server lets a dead server read as one cause.
 type cameraStatus struct {
 	ID               int64  `json:"id"`
@@ -327,7 +327,7 @@ func (h *ClusterAppHost) HeartbeatPayload() heartbeat {
 }
 
 func (h *ClusterAppHost) readHeartbeat() *heartbeat {
-	raw, err := h.Objects.Get(h.Identity.Node + "/heartbeat")
+	raw, err := h.Objects.Get(h.Identity.recorder + "/heartbeat")
 	if err != nil || len(raw) == 0 {
 		return nil
 	}
@@ -343,7 +343,7 @@ func (h *ClusterAppHost) heartbeatOnce() {
 		return
 	}
 	b, _ := json.Marshal(h.HeartbeatPayload())
-	if err := h.Objects.Put(h.Identity.Node+"/heartbeat", b); err != nil {
+	if err := h.Objects.Put(h.Identity.recorder+"/heartbeat", b); err != nil {
 		log.Printf("heartbeat write failed (object store unreachable?): %v", err)
 	}
 }

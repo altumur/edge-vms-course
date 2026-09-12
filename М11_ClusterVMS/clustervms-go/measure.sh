@@ -1,10 +1,10 @@
 #!/bin/sh
 # М11 — the Go port measured against the Python original. Builds the Go
-# Node, runs both idle baselines, both test suites, both micro-benchmarks.
-# Needs: go, python3, NODEVMS_PATH (../nodevms) and CLUSTERVMS_PATH (../clustervms).
+# recorder, runs both idle baselines, both test suites, both micro-benchmarks.
+# Needs: go, python3, RECORDER_PATH (../recorder) and CLUSTERVMS_PATH (../clustervms).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export NODEVMS_PATH="${NODEVMS_PATH:-$HERE/../../М9_EdgeVMS/nodevms}"
+export RECORDER_PATH="${RECORDER_PATH:-$HERE/../../М9_EdgeVMS/recorder}"
 export CLUSTERVMS_PATH="${CLUSTERVMS_PATH:-$HERE/../clustervms}"
 cd "$HERE"
 echo "== binaries"

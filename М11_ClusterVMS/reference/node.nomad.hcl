@@ -1,5 +1,5 @@
-# reference/node.nomad.hcl — Lesson 2: М9's Node as a Nomad job.
-# One job per Node. The job NAME is the Node's identity; the server it lands
+# reference/node.nomad.hcl — Lesson 2: М9's recorder as a Nomad job.
+# One job per recorder. The job NAME is the recorder's identity; the server it lands
 # on is Nomad's business. Requires Nomad >= 1.8.0 (the disconnect block) and
 # the nomad-driver-podman plugin on every client.
 job "node-3" {
@@ -51,15 +51,15 @@ job "node-3" {
       config {
         image        = "docker.io/library/postgres:16"
         network_mode = "host"
-        # Per-Node, per-server local disk. Empty on a fresh server: that is
+        # Per-recorder, per-server local disk. Empty on a fresh server: that is
         # the point — Lesson 3 rehydrates it. NEVER a shared volume here.
         volumes = ["/data/nodes/node-3/pg:/var/lib/postgresql/data:z"]
       }
       template {
         # The database password lives in a Variable, never in the jobspec.
         data        = <<-EOT
-          POSTGRES_USER=nodevms
-          POSTGRES_DB=nodevms
+          POSTGRES_USER=recorder
+          POSTGRES_DB=recorder
           POSTGRES_PASSWORD={{ with nomadVar "nodes/node-3/pg" }}{{ .password }}{{ end }}
         EOT
         destination = "secrets/pg.env"
@@ -71,7 +71,7 @@ job "node-3" {
     task "apphost" {
       driver = "podman"
       config {
-        image        = "localhost/nodevms-apphost:latest"
+        image        = "localhost/recorder-apphost:latest"
         network_mode = "host"
         volumes = [
           "/data/nodes/node-3/archive:/data/archive:z",   # recordings stay LOCAL
@@ -86,7 +86,7 @@ job "node-3" {
       }
       template {
         # Step 2 of the rehydration sequence, delivered by the scheduler:
-        # "I am Node 3; my configuration is this object at this revision."
+        # "I am recorder 3; my configuration is this object at this revision."
         data        = <<-EOT
           {{ with nomadVar "nodes/node-3" }}
           NODE_ID={{ .node }}
@@ -94,7 +94,7 @@ job "node-3" {
           CONFIG_REVISION={{ .revision }}
           CAMERA_IDS={{ .cameras }}
           {{ end }}
-          DATABASE_URL=postgresql://nodevms:{{ with nomadVar "nodes/node-3/pg" }}{{ .password }}{{ end }}@127.0.0.1:5432/nodevms
+          DATABASE_URL=postgresql://recorder:{{ with nomadVar "nodes/node-3/pg" }}{{ .password }}{{ end }}@127.0.0.1:5432/recorder
           OBJECT_STORE_URL=http://minio.service.consul:9000/cluster-restore   # or any S3-compatible endpoint on this cluster
           ARCHIVE_DIR=/data/archive
           COLUMN_KEY_FILE=/data/config/column.key

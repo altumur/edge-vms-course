@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fold М9 NodeVMS (5 lessons) into М9 EdgeVMS as Lessons 5–9, and rewrite
+"""Fold М9 Recorder (5 lessons) into М9 EdgeVMS as Lessons 5–9, and rewrite
 every reference course-wide. Run from the course root. Idempotent-ish: refuses
 if М9_EdgeVMS/05-* already exists."""
 import os, re, shutil, sys
@@ -50,18 +50,18 @@ for path in list(text_files()):
     # 2. bare refs inside the moved files
     if in_moved:
         s = shift_bare(s)
-        s = s.replace("**Module:** NodeVMS — one Node learns what it should be (Module 9)",
+        s = s.replace("**Module:** Recorder — one recorder learns what it should be (Module 9)",
                       "**Module:** EdgeVMS — the box owns its truth (Module 9)")
         s = s.replace("(Module 9)", "(Module 9)")
     # 3. lesson file names in links
     for a, b in rename.items():
         s = s.replace(a, b)
     # 4. paths
-    s = s.replace(f"{OLD}/module-design.md", f"{NEW}/node-design.md")
+    s = s.replace(f"{OLD}/module-design.md", f"{NEW}/recorder-design.md")
     if in_moved:
         # its OWN design record first (before М9's collapses onto the same name)
-        s = s.replace("(module-design.md)", "(node-design.md)").replace("(./module-design.md)", "(node-design.md)")
-        s = s.replace("(../module-design.md)", "(../node-design.md)").replace("(../../module-design.md)", "(../../node-design.md)")
+        s = s.replace("(module-design.md)", "(recorder-design.md)").replace("(./module-design.md)", "(recorder-design.md)")
+        s = s.replace("(../module-design.md)", "(../recorder-design.md)").replace("(../../module-design.md)", "(../../recorder-design.md)")
         s = s.replace(f"../{NEW}/", "").replace(f"./{NEW}/", "")     # now the same directory
         s = s.replace(f"../{OLD}/", "").replace(f"./{OLD}/", "")
     elif in_m9:
@@ -77,8 +77,8 @@ print("rewrote", changed, "files")
 # 6. moves
 for a, b in rename.items():
     shutil.move(os.path.join(OLD, a), os.path.join(NEW, b))
-shutil.move(os.path.join(OLD, "module-design.md"), os.path.join(NEW, "node-design.md"))
-for d in ("nodevms", "nodevms-go", "reference"):
+shutil.move(os.path.join(OLD, "module-design.md"), os.path.join(NEW, "recorder-design.md"))
+for d in ("recorder", "recorder-go", "reference"):
     if os.path.isdir(os.path.join(OLD, d)):
         shutil.move(os.path.join(OLD, d), os.path.join(NEW, d))
 old_readme = open(os.path.join(OLD, "README.md"), encoding="utf-8").read()

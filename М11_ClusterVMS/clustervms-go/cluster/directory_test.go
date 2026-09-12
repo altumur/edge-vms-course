@@ -53,7 +53,7 @@ func TestWhereIsCamera7(t *testing.T) {
 	}
 }
 
-func TestTwoNodesClaimingOneCameraIsAnErrorNotAGuess(t *testing.T) {
+func TestTworecordersClaimingOneCameraIsAnErrorNotAGuess(t *testing.T) {
 	v, objs := world(t)
 	publishNode(t, v, objs, "node-1", 7)
 	publishNode(t, v, objs, "node-2", 7)
@@ -107,13 +107,13 @@ func placeAll(t *testing.T, p *Placer, cams map[int64]PCamera) (refused int) {
 func snapshot(p *Placer) string {
 	var parts []string
 	for c, pl := range p.Placed {
-		parts = append(parts, fmt.Sprintf("%d:%s", c, pl.Node))
+		parts = append(parts, fmt.Sprintf("%d:%s", c, pl.recorder))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, " ")
 }
 
-func copyNodes(n map[string]PNode) map[string]PNode {
+func copyrecorders(n map[string]PNode) map[string]PNode {
 	out := map[string]PNode{}
 	for k, v := range n {
 		out[k] = v
@@ -132,7 +132,7 @@ func TestEveryCameraOnOneEligibleNodeOrRefusedAndPlacementIsStored(t *testing.T)
 		if len(p.Placed)+refused != len(cams) {
 			t.Fatal("accounted")
 		}
-		p2, err := NewPlacer(copyNodes(nodes), v) // a fresh process reads the SAME placement back
+		p2, err := NewPlacer(copyrecorders(nodes), v) // a fresh process reads the SAME placement back
 		must(t, err)
 		if snapshot(p2) != snapshot(p) {
 			t.Fatalf("seed %d: stored placement differs", seed)
@@ -159,7 +159,7 @@ func TestTidyRebalanceFailsTheStabilityRule(t *testing.T) {
 	placeAll(t, p, cams)
 	before := map[int64]string{}
 	for c, pl := range p.Placed {
-		before[c] = pl.Node
+		before[c] = pl.recorder
 	}
 	p.Placed = map[int64]Placement{} // "re-place everything optimally, big first"
 	ids := make([]int64, 0, len(cams))
@@ -178,7 +178,7 @@ func TestTidyRebalanceFailsTheStabilityRule(t *testing.T) {
 	must(t, CheckInvariants(p, cams)) // every invariant holds...
 	moved := 0
 	for c, n := range before {
-		if pl, ok := p.Placed[c]; ok && pl.Node != n {
+		if pl, ok := p.Placed[c]; ok && pl.recorder != n {
 			moved++
 		}
 	}
@@ -202,7 +202,7 @@ func TestBudgetedRebalanceHasAReasonAndARevision(t *testing.T) {
 	must(t, CheckInvariants(p, cams))
 	for _, m := range moves {
 		pl := p.Placed[m.Camera]
-		if pl.Node != m.To || !strings.Contains(pl.Reason, "rebalance") || pl.Rev <= 0 {
+		if pl.recorder != m.To || !strings.Contains(pl.Reason, "rebalance") || pl.Rev <= 0 {
 			t.Fatalf("%+v", pl)
 		}
 	}

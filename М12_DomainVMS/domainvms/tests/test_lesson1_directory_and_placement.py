@@ -1,29 +1,48 @@
-"""Lesson 1 — what a cluster cannot know: lookup across clusters,
-incompleteness as a result, placement by reachability, CAS against two
-placers, a dead cluster is not a trigger."""
+"""Lesson 1 — what a cluster cannot know: lookup across clusters from the
+snapshots the clusters publish, incompleteness as a result, placement by
+reachability, CAS against two placers, a dead cluster is not a trigger."""
 import threading
 from domain.federation import DomainDirectory
 from domain.placement import CameraSite, ClusterPlacer, Refused
-from tests.conftest import make_domain, publish_node
+from tests.conftest import Clock, Running, make_domain, snapshot
 
 
-async def test_where_across_three_clusters():
+def test_where_across_three_clusters_from_what_the_clusters_publish():
+    """Each cluster's controller placed its cameras on its workers and published
+    one snapshot; the domain read three objects and nothing else. The domain
+    asks by the ref it gave the cluster — every cluster has its own id 1."""
     fed, links = make_domain({"north": ("vlan:a",), "south": ("vlan:b",), "cloud": ("vlan:c",)}, "north")
-    await publish_node(fed.clusters["north"], "node-1", [1, 2])
-    await publish_node(fed.clusters["south"], "node-4", [7])
-    await publish_node(fed.clusters["cloud"], "node-9", [50])
+    wall = Clock()
+    n = Running(fed.clusters["north"], wall, workers=(("w-0", "srv-1"), ("w-1", "srv-2"))); n.create(1, 2)
+    s = Running(fed.clusters["south"], wall, workers=(("w-0", "srv-9"),)); s.create(7)
+    c = Running(fed.clusters["cloud"], wall); c.create(50)
+    d = DomainDirectory(fed, wall=wall)
+    a = d.where(7)
+    assert a.found and a.complete and (a.cluster, a.worker, a.server) == ("south", "w-0", "srv-9")
+    assert d.where(50).cluster == "cloud" and d.where(1).cluster == "north" and d.where(2).worker in ("w-0", "w-1")
+    assert fed.clusters["south"].snapshot()["cameras"][0]["id"] == 1                  # the cluster's id; the domain never asks by it
+    holdings, down = d.holdings()
+    assert down == [] and holdings["south"] == {"w-0": ["7"]} and holdings["cloud"] == {"w-0": ["50"]}
+    assert fed.clusters["north"].objects.list("vms/snapshot") == ["vms/snapshot"]           # one object per cluster is what the domain reads
+    assert d.ages() == {"cloud": 0.0, "north": 0.0, "south": 0.0}                     # the snapshot's age is the domain's RPO, shown
+
+
+def test_where_is_answered_with_worker_and_server_and_stays_honest_about_ids():
+    fed, _ = make_domain({"north": (), "south": ()}, "north")
+    snapshot(fed.clusters["north"], {1: ("w-0", "srv-1"), 2: ("w-1", "srv-2")}, ts=1000.0)
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=1000.0)
     d = DomainDirectory(fed)
     a = d.where(7)
-    assert a.found and a.node == "node-4" and a.cluster == "south" and a.complete
-    assert d.where(50).cluster == "cloud" and d.where(1).cluster == "north"
+    assert (a.cluster, a.worker, a.server) == ("south", "w-0", "srv-9") and a.complete
+    assert "camera 7 is on w-0 (srv-9) in south" == a.sentence()
     none = d.where(99)
-    assert not none.found and none.complete and "3 clusters searched" in none.sentence()
+    assert not none.found and none.complete and "2 clusters searched" in none.sentence()
 
 
-async def test_unreachable_cluster_makes_the_answer_incomplete_not_short():
+def test_unreachable_cluster_makes_the_answer_incomplete_not_short():
     fed, links = make_domain({"north": ("vlan:a",), "south": ("vlan:b",)}, "north")
-    await publish_node(fed.clusters["north"], "node-1", [1])
-    await publish_node(fed.clusters["south"], "node-4", [7])
+    snapshot(fed.clusters["north"], {1: ("w-0", "srv-1")}, ts=1000.0)
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=1000.0)
     links["south"].up = False
     a = DomainDirectory(fed).where(7)
     assert not a.found and not a.complete and a.unreachable == ["south"] and a.searched == ["north"]
@@ -32,19 +51,19 @@ async def test_unreachable_cluster_makes_the_answer_incomplete_not_short():
     assert b.found and not b.complete and "could not be asked" in b.sentence()
 
 
-async def test_two_clusters_claiming_a_camera_is_a_fault_not_a_tie():
+def test_two_clusters_claiming_a_camera_is_a_fault_not_a_tie():
     fed, _ = make_domain({"north": (), "south": ()}, "north")
-    await publish_node(fed.clusters["north"], "node-1", [7])
-    await publish_node(fed.clusters["south"], "node-4", [7])
+    snapshot(fed.clusters["north"], {7: ("w-0", "srv-1")}, ts=0)
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=0)
     try:
         DomainDirectory(fed).where(7); raise AssertionError("must raise")
     except RuntimeError as e:
-        assert "placement or fencing failure" in str(e)
+        assert "placement failure" in str(e)
 
 
 def test_placement_is_by_reachability_then_headroom():
     fed, _ = make_domain({"north": ("vlan:a", "vlan:b"), "south": ("vlan:b",), "cloud": ("vlan:c",)}, "north")
-    head = {"north": 10.0, "south": 40.0, "cloud": 99.0}
+    head = {"north": 10.0, "south": 40.0, "cloud": 99.0}      # what each cluster's console exports: vms_headroom
     p = ClusterPlacer(fed, headroom=lambda c: head[c], clock=lambda: 1234.0)
     a = p.place(CameraSite(1, "vlan:a"))
     assert a.cluster == "north" and "only cluster reaching vlan:a" in a.reason        # capacity elsewhere is irrelevant
@@ -57,6 +76,22 @@ def test_placement_is_by_reachability_then_headroom():
     stored, _ = fed.domain_cluster.vars.get("domain/placement/2")
     assert stored["cluster"] == "south" and stored["at"] == "1234.0" and stored["reason"]   # stored, with a reason and a time
     assert p.place(CameraSite(2, "vlan:b")).cluster == "south"                        # placing again changes nothing
+
+
+def test_the_cluster_then_places_on_a_worker_and_the_domain_never_named_one():
+    """Two levels, each deciding what it knows: the domain picked south by
+    reachability; south's controller picked the worker by capacity and labels."""
+    fed, _ = make_domain({"north": ("vlan:a",), "south": ("vlan:b",)}, "north")
+    wall = Clock(); s = Running(fed.clusters["south"], wall, workers=(("w-0", "srv-9"), ("w-1", "srv-10")))
+    p = ClusterPlacer(fed)
+    pl = p.place(CameraSite(7, "vlan:b"))
+    assert pl.cluster == "south"
+    (cid,) = s.create(7, labels=["vlan:b"])                                           # the domain console forwards the create to south, with ref 7
+    where = s.ctl.placement(cid)
+    assert where.worker in ("w-0", "w-1") and "reaching vlan:b" in where.reason and "on srv-" in where.reason
+    a = DomainDirectory(fed).where(7)
+    assert a.cluster == "south" and a.worker == where.worker                          # the snapshot carried the cluster's decision up
+    assert fed.domain_cluster.vars.list("domain/placement/") == ["domain/placement/7"]  # the domain stored its level, nothing about workers
 
 
 def test_two_placers_racing_agree_by_cas():
