@@ -1,19 +1,25 @@
-// Package cluster is ClusterVMS — М11 — in Go: what a recorder needs to outlive
-// its server. Identity from a Nomad Variable, the epoch by check-and-set,
-// configuration published upward object-first, the restore, a lease that
-// fences the zombie, the cluster directory, placement by measured capacity,
-// and the sweep that turns a fenced instance's files back into rows.
+// Package cluster is ClusterVMS — М11 — in Go: М10's platform shape across
+// several servers. Built ON М10's vmsserver module (imported, not copied):
+// the same vmsplatform contract and the same vms controller, worker and
+// archive resource. This package supplies what a cluster adds and nothing else:
 //
-// Standard library only, like the Python version: the Variables client is
-// net/http against Nomad's API (github.com/hashicorp/nomad/api would do the
-// same in more code and an MPL-2.0 dependency), the object store speaks
-// SigV4 by hand, and Postgres is behind an interface.
+//	variables.go    Nomad Variables over HTTP (ModifyIndex, cas) — and the fake with the promised semantics
+//	objectstore.go  objects as Variables (this cluster's choice), HTTP, a directory, S3 (s3.go)
+//	worker.go       the worker as an allocation: a slot from NOMAD_ALLOC_INDEX, labels from the server
+//	controller.go   the controller as a job: placement under label constraints; the snapshot for М12
+//	resource.go     the archive resource as a system job: the VMS's routes on the platform's server
+//	timeline.go     one camera across two resources; *unavailable*, never *lost*
+//	directory.go    where is camera 7 — one scan of vms/workers/*
+//	console.go      the cluster console, standard library
+//
+// Standard library only: the Variables client is net/http against Nomad's
+// API (github.com/hashicorp/nomad/api would do the same in more code and an
+// MPL-2.0 dependency).
 package cluster
 
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,28 +29,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	p "vmsserver/vmsplatform"
 )
 
-// Items is one Variable's payload. Nomad stores strings; so do we.
-type Items map[string]string
+// The platform's names, re-exported so a cluster program imports one package.
+type (
+	Items     = p.Items
+	Variables = p.Variables
+)
 
-// NoCAS asks for an unconditional write. Every write that matters passes
-// the ModifyIndex it read instead.
-const NoCAS int64 = -1
+var (
+	ErrConflict  = p.ErrConflict
+	ErrForbidden = p.ErrForbidden
+)
 
-// ErrConflict is HTTP 409: the cas index did not match the current ModifyIndex.
-var ErrConflict = errors.New("cas conflict: the ModifyIndex moved")
-
-// ErrForbidden is HTTP 403: this token may not write that path — one writer per key.
-var ErrForbidden = errors.New("forbidden: this writer may not write that path")
-
-// Variables is the cluster's small, consistent store. Get returns (nil, 0,
-// nil) for a path that does not exist — absence is a value, not an error.
-type Variables interface {
-	Get(path string) (Items, int64, error)
-	Put(path string, items Items, cas int64) (int64, error)
-	List(prefix string) ([]string, error)
-}
+const NoCAS = p.NoCAS
 
 // NomadVariables speaks the HTTP API with the task's own workload-identity
 // token (NOMAD_TOKEN).
@@ -90,9 +90,9 @@ func (n *NomadVariables) do(method, u string, body any) (int, []byte, error) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	switch resp.StatusCode {
 	case 409:
-		return 409, raw, ErrConflict
+		return 409, raw, fmt.Errorf("%w: %.200s", ErrConflict, raw)
 	case 403:
-		return 403, raw, ErrForbidden
+		return 403, raw, fmt.Errorf("%w: %s", ErrForbidden, u)
 	case 404:
 		return 404, nil, nil
 	}
@@ -114,12 +114,16 @@ func (n *NomadVariables) Get(path string) (Items, int64, error) {
 	return Items(v.Items), v.ModifyIndex, nil
 }
 
-func (n *NomadVariables) Put(path string, items Items, cas int64) (int64, error) {
+func (n *NomadVariables) query(cas int64) string {
 	q := "namespace=" + n.Namespace
 	if cas != NoCAS {
 		q += fmt.Sprintf("&cas=%d", cas)
 	}
-	_, raw, err := n.do("PUT", fmt.Sprintf("%s/v1/var/%s?%s", n.Addr, path, q), map[string]any{"Items": items})
+	return q
+}
+
+func (n *NomadVariables) Put(path string, items Items, cas int64) (int64, error) {
+	_, raw, err := n.do("PUT", fmt.Sprintf("%s/v1/var/%s?%s", n.Addr, path, n.query(cas)), map[string]any{"Items": items})
 	if err != nil {
 		return 0, err
 	}
@@ -145,15 +149,20 @@ func (n *NomadVariables) List(prefix string) ([]string, error) {
 	for _, v := range vs {
 		out = append(out, v.Path)
 	}
+	sort.Strings(out)
 	return out, nil
+}
+
+func (n *NomadVariables) Delete(path string, cas int64) error {
+	_, _, err := n.do("DELETE", fmt.Sprintf("%s/v1/var/%s?%s", n.Addr, path, n.query(cas)), nil)
+	return err
 }
 
 // FakeVariables is one raft log for the whole cluster, in memory, with the
 // semantics the docs promise: a raft-assigned ModifyIndex, PUT ?cas=<index>
 // succeeding only if the index still matches, a conflict otherwise. Optional
 // ACL: a writer may only put under the prefixes it was granted. Nothing in
-// the fake is Nomad; everything in it is what Nomad promises, and the tests
-// run against it in microseconds.
+// the fake is Nomad; everything in it is what Nomad promises.
 type FakeVariables struct {
 	s      *fakeState
 	Writer string // "who am I" for the ACL check; "" bypasses it
@@ -175,12 +184,26 @@ func NewFakeVariables() *FakeVariables {
 	return &FakeVariables{s: &fakeState{raftIndex: 1000, items: map[string]fakeEntry{}, acl: map[string][]string{}}}
 }
 
-// SetACL grants a writer id its prefixes ("nodes/node-3", "nodes/node-3/*").
-func (f *FakeVariables) SetACL(writer string, allowed ...string) { f.s.acl[writer] = allowed }
-
-// AsWriter is the same raft seen through another token.
-func (f *FakeVariables) AsWriter(writer string) *FakeVariables {
+// AsWriter is the same raft seen through one identity — what a task's
+// workload identity token is under a Nomad ACL policy. With prefixes given,
+// they become that writer's grant.
+func (f *FakeVariables) AsWriter(writer string, allowed ...string) *FakeVariables {
+	f.s.mu.Lock()
+	if allowed != nil {
+		f.s.acl[writer] = allowed
+	}
+	f.s.mu.Unlock()
 	return &FakeVariables{s: f.s, Writer: writer}
+}
+
+func (f *FakeVariables) acl(path string) error {
+	if f.Writer == "" || len(f.s.acl) == 0 {
+		return nil
+	}
+	if !p.Allowed(path, f.s.acl[f.Writer]) {
+		return fmt.Errorf("%w: %s may not write %s", ErrForbidden, f.Writer, path)
+	}
+	return nil
 }
 
 func (f *FakeVariables) Get(path string) (Items, int64, error) {
@@ -198,19 +221,11 @@ func (f *FakeVariables) Get(path string) (Items, int64, error) {
 }
 
 func (f *FakeVariables) Put(path string, items Items, cas int64) (int64, error) {
-	if f.Writer != "" && len(f.s.acl) > 0 {
-		ok := false
-		for _, p := range f.s.acl[f.Writer] {
-			if path == p || (strings.HasSuffix(p, "*") && strings.HasPrefix(path, strings.TrimSuffix(p, "*"))) {
-				ok = true
-			}
-		}
-		if !ok {
-			return 0, fmt.Errorf("%w: %s may not write %s", ErrForbidden, f.Writer, path)
-		}
-	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
+	if err := f.acl(path); err != nil {
+		return 0, err
+	}
 	current := f.s.items[path].index
 	if cas != NoCAS && cas != current {
 		return 0, fmt.Errorf("%w: cas=%d but ModifyIndex=%d", ErrConflict, cas, current)
@@ -227,12 +242,27 @@ func (f *FakeVariables) Put(path string, items Items, cas int64) (int64, error) 
 func (f *FakeVariables) List(prefix string) ([]string, error) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	var out []string
-	for p := range f.s.items {
-		if strings.HasPrefix(p, prefix) {
-			out = append(out, p)
+	out := []string{}
+	for pth := range f.s.items {
+		if strings.HasPrefix(pth, prefix) {
+			out = append(out, pth)
 		}
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func (f *FakeVariables) Delete(path string, cas int64) error {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	if err := f.acl(path); err != nil {
+		return err
+	}
+	current := f.s.items[path].index
+	if cas != NoCAS && cas != current {
+		return fmt.Errorf("%w: cas=%d but ModifyIndex=%d", ErrConflict, cas, current)
+	}
+	delete(f.s.items, path)
+	f.s.raftIndex++
+	return nil
 }

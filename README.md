@@ -124,6 +124,7 @@ The recorder rebuilt on the shape М11 arrived at — **workers, resources, one 
 - [Lesson index](./М10_ServerVMS/README.md) — start here
 - [Module design](./М10_ServerVMS/module-design.md) — the three elements, the two processes, where configuration lives, and the contract every subsystem gives the platform
 - [`vmsserver/`](./М10_ServerVMS/vmsserver/README.md) — the module's code, whole: the platform's two stores with CAS, the epoch issuer and the lease, `driverpacksrc` and `archivesink`, `vmsworker`, `vmscontroller`, the console, the systemd units, identity by claim, events beside the segment, the resource as a platform job, and a second subsystem that counts seconds; 42 tests
+- [`vmsserver-go/`](./М10_ServerVMS/vmsserver-go/README.md) — the same module in Go, standard library only, 41 tests (everything but the GStreamer element), the base М11's Go port is built on
 
 ## М11 — ClusterVMS
 
@@ -141,7 +142,7 @@ The answer is that fencing belongs at the archive rather than at a coordinator: 
 - [Module design](./М11_ClusterVMS/module-design.md) — the cluster, what must outlive a server, the zombie writer, and fencing at the archive
 - [`clustervms/`](./М11_ClusterVMS/clustervms/README.md) — the module's code, whole, built on М10's `vmsserver/`: Nomad Variables and MinIO as the platform's stores, the worker as an allocation claiming its slot from `NOMAD_ALLOC_INDEX`, the controller placing under label constraints, the archive resource as a system job with its manifests served, a timeline across servers, the event index that is a cache over every subsystem's buckets, the resource and the event index as platform jobs, the events mirror as a copy to the next resource; four jobs with the `scaling` policy and the Autoscaler, two ACL policies, the bench check and the failover drill; 29 tests
 - [`reference/`](./М11_ClusterVMS/reference/README.md) — the first design's scripts, kept: the zombie with two real processes, the CAS issuer, the lease arithmetic
-- [`clustervms-go/`](./М11_ClusterVMS/clustervms-go/README.md) — the first design ported to Go with its 29 tests and measured against Python; its port to *2c* follows
+- [`clustervms-go/`](./М11_ClusterVMS/clustervms-go/README.md) — the module in Go, built on [`vmsserver-go/`](./М10_ServerVMS/vmsserver-go/README.md), with the same 29 tests and the measurement against Python: 8.9 MB against 21.2 MB at idle, one static binary for the four jobs
 - [Kubernetes vs Nomad](./М11_ClusterVMS/kubernetes-vs-nomad.md) — why the orchestrator is Nomad, what it cost, and why neither belongs on one box
 
 ## М12 — DomainVMS

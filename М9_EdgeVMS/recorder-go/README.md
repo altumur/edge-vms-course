@@ -45,4 +45,4 @@ What the table does **not** say: that the media worker should be Go. Lesson 7's 
 | Survives as-is | Ported mechanically | Rewritten |
 |---|---|---|
 | the schema and migrations (SQL) | `apphost.py`'s four tasks → goroutines and a ticker; `store.py` → `pgx`; `retention.py`; `console/app.py` → `net/http` | the actuator (`pipeline.py`) — and it becomes a **client** of a C++ worker, not a host of pipelines |
-| the tests' meaning | `clustervms/` — done: [`clustervms-go/`](../../М11_ClusterVMS/clustervms-go/README.md) ports the whole of М11 with its 29 tests, in the standard library (`net/http` to Nomad rather than `github.com/hashicorp/nomad/api`, which is MPL-2.0), and measures the whole recorder in both languages | |
+| the tests' meaning | `vmsserver/` and `clustervms/` — done: [`vmsserver-go/`](../../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../../М11_ClusterVMS/clustervms-go/README.md) port the whole of М10 and М11 with their 70 tests, in the standard library (`net/http` to Nomad rather than `github.com/hashicorp/nomad/api`, which is MPL-2.0), and measure a server's worker and controller in both languages | |

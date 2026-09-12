@@ -2,7 +2,8 @@ package cluster
 
 // An S3 object store with Signature Version 4, in the standard library —
 // the same forty lines as the Python version, verified against the worked
-// examples in Amazon's own SigV4 documentation (s3_test.go).
+// examples in Amazon's own SigV4 documentation (s3_test.go). The adapter a
+// rented cluster uses (М12 Lesson 8), or one whose heartbeats outgrew raft.
 
 import (
 	"crypto/hmac"
@@ -154,4 +155,37 @@ func (s *S3ObjectStore) Get(key string) ([]byte, error) {
 		return nil, fmt.Errorf("GET %s: HTTP %d", key, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// List: ListObjectsV2 with a prefix — the third call the platform's
+// ObjectStore contract needs (heartbeats are found by listing).
+func (s *S3ObjectStore) List(prefix string) ([]string, error) {
+	path := "/" + s.Bucket + "/"
+	query := "list-type=2&prefix=" + url.QueryEscape(prefix)
+	headers := Sign("GET", s.Host, path, query, nil, nil, s.AccessKey, s.SecretKey, s.Region, s.Now(), "s3")
+	req, err := http.NewRequest("GET", s.Scheme+"://"+s.Host+uriEncode(path)+"?"+query, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		if k != "host" {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := s.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("LIST %s: HTTP %d", prefix, resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var out []string
+	for _, part := range strings.Split(string(raw), "<Key>")[1:] {
+		key, _, _ := strings.Cut(part, "</Key>")
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out, nil
 }

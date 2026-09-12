@@ -53,4 +53,4 @@ Four things in this module were checked against the projects' own sources rather
 - **A Nomad variable lock's ID is an opaque UUID** — the Locks API; it is the lock Kleppmann's fencing-token argument is about.
 - **The Nomad Autoscaler is MPL-2.0** — its `LICENSE` file; it runs as the cluster's fourth job and is the only thing that changes `count`.
 
-[`clustervms-go/`](clustervms-go/README.md) is the Go port of the *first* ClusterVMS design and stays as its measurement record (7.1 MB against 28.5 MB at idle; the CAS race under the race detector). Its port to this shape follows.
+[`clustervms-go/`](clustervms-go/README.md) is this shape in Go, built on [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) (М10's port) the way `clustervms/` is built on `vmsserver/`: the same 29 tests, the epoch race under the race detector, and the measurement — a worker and a controller at idle with fifty cameras in 8.9 MB against 21.2 MB, one 7 MB static binary for the four jobs.

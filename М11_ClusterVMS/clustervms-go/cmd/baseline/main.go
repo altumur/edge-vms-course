@@ -1,14 +1,13 @@
-// cmd/baseline — the Go recorder at idle: the whole ClusterAppHost (reconcile,
-// report, publish, lease, heartbeat, reindex, console) against in-memory
-// fakes for Nomad and Postgres and a directory for the object store, with
-// fifty cameras, doing nothing. Prints its own proportional set size (PSS)
-// after settling. No GStreamer in either language — that is measured
-// separately by М9's probe and costs the same everywhere.
+// cmd/baseline — a Go server at idle: one worker (reconcile, pump, lease,
+// heartbeat) and one controller (placement pass, snapshot) against the
+// in-memory raft fake and a directory for the object store, with fifty
+// cameras, doing nothing. Prints its own proportional set size (PSS) after
+// settling. No GStreamer in either language — that is measured separately
+// by М9's probe and costs the same everywhere.
 package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"clustervms/cluster"
+	"vmsserver/vms"
 )
 
 func pssKB() int {
@@ -39,31 +39,38 @@ func pssKB() int {
 
 func main() {
 	log.SetOutput(io.Discard) // idle means idle: no log lines either
-	os.Setenv("CONSOLE_PORT", "0")
-	os.Setenv("ARCHIVE_DIR", os.TempDir()+"/clustervms-baseline-archive")
-	settings := cluster.SettingsFromEnv()
 	vars := cluster.NewFakeVariables()
-	dir, _ := os.MkdirTemp("", "restore-")
+	dir, _ := os.MkdirTemp("", "baseline-")
 	defer os.RemoveAll(dir)
-	objs, _ := cluster.NewFsObjectStore(dir)
-
-	// node-3 has been seen: fifty cameras published by its previous instance.
-	cams := make([]cluster.CameraRow, 0, 50)
-	for i := int64(1); i <= 50; i++ {
-		cams = append(cams, cluster.Cam(i, 1))
+	objects, _ := cluster.NewFsObjectStore(dir + "/objects")
+	ctl := cluster.NewClusterController(vars, objects, 50, nil, "bench")
+	for i := 1; i <= 50; i++ {
+		ctl.CreateCamera(map[string]any{"source": fmt.Sprintf("driverpack://file/%d.mp4", i)})
 	}
-	cluster.NewPublisher("node-3", cluster.NewFakeClusterStore(cams...), vars, objs, 0, cluster.Monotonic()).PublishOnce()
-	items, _, _ := vars.Get("nodes/node-3")
-	ident := cluster.Identity{recorder: "node-3", ConfigObject: items["config"], ConfigRevision: 1}
-
-	host := cluster.NewClusterAppHost(settings, cluster.NewFakeClusterStore(), vars, objs, ident, cluster.NewFakeActuator(), nil, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- host.Run(ctx, true) }()
-	time.Sleep(1500 * time.Millisecond) // every task has ticked at least once
+	w, err := cluster.NewClusterWorker(vars, objects, vms.NewFakeActuator(), cluster.Env{"NOMAD_ALLOC_INDEX": "0", "NOMAD_NODE_NAME": "srv-a"},
+		vms.VmsWorkerOptions{ArchiveRoot: dir + "/archive", Capacity: 50})
+	if err != nil {
+		panic(err)
+	}
+	w.HeartbeatOnce()
+	ctl.EnsurePlaced(nil)
+	stop := make(chan struct{})
+	go w.Run(500*time.Millisecond, stop)
+	go func() {
+		for {
+			ctl.EnsurePlaced(nil)
+			ctl.Redistribute(nil)
+			ctl.PublishSnapshot()
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+	time.Sleep(1500 * time.Millisecond) // every loop has ticked at least once
 	runtime.GC()
-	fmt.Printf("go node idle: PSS %d kB, %d goroutines, epoch %d, %s\n", pssKB(), runtime.NumGoroutine(),
-		host.Settings.Epoch, host.Restore.State)
-	cancel()
-	<-done
+	fmt.Printf("go server idle: PSS %d kB, %d goroutines, %d cameras running\n", pssKB(), runtime.NumGoroutine(), len(w.Reconciler.Actual))
+	close(stop)
+	time.Sleep(100 * time.Millisecond)
 }

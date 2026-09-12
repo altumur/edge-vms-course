@@ -124,7 +124,7 @@ The only module where getting it wrong corrupts customer data rather than merely
 - **Nomad decides how many workers and where.** The worker job carries a `scaling` policy on the workers' own load; the Nomad Autoscaler (MPL-2.0) moves `count`; the controller has no Nomad client. Scale-in releases a slot and the controller redistributes; a crash releases nothing and the controller waits
 - **Leases, epochs and the zombie writer.** Dead, partitioned and paused are indistinguishable, and the design must be correct without resolving that. Fencing happens **at the resource, not the controller** — the epoch per camera is in every path — and one layer earlier at the slot, which is what makes Nomad's duplicate-index bug harmless
 - **The cluster directory is the assignment.** One scan of `vms/workers/*` answers *where is camera 7*, in one raft, strongly consistent. Placement under label constraints by the workers' own capacity, the stability rule, the server in the reason, and why consistent hashing is the reflexive wrong answer
-- **`clustervms/` is built on М10's `vmsserver/`**, importing the contract, the controller, the worker and the archive unchanged; `clustervms-go/` remains the first design's Go port and measurement
+- **`clustervms/` is built on М10's `vmsserver/`**, importing the contract, the controller, the worker and the archive unchanged; `vmsserver-go/` and `clustervms-go/` are both modules in Go with the same relationship (a `replace` directive instead of `sys.path`), 70 tests, and the measurement
 
 ### М12 — DomainVMS: several clusters, and the top of the product · 8 lessons · [written](./М12_DomainVMS/README.md) · [design](./М12_DomainVMS/module-design.md) · [code](./М12_DomainVMS/domainvms/README.md)
 

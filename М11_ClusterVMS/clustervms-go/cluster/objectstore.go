@@ -1,31 +1,38 @@
 package cluster
 
-// The cluster's object store — large, rare, never queried: the restore
-// point (and, since the heartbeat left raft, the heartbeat).
+// The cluster's object store — М10's vmsplatform.ObjectStore contract, which
+// holds three small things: worker heartbeats, resource heartbeats, and the
+// snapshot the domain's read model is built from.
 //
-// Three adapters with one contract. HttpObjectStore PUTs and GETs against
-// any endpoint with plain HTTP object semantics (MinIO with a bucket
-// policy, nginx with dav). FsObjectStore is a directory — the tests, and a
-// bench with a shared mount. S3ObjectStore (s3.go) signs.
+// On a cluster of this size the implementation is VariablesObjectStore:
+// objects as Nomad Variables under objects/…. A heartbeat is ~10 KB every
+// ten seconds from a dozen workers and three resources — a couple of raft
+// writes a second — and it removes a whole store (MinIO, its quorum, its
+// credentials) from the cluster. When a cluster grows to where its
+// heartbeats are a raft load, OpenStore("s3+http://…") is the same three
+// calls against MinIO or S3 (s3.go). Footage never goes to any of these.
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	p "vmsserver/vmsplatform"
 )
 
-// ObjectStore: Get returns (nil, nil) for an object that does not exist.
-type ObjectStore interface {
-	Put(key string, data []byte) error
-	Get(key string) ([]byte, error)
-}
+type ObjectStore = p.ObjectStore
 
+// FsObjectStore is М10's: a directory — the tests, and a bench with a shared mount.
+func NewFsObjectStore(root string) (*p.FsObjectStore, error) { return p.NewFsObjectStore(root) }
+
+// HttpObjectStore PUTs and GETs against any endpoint with plain HTTP object
+// semantics (MinIO with a bucket policy, nginx with dav). Plain HTTP has no
+// listing.
 type HttpObjectStore struct {
 	Base   string
 	Client *http.Client
@@ -67,36 +74,87 @@ func (h *HttpObjectStore) Get(key string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-type FsObjectStore struct{ Root string }
-
-func NewFsObjectStore(root string) (*FsObjectStore, error) {
-	return &FsObjectStore{root}, os.MkdirAll(root, 0o755)
+func (h *HttpObjectStore) List(prefix string) ([]string, error) {
+	return nil, fmt.Errorf("plain HTTP has no listing; use s3+http:// or variables:// for the heartbeat prefix")
 }
 
-func (f *FsObjectStore) Put(key string, data []byte) error {
-	p := filepath.Join(f.Root, key)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(p+".tmp", data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(p+".tmp", p) // an object appears whole or not at all
+// VariablesObjectStore: objects as Variables: <prefix>/<key> -> {data: <utf-8 text>}.
+// The store is whatever Variables the caller holds, with the ACL that comes
+// with its token.
+type VariablesObjectStore struct {
+	Vars   Variables
+	Prefix string
 }
 
-func (f *FsObjectStore) Get(key string) ([]byte, error) {
-	b, err := os.ReadFile(filepath.Join(f.Root, key))
-	if errors.Is(err, os.ErrNotExist) {
+func NewVariablesObjectStore(vars Variables, prefix string) *VariablesObjectStore {
+	if prefix == "" {
+		prefix = "objects"
+	}
+	return &VariablesObjectStore{vars, strings.Trim(prefix, "/")}
+}
+
+func (v *VariablesObjectStore) path(key string) (string, error) {
+	if strings.Contains(key, "..") || strings.HasPrefix(key, "/") {
+		return "", fmt.Errorf("bad key %q", key)
+	}
+	return v.Prefix + "/" + key, nil
+}
+
+func (v *VariablesObjectStore) Put(key string, data []byte) error {
+	pth, err := v.path(key)
+	if err != nil {
+		return err
+	}
+	_, err = v.Vars.Put(pth, Items{"data": string(data)}, NoCAS) // no cas: the last heartbeat wins, as it should
+	return err
+}
+
+func (v *VariablesObjectStore) Get(key string) ([]byte, error) {
+	pth, err := v.path(key)
+	if err != nil {
+		return nil, err
+	}
+	items, _, err := v.Vars.Get(pth)
+	if err != nil || items == nil {
+		return nil, err
+	}
+	d, ok := items["data"]
+	if !ok {
 		return nil, nil
 	}
-	return b, err
+	return []byte(d), nil
 }
 
-// OpenStore: file:///path · http(s)://host/bucket (anonymous) ·
-// s3+http(s)://host/bucket?region=r (SigV4, credentials from
-// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a recorder, from its Variable).
+func (v *VariablesObjectStore) List(prefix string) ([]string, error) {
+	base := v.Prefix + "/"
+	paths, err := v.Vars.List(base + prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, pth := range paths {
+		out = append(out, strings.TrimPrefix(pth, base))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (v *VariablesObjectStore) Delete(key string) error {
+	pth, err := v.path(key)
+	if err != nil {
+		return err
+	}
+	return v.Vars.Delete(pth, NoCAS)
+}
+
+// OpenStore: variables://objects (the default on this cluster) · file:///path ·
+// http(s)://host/bucket (anonymous) · s3+http(s)://host/bucket?region=r
+// (SigV4, credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — on a
+// server, from a Variable).
 func OpenStore(raw string) (ObjectStore, error) {
 	switch {
+	case strings.HasPrefix(raw, "variables://"):
+		return NewVariablesObjectStore(NewNomadVariables(), strings.TrimPrefix(raw, "variables://")), nil
 	case strings.HasPrefix(raw, "s3+http://"), strings.HasPrefix(raw, "s3+https://"):
 		u, err := url.Parse(raw[3:])
 		if err != nil {
@@ -111,7 +169,7 @@ func OpenStore(raw string) (ObjectStore, error) {
 	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
 		return NewHttpObjectStore(raw), nil
 	case strings.HasPrefix(raw, "file://"):
-		return NewFsObjectStore(strings.TrimPrefix(raw, "file://"))
+		return p.NewFsObjectStore(strings.TrimPrefix(raw, "file://"))
 	}
-	return NewFsObjectStore(raw)
+	return p.NewFsObjectStore(raw)
 }

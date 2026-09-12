@@ -1,84 +1,69 @@
 # clustervms-go — М11, whole, in Go, measured against the Python original
 
-М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on a whole module: every mechanism М11 designed — identity from a Variable, the epoch by check-and-set, publish-then-point, the six-step restore, the lease that fences the zombie, the heartbeat as an object, the re-index sweep, the directory, placement, SigV4 — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**, plus one test the Python version could not have: a Go recorder restoring what a Python recorder published.
+М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror, the event index that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
 
 ```
 clustervms-go/
-  go.mod                       module clustervms; imports recorder/reconciler from ../recorder-go (not copied)
+  go.mod                       module clustervms; requires vmsserver from ../../М10_ServerVMS/vmsserver-go (replace, not copy)
   cluster/
-    variables.go               Variables: NomadVariables (net/http, the task's own token) and FakeVariables (raft in memory, CAS, ACL)
-    epoch.go                   NextEpoch by CAS; Lease (renew = read my epoch; may_write on a monotonic clock)
-    publish.go                 object first, then the Variable; the floor; the `replicated` condition
-    rehydrate.go               the six steps; unconfigured invents nothing; a dangling pointer is refused
-    identity.go                who am I — from the template's environment, then the Variable
-    configio.go                the format-1 blob, byte-compatible with Python's
-    directory.go               the scan, cached by time; "where is camera 7"; two answers is an error
-    placement.go               measured capacity, labels, stored placement, budgeted rebalance, the invariants
-    reindex.go                 files back into rows, the epoch kept from the path
-    objectstore.go  s3.go      fs · http · S3 with SigV4 (Amazon's worked examples reproduced)
-    apphost.go                 ClusterAppHost: the prologue, the gate, one goroutine per concern
-    metrics.go  console.go     node_failover_seconds, node_epoch_conflicts, …; /cluster/node, /cluster/directory, /cluster/where/N
-    store.go                   the Store interface and FakeClusterStore
-    pgstore.go                 the Postgres Store on pgx — build tag `pg` (see below)
-    settings.go  actuator.go   the environment; the Actuator interface and the fake
-    *_test.go                  30 tests; bench_test.go — six operations timed
-  cmd/clustervms/main.go       the recorder: NOMAD_ADDR, NODE_ID, OBJECT_STORE_URL, … — the same environment as the Python one
-  cmd/baseline/main.go         the whole host at idle with fifty cameras; prints its PSS
+    variables.go               NomadVariables (net/http, the task's own token, cas, delete) and FakeVariables (one raft in memory, ACL)
+    objectstore.go  s3.go      VariablesObjectStore (this cluster's choice: objects as Variables), HTTP, a directory, S3 with SigV4 + List
+    worker.go                  ClusterWorker: the slot from NOMAD_ALLOC_INDEX, labels from NOMAD_META_labels, previous_hb for the RTO
+    controller.go              ClusterController: Eligible / Place with labels and the server in the reason, Unplaceable, Snapshot, FailoverSeconds
+    directory.go               where is camera 7 — one scan of vms/workers/*, cached by time; "w-1+w-2" during a move
+    resource.go                VmsRoutes (/manifest, /segment with Range) on the platform's resource server; ClusterResource registers the VMS hook
+    timeline.go                MergedTimeline across resources; unreachable named; "not lost"
+    console.go                 /cameras /where /timeline /resources /unplaceable /events /metrics; POST /cameras, /marks; PUT /cameras
+    *_test.go                  29 tests; bench_test.go — five operations timed
+  cmd/clustervms/main.go       worker | controller | resource | eventindex — the four jobs, the same environment as the Python ones
+  cmd/baseline/main.go         a server at idle: one worker and one controller with fifty cameras; prints its PSS
   cmd/pybaseline/baseline.py   the same shape in Python
-  cmd/pybench/bench.py         the six operations in Python
+  cmd/pybench/bench.py         the five operations in Python
   measure.sh                   runs all of it and prints the tables below
 ```
 
 ```bash
-go test ./cluster/                      # 30 tests, ~100 ms
-go test -race ./cluster/                # the CAS race with four real goroutines, race-detector clean
-RECORDER_PATH=../../М9_EdgeVMS/recorder CLUSTERVMS_PATH=../clustervms ./measure.sh
+go test ./cluster/                      # 29 tests, ~150 ms
+go test -race ./cluster/                # the epoch race with four real goroutines, race-detector clean
+CLUSTERVMS_PATH=../clustervms ./measure.sh
 ```
 
 ## What was ported, and how
 
-Read each Go file beside its Python twin: the names are the same and so are the decisions. `>=` on the revision, the object before the pointer, `TTL − margin` on a monotonic clock, `free > best_free` with a sorted tiebreak, the two-segment grace before a file is re-indexed, the `e<epoch>` directory as the fencing token — none of it changed. What changed is the shape around it:
+The Python file and the Go file have the same name and the same decisions; the shape around them is the one [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md) describes (structs for rows, embedding for the layers, errors for exceptions, a slice for SQLite). Two things are specific to this module:
 
-| Python | Go | Why it matters |
-|---|---|---|
-| `asyncio` tasks, one per concern | goroutines, one per concern, a ticker each, `context` to stop them | The same process model. The `wake` event became a 1-slot channel. |
-| `threading.Thread × 4` racing `next_epoch` | four goroutines, really parallel, `-race` clean | The Python test proves CAS under the GIL; the Go test proves it under real concurrency. |
-| exceptions (`Conflict`, `Forbidden`, `RestoreRefused`) | `ErrConflict`, `ErrForbidden`, `*RestoreRefused` with `errors.Is`/`As` | Every `try/except Exception: log` in the Python became an explicit `if err != nil` — about half the extra lines. |
-| `dict` Variables items, values stringified on `put` | `Items map[string]string` | Nomad stores strings; the Go type says so. |
-| `dataclass` config blob, `sort_keys=True` | struct tags; `[]byte` → base64 automatically | **Byte-compatible**: `TestAGoNodeRestoresWhatAPythonNodePublished` restores a blob captured from the Python fake; the reverse was run by hand (a Python `rehydrate()` over Go's object: `restored, revision 4, 2 cameras`). |
-| `ClusterStoreMixin` + М9's `PgStore` on asyncpg | `Store` interface; `PgStore` on pgx behind `-tags pg` | The measuring machine could not reach the Go module proxy, so `pgstore.go` was **type-checked against a stub of pgx's signatures, not run against Postgres**. The SQL is the Python version's, verified in М9 on Postgres 16. `go get github.com/jackc/pgx/v5 && go build -tags pg ./cmd/clustervms` is the missing step; without the tag the binary builds and refuses at start. |
-| `urllib.request` to Nomad | `net/http` to Nomad | Still no `github.com/hashicorp/nomad/api` (MPL-2.0 — the note from М9 Lesson 9 stands): the four calls the recorder makes are forty lines. |
+- **`replace vmsserver => ../../М10_ServerVMS/vmsserver-go`** in `go.mod` is the Go spelling of `sys.path.append(…/М10_ServerVMS/vmsserver)`: М10 is imported, not vendored, and a change there is a change here.
+- **`OpenStore("variables://objects")`** is the default, as in Python: on a cluster of this size the heartbeats and the snapshot are Variables, and MinIO is not installed. `s3.go` keeps the SigV4 adapter (with `List` added for the heartbeat prefix) for a rented cluster or one that outgrows raft.
 
-Two things are not here, and were not in the Python `clustervms/` either: the GStreamer actuator (М9's, and in a Go controller it becomes a *client* of a C++ media worker — Lesson 5's per-frame rule survives cgo) and М9's retention task and console. `cmd/clustervms` runs the recorder with the fake actuator: everything about identity, restore, epoch, lease, directory and metrics is real; nothing records.
+Not here: the GStreamer actuator (`cmd/clustervms worker` runs the fake and records nothing) and the Nomad job files, which are the Python package's and unchanged — a Go binary is what `Containerfile` copies in instead of an interpreter.
 
 ## The numbers (measured, Linux x86-64, Go 1.24.7, Python 3.11)
 
-Both processes are the **whole recorder at idle**: fifty cameras restored from the directory, epoch taken, every task running (reconcile, report, publish, lease, heartbeat, re-index; in Python also М9's bus pump and retention), a console listener, fakes for Nomad and Postgres, a directory for the object store. PSS from `/proc/self/smaps_rollup`, three runs each.
+Both processes are **a server at idle**: one worker with fifty cameras placed on it (reconcile, pump, lease, heartbeat) and one controller (placement pass, redistribution, the snapshot), against the in-memory raft fake and a directory for the object store. PSS from `/proc/self/smaps_rollup`, three runs each.
 
 | | Go | Python | |
 |---|---|---|---|
-| **recorder at idle, 50 cameras, every task running** | **7.1 MB** (10 goroutines) | **28.5 MB** (11 asyncio tasks) | 4.0× — the same ratio М9 measured on the reconciler alone (6.0 vs 25.7). The cluster layer added 1 MB in Go and 3 MB in Python. |
-| Deployable artifact | one static binary, **6.6 MB** (arm64: 6.2 MB, one `GOARCH=arm64` away) — without pgx | interpreter + asyncpg + the rest, as М9 counted them | |
-| Test suite | 30 tests in **96 ms** (755 ms with `go test`'s compile) | 29 tests in **241 ms** | Both are millisecond suites; the argument was never test speed. |
-| Lines, non-test | 2,640 (of which 320 are `pgstore.go`, and settings/actuator/fake store that live in `recorder/` on the Python side) | 1,250 | About twice — error returns and types. Tests: 920 vs 600. |
+| **worker + controller at idle, 50 cameras** | **8.9 MB** | **21.2 MB** | 2.4× — smaller than М9's 4× because the 2c worker is smaller than the old Node in both languages: no Postgres client, no publish/restore, no re-index sweep |
+| Deployable artifact | one static binary, **6.8 MB** (arm64: 6.4 MB, one `GOARCH=arm64` away) | interpreter + the two packages, as М9 counted them | |
+| Test suite | 29 tests in **150 ms** (570 ms with `go test`'s compile); М10's 41 in 140 ms | 29 tests in ~1.3 s, 42 in ~1.0 s (`run.py`'s own startup included) | Both are sub-second suites; the argument was never test speed. |
+| Lines, non-test (М10 + М11) | ~5,600 | ~3,200 | 1.75× — error returns and types. Tests: 2,600 vs 1,400. |
 
 The controller's actual work, per operation (`go test -bench` / `cmd/pybench/bench.py`, same inputs):
 
 | Operation | Go | Python | |
 |---|---|---|---|
-| SigV4 sign of a 64 kB object | 56 µs | 69 µs | **1.2×** — it is SHA-256 in both, and both are C underneath. The language does not own the hash. |
-| Issue an epoch by CAS (in-memory raft) | 0.84 µs | 1.75 µs | 2.1× |
-| Directory scan, 1,000 recorders × 20 cameras, then *where is 70007* | 5.3 ms | 8.0 ms | 1.5× — both are a thousand map copies; neither is the cost of a console page (raft round-trips are). |
-| Place 120 cameras on 4 recorders with labels | 0.92 ms | 1.79 ms | 1.9× |
-| Parse one segment path (regex + timestamp) | 0.77 µs | 12.3 µs | 16× — the only place Go is an order of magnitude ahead, and the sweep is the only place the controller touches a hundred thousand of anything. |
-| Encode + decode a 200-camera configuration | 0.57 ms | 0.72 ms | 1.3× |
+| Issue an epoch by CAS (in-memory raft) | 0.82 µs | 1.9 µs | 2.3× |
+| Directory scan, 1,000 workers × 20 cameras, then *where is 7007* | 2.3 ms | 2.6 ms | 1.1× — both are a thousand map copies |
+| Place 120 cameras on 4 workers with labels | 89 ms | 170 ms | 1.9× — and both are dominated by the design, not the language: every `Place` re-reads the heartbeat objects from disk for `CapacityOf`, `LabelsOf` and `ServerOf`. Cache `WorkersSeen` for the pass and both drop by an order of magnitude (М11 Lesson 5, exercise 3) |
+| Parse one bucket path (regexp + timestamp) | 0.85 µs | 11.7 µs | 14× — the only place Go is an order of magnitude ahead, and the sweep is the only place the resource touches a hundred thousand of anything |
+| Encode + decode a 50-camera heartbeat | 226 µs | 130 µs | **0.6× — Python wins.** `encoding/json` over `map[string]any` reflects on every value; Python's `json` is C over a dict. A typed `Status` struct would reverse it, at the cost of the platform knowing the subsystem's status shape — which it must not |
 
 ## What the numbers say
 
-**The win is memory and deployment, not speed** — which is what М9 Lesson 9 predicted. A cluster controller's work is reading a Variable, hashing an object, and comparing two maps; Python does that within 2× of Go, and hashing within 20 %, because the hot part of each is already C. What Python cannot shed is the 20 MB it costs to be Python, and the interpreter-plus-wheels rootfs that М9's bundle has to carry. On a recorder whose budget is `B + n·I`, four times smaller `B` is more cameras per box; on an appliance whose update is a RAUC bundle, the controller's whole contribution to the bundle becomes one 6 MB file with no interpreter to ship, cross-built for arm64 in one command.
+**The win is memory and deployment, not speed** — which is what М9 Lesson 9 predicted and М11's first port measured. A cluster controller's work is reading a Variable, comparing two maps and deciding; Python does that within 2× of Go, and where the hot part is C underneath (JSON, regex) the gap is small or inverted. What Python cannot shed is the 12 MB it costs to be Python, and the interpreter-plus-wheels rootfs the appliance bundle has to carry. On a server whose worker count comes from `B + n·I`, a smaller `B` is more workers per server; on an appliance updated by a RAUC bundle, the four jobs become one 7 MB file with no interpreter to ship, cross-built for arm64 in one command.
 
-**The design ported without a redesign.** Thirty tests, written against Python objects, pass against Go structs with only the syntax changed, and a recorder in either language restores from the other's publication. That is the property to want from a design: the risky part was the decisions, and the decisions survived a language.
+**The design ported without a redesign, twice.** The first port moved a Node between servers; this one moves cameras between workers on a controller's rows — a different shape — and again twenty-nine tests written against Python objects pass against Go structs with only the syntax changed. That is the property to want: the risky part was the decisions, and the decisions survived a language *and* a redesign.
 
-**Where Go made the code better, not just smaller:** the CAS race test runs four goroutines in parallel and passes under `-race`; the Python version proves the same thing under the GIL, which is a weaker proof. Every "the store is unreachable, keep going" became a visible `err` instead of a bare `except`. **Where it made it worse:** twice the lines, and a Postgres driver that had to be fetched — the standard library got the recorder to Nomad and S3 without a dependency, but not to Postgres.
+**Where Go made the code better, not just smaller:** the epoch race runs four goroutines in parallel and passes under `-race`; every "the store is unreachable, keep going" is a visible `err` instead of a bare `except`; the platform's *no camera here* rule is a test that greps the package. **Where it made it worse:** 1.75× the lines, and a heartbeat that is slower to encode because the platform refuses to know its shape.
 
-**What this does not settle** is the media worker, and it does not try to: the per-frame rule from М9 Lesson 7 holds in Go exactly as it holds in Python, and the worker is C++ either way.
+**What this does not settle** is the media worker, and it does not try to: the per-frame rule from М9 Lesson 7 holds in Go exactly as it holds in Python, and the worker's pipeline is C either way.
