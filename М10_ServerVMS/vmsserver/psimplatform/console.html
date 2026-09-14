@@ -5,9 +5,14 @@
      there is media — and builds the list, the add form and the edit form
      from that. Nothing on this page names a camera: the VMS is the spec that
      says `rows: cameras`, `media: true`; live and det are other specs and the
-     same page. With media the page adds the timeline and the player:
-     /timeline/<id>, /events?cam=, /segment/<path> (one box: a list; a
-     cluster: {segments, unreachable, note}, each span naming its server). -->
+     same page. With media the page adds the timeline, the player, the
+     events — as ticks on the timeline and as a list under it, from every
+     subsystem, coloured by subsystem, each click seeking the player; as a
+     live feed beside the live picture, polled while watching; and as a
+     Mark button, the operator's own event — /timeline/<id>, /events?cam=,
+     /segment/<path>, /marks (one box: a list; a cluster: {segments,
+     unreachable, note}, each span naming its server; the events reply's
+     `state` names a resource that did not answer). -->
 <!--
 NOTES — what this page is, its regions and its state (each script function is described where it is defined)
 
@@ -37,12 +42,17 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
         - `#addbox` / `#addlabel` — a collapsible "Add" section containing form `#add` with `#addfields`
       (inputs generated from the spec), a submit button, `#addnote` (how the id is made) and `#adderr`.
   - `#status` — "N workers live · M <running gauge>" from `/metrics`.
+  - `#resources` — one line per resource from `/resources`: server, live/silent, its subsystems' unit counts;
+    and what this process fronts, from `/mounts`.
 - `main`
   - `#title` — the selected unit's label, or "Pick one".
   - `#meta` — phase · worker · server · epoch · placement reason · "last known state" when stale.
         - `#media` (only when `spec.media`) — a legend (recorded / events only / fenced), `#timeline` (spans
       and ticks), `#axis` with `#t0`, `#t1` and the `#last24` / `#all` window buttons, `#note` (the
-      cluster's `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption.
+      cluster's `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption,
+      `#livefeed` (the events arriving while watching live, newest first), `#evhead` (the events heading,
+      the merge's `state` in `#evstate`, a subsystem filter `#evfilter`, the Mark form `#mark`), `#evlegend`
+      (one swatch per subsystem seen), `#events` (the list: time, kind, subsystem, server, epoch, fields).
         - form `#edit` — `#editfields` (inputs from the spec minus `enabled` and the id field), Save,
       `#toggle` (Enable/Disable, shown only if the spec has a bool `enabled`), `#del`, a reminder that
       worker/epoch/revision/phase are the controller's, and `#editerr`.
@@ -55,6 +65,9 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 - `spans` — the timeline's segments as normalised objects `{start, end, epoch, fenced, events, media,
   server}`.
 - `queue` — indexes into `spans` still to play.
+- `events` — the last `/events` reply's rows for the current unit and window; `evfilter` — the subsystem
+  shown, or "" for all; `palette` — subsystem → colour, assigned in order of first sight.
+- `live` — `{pc, session, timer, since, seen}` while watching: the feed polls `/events?from=since` every 3 s.
 
 ### Form and button handlers
 - `#add` submit — `POST /<rows>` with the form fields; on success reset, reload, select the new id; on
@@ -65,16 +78,21 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
   `DELETE /<rows>/<current>`; clears the selection and the timeline, reloads.
 - `#player.onended` — `next()`.
 - `#last24` click — window = last 24 h and reload the timeline; `#all` — no window.
+- `#events li` click — `seek(t)`: play the span holding `t` and jump the player to the offset.
+- `#mark` submit — `POST /marks {cam: current, note}`: the operator's own event, then reload the events.
+- `#evfilter` change — redraw the ticks and the list for one subsystem.
 
 ### Boot
-`loadSpec().then(() => { loadUnits(); setInterval(loadUnits, 10000); })`.
+`loadSpec().then(() => { loadUnits(); setInterval(loadUnits + loadDets + loadResources, 10000);
+setInterval(loadEvents, 5000) })` — the events refresh on their own, the way the resource's database tails.
 
 ## Routes the page uses
 - `GET /spec`, `GET /<rows>`, `GET /metrics`, `GET /where/<id>` — the platform console.
 - `POST /<rows>`, `PUT /<rows>/<id>`, `DELETE /<rows>/<id>` — the writes, always with an `Idempotency-Key`.
 - `GET /timeline/<id>?from&to`, `GET /segment/<path>[?server=]` — only when `spec.media`; registered by the
   subsystem.
-- `GET /events?from&to&cam=<id>` — the resources' event databases, merged by the console, tolerated when absent.
+- `GET /events?from&to&cam=<id>` — the resources' event databases, merged by the console, tolerated when absent;
+  `POST /marks` — the operator's event; `GET /resources`, `GET /mounts` — the read model's shape.
 
 ## Notes
 - The page never sends `worker`, `epoch`, `revision`, `phase` or `id` — the inputs are generated only from
@@ -105,7 +123,17 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
   .span.events-only { background:var(--events); top:20px; height:12px; }
   .span.fenced { opacity:.45; }
   .span.playing { outline:2px solid var(--fg); }
-  .tick { position:absolute; bottom:4px; width:1px; height:8px; background:var(--events); }
+  .tick { position:absolute; bottom:4px; width:2px; height:10px; background:var(--events); cursor:pointer; }
+  .tick.fenced { opacity:.4; }
+  #events { max-height:32vh; overflow:auto; margin-top:6px; }
+  #events li { cursor:pointer; font-size:13px; padding:3px 6px; }
+  #events li.fenced { color:var(--muted); }
+  .sw { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  #evstate { font-size:12px; color:var(--muted); } #evstate.bad { color:var(--stale); }
+  #livefeed { display:none; margin-top:6px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; max-height:18vh; overflow:auto; }
+  #livefeed .ev { padding:2px 0; } #livefeed .ev:first-child { font-weight:600; }
+  select { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--fg); }
+  #resources { color:var(--muted); font-size:12px; margin-top:8px; white-space:pre-line; }
   #axis { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
   video { width:100%; max-height:60vh; background:#000; border-radius:6px; margin-top:8px; }
   #note { color:var(--stale); }
@@ -131,6 +159,7 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
     </form>
   </details>
   <div id="status"></div>
+  <div id="resources"></div>
 </aside>
 <main>
   <h1 id="title">Pick one</h1>
@@ -142,6 +171,17 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
     <div id="note"></div>
     <video id="player" controls></video>
     <div id="playing"><small></small></div>
+    <div id="livefeed"></div>
+    <div class="row" id="evhead" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+      <strong>Events</strong><span id="evstate"></span>
+      <select id="evfilter"><option value="">every subsystem</option></select>
+      <form id="mark" style="margin:0;padding:0;border:0;display:flex;gap:6px;align-items:center">
+        <input type="text" name="note" placeholder="what you saw" style="width:14em"><button type="submit">Mark</button>
+      </form>
+      <small>observations from every subsystem, each under its own epoch; a mark is yours — click one to play it</small>
+    </div>
+    <div class="legend" id="evlegend"><small></small></div>
+    <ul id="events"></ul>
   </div>
   <div id="dets" style="display:none">
     <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Detectors</strong><small>models on this unit — the det subsystem, when the console mounts it: placed on GPU-labelled workers, its events on the timeline</small></div>
@@ -173,7 +213,11 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 // the spec has a bool field named `enabled`.
 const $ = s => document.querySelector(s);
 const fmt = t => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
-let spec = null, units = [], current = null, window_ = null, spans = [], queue = [];
+let spec = null, units = [], current = null, window_ = null, spans = [], queue = [], events = [], evfilter = '';
+// Colours per subsystem, assigned in order of first sight — the page does not know which subsystems exist.
+const PALETTE = ['#c58a1a', '#8e44ad', '#2a9d5c', '#d35400', '#16a085', '#7f8c8d'];
+const palette = {};
+const subColor = sub => palette[sub] || (palette[sub] = PALETTE[Object.keys(palette).length % PALETTE.length]);
 const ROWS = () => '/' + spec.rows;
 const label = u => u.name || (spec.id === 'numeric' ? spec.rows.replace(/s$/, '') + ' ' + u.id : String(u.id));
 const hasEnabled = () => spec.fields.some(f => f.name === 'enabled' && f.type === 'bool');
@@ -266,8 +310,7 @@ async function loadTimeline() {
   $('#note').textContent = (!Array.isArray(d) && d.note) ? d.note : '';
   spans = raw.map(s => ({ start: s.start, end: s.end, epoch: s.epoch, fenced: !!s.fenced, events: s.events || 0,
                           media: s.media ?? s.path ?? null, server: s.server || null }));
-  let events = [];
-  try { const e = await fetch(`/events?from=${from}&to=${to}&cam=${current}`); if (e.ok) events = (await e.json()).events || []; } catch (_) {}
+  await fetchEvents(from, to);
   const lo = window_ ? from : Math.min(...spans.map(s => s.start), ...events.map(e => e.t), now - 3600);
   const hi = window_ ? to : Math.max(...spans.map(s => s.end), ...events.map(e => e.t), now);
   const tl = $('#timeline'); tl.innerHTML = '';
@@ -280,13 +323,78 @@ async function loadTimeline() {
     if (s.media) el.onclick = () => play(i);
     tl.appendChild(el);
   });
-  for (const e of events) {
-    const el = document.createElement('div'); el.className = 'tick'; el.style.left = x(e.t) + '%';
-    el.title = `${fmt(e.t)} · ${e.kind}${e.subsystem ? ' (' + e.subsystem + ')' : ''}${e.note ? ': ' + e.note : ''}`;
-    tl.appendChild(el);
-  }
+  tl.dataset.lo = lo; tl.dataset.hi = hi;
+  drawEvents();
   $('#t0').textContent = fmt(lo); $('#t1').textContent = fmt(hi);
 }
+
+// -- events: the resources' databases, merged by the console; the page only draws --------------------
+// `GET /events?from&to&cam=<current>`: keeps the rows in `events`, shows the merge's `state` (red unless
+// exactly "live" — a resource that did not answer is named, and the list is honest about being short),
+// and rebuilds the subsystem filter and the legend from the subsystems seen.
+async function fetchEvents(from, to) {
+  events = [];
+  try {
+    const r = await fetch(`/events?from=${from}&to=${to}&cam=${encodeURIComponent(current)}`);
+    if (r.ok) { const d = await r.json(); events = d.events || []; $('#evstate').textContent = d.state || ''; $('#evstate').className = d.state === 'live' ? '' : 'bad'; }
+    else { $('#evstate').textContent = `no events: ${r.status}`; $('#evstate').className = 'bad'; }
+  } catch (_) { $('#evstate').textContent = 'no events'; $('#evstate').className = 'bad'; }
+  const subs = [...new Set(events.map(e => e.subsystem))].sort();
+  const sel = $('#evfilter'); const keep = evfilter;
+  sel.innerHTML = '<option value="">every subsystem</option>' + subs.map(s => `<option value="${s}">${s}</option>`).join('');
+  sel.value = subs.includes(keep) ? keep : ''; evfilter = sel.value;
+  $('#evlegend small').innerHTML = subs.map(s => `<span class="sw" style="background:${subColor(s)}"></span>${s} (${events.filter(e => e.subsystem === s).length})`).join(' ');
+}
+// Re-fetches the events for the current window and redraws ticks and list — every 5 s while a unit is
+// selected, so a detector's line crossed a moment ago is on the timeline within one tail of the resource.
+async function loadEvents() {
+  if (!current || !spec.media) return;
+  const [from, to] = window_ || [0, 1e12];
+  await fetchEvents(from, to);
+  drawEvents();
+}
+// The ticks (one per event, coloured by subsystem, faded when fenced, click to seek) and the list under
+// the timeline: time · kind · subsystem · server · epoch (fenced) · the event's own fields (a mark's note
+// and user, a detection's score…). Filtered by `evfilter`.
+function drawEvents() {
+  const tl = $('#timeline'); const lo = Number(tl.dataset.lo), hi = Number(tl.dataset.hi);
+  const x = t => 100 * (t - lo) / Math.max(1, hi - lo);
+  for (const el of [...tl.querySelectorAll('.tick')]) el.remove();
+  const shown = events.filter(e => !evfilter || e.subsystem === evfilter);
+  for (const e of shown) {
+    const el = document.createElement('div'); el.className = `tick ${e.fenced ? 'fenced' : ''}`; el.style.left = x(e.t) + '%';
+    el.style.background = subColor(e.subsystem);
+    el.title = `${fmt(e.t)} · ${e.kind} (${e.subsystem})${e.note ? ': ' + e.note : ''}`;
+    el.onclick = () => seek(e.t);
+    tl.appendChild(el);
+  }
+  const ul = $('#events'); ul.innerHTML = '';
+  for (const e of [...shown].reverse()) {
+    const li = document.createElement('li'); li.className = e.fenced ? 'fenced' : '';
+    const extra = Object.entries(e).filter(([k]) => !['subsystem', 'unit', 'cam', 'epoch', 't', 'kind', 'server', 'bucket', 'fenced'].includes(k))
+                        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+    li.innerHTML = `<span><span class="sw" style="background:${subColor(e.subsystem)}"></span>${fmt(e.t)} <strong>${e.kind}</strong> <small>${e.subsystem}/${e.unit}</small></span>` +
+                   `<small>${e.server || ''} · epoch ${e.epoch}${e.fenced ? ' (fenced)' : ''}${extra ? ' · ' + extra : ''}</small>`;
+    li.onclick = () => seek(e.t);
+    ul.appendChild(li);
+  }
+}
+// Play the recorded span that holds `t` and jump the player to the offset; an event on a span that was
+// watched but not recorded has nothing to play, and the caption says so.
+function seek(t) {
+  const i = spans.findIndex(s => s.media && s.start <= t && t < s.end);
+  if (i < 0) { $('#playing small').textContent = `${fmt(t)} · not recorded at that moment`; return; }
+  play(i);
+  const v = $('#player');
+  v.addEventListener('loadedmetadata', () => { v.currentTime = Math.max(0, t - spans[i].start); }, { once: true });
+}
+$('#evfilter').onchange = e => { evfilter = e.target.value; drawEvents(); };
+$('#mark').onsubmit = async e => {
+  e.preventDefault();
+  const note = e.target.elements.note.value;
+  try { await send('POST', '/marks', { cam: current, note }); e.target.reset(); setTimeout(loadEvents, 3500); }   // the resource's next tail
+  catch (err) { $('#evstate').textContent = 'mark refused: ' + err.message; $('#evstate').className = 'bad'; }
+};
 
 // -- writes: through the controller, with an Idempotency-Key per attempt, so a retried click is one unit
 // A fresh UUID (or a random string) per request: the `Idempotency-Key`.
@@ -378,7 +486,7 @@ $('#player').onended = next;
 // fan-out unit on the first viewer, the live controller places it on a gateway, the console proxies the
 // offer there and the gateway answers. Media then flows gateway → browser; the console and the worker
 // carry none of it. A 503 means "not placed yet" — retry a few times, then say so.
-let live = null;                                                      // {pc, session} while watching
+let live = null;                                                      // {pc, session, timer, since, seen} while watching
 async function startLive() {
   stopLive();
   const pc = new RTCPeerConnection();
@@ -394,15 +502,38 @@ async function startLive() {
   }
   if (r.status !== 201) { let d = {}; try { d = await r.json(); } catch (_) {} $('#playing small').textContent = 'live refused: ' + (d.detail || d.error || r.status); pc.close(); return; }
   await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
-  live = { pc, session: r.headers.get('Location') };
+  live = { pc, session: r.headers.get('Location'), since: Date.now() / 1000 - 30, seen: new Set(), timer: null };
   [...$('#timeline').children].forEach(el => el.classList.remove('playing'));
   $('#playing small').textContent = `live · via ${new URLSearchParams(live.session.split('?')[1]).get('gateway')}`;
+  const feed = $('#livefeed'); feed.style.display = 'block'; feed.innerHTML = '<small>live events — what every subsystem observes on this unit while you watch</small>';
+  live.timer = setInterval(pollLive, 3000); pollLive();
+}
+// The live feed: while watching, `GET /events?from=<since>&cam=<current>` every 3 s (the resource's tail
+// interval) and prepend what is new — a detector's crossing, a mark, the worker's `silent` — newest first,
+// the last 30 kept. The picture comes from the gateway; the events come from the resource; the page joins
+// them by time and nothing else.
+async function pollLive() {
+  if (!live) return;
+  let d;
+  try { const r = await fetch(`/events?from=${live.since}&to=1e12&cam=${encodeURIComponent(current)}`); if (!r.ok) return; d = await r.json(); } catch (_) { return; }
+  const feed = $('#livefeed');
+  for (const e of (d.events || []).sort((a, b) => a.t - b.t)) {
+    const k = `${e.server}|${e.bucket}|${e.t}|${e.kind}`; if (live.seen.has(k)) continue; live.seen.add(k);
+    const el = document.createElement('div'); el.className = 'ev';
+    el.innerHTML = `<span class="sw" style="background:${subColor(e.subsystem)}"></span>${fmt(e.t).slice(11)} <strong>${e.kind}</strong> <small>${e.subsystem}${e.note ? ' · ' + e.note : ''}${e.score != null ? ' · ' + e.score : ''}${e.fenced ? ' · fenced' : ''}</small>`;
+    feed.insertBefore(el, feed.children[1] || null);
+    while (feed.children.length > 31) feed.removeChild(feed.lastChild);
+    live.since = Math.max(live.since, e.t - 1);
+  }
+  if (d.state && d.state !== 'live') feed.firstChild.textContent = `live events — ${d.state}`;
 }
 function stopLive() {
   if (!live) return;
   fetch(live.session, { method: 'DELETE' }).catch(() => {});        // the viewer hangs up; the gateway drops the peer
+  clearInterval(live.timer);
   live.pc.close(); live = null;
   const v = $('#player'); v.srcObject = null;
+  $('#livefeed').style.display = 'none';
 }
 $('#live').onclick = () => { if (current) startLive(); };
 
@@ -435,8 +566,25 @@ $('#detadd').onsubmit = async e => {
   try { await send('POST', '/det/units', { name: `${current}-${f.kind}`, cam: String(current), kind: f.kind, params: f.params || '' }); e.target.reset(); loadDets(); }
   catch (err) { $('#deterr').textContent = 'refused: ' + err.message; }
 };
+// -- the read model's shape: the resources this console sees, and what this process fronts -----------
+// `GET /resources` → one line per server: live/silent, and its subsystems' unit counts (what the resource's
+// database holds); `GET /mounts` → the subsystems this process fronts under their names.
+async function loadResources() {
+  const lines = [];
+  try {
+    const rs = await (await fetch('/resources')).json();
+    for (const [srv, hb] of Object.entries(rs)) {
+      const units = Object.entries(hb.units || {}).map(([s, u]) => `${s} ${u.length}`).join(', ');
+      const mirrors = Object.keys(hb.mirrors || {}).length ? ` · copies of ${Object.keys(hb.mirrors).join(', ')}` : '';
+      lines.push(`resource ${srv}: ${hb.state}${units ? ' · ' + units : ''}${mirrors}`);
+    }
+    if (!lines.length) lines.push('no resource heartbeats yet');
+  } catch (_) {}
+  try { const m = await (await fetch('/mounts')).json(); const names = Object.keys(m.mounts || {}); if (names.length) lines.push(`fronts ${m.root} at / and ${names.map(n => n + ' at /' + n + '/').join(', ')}`); } catch (_) {}
+  $('#resources').textContent = lines.join('\n');
+}
 window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
-loadSpec().then(() => { loadUnits(); setInterval(() => { loadUnits(); loadDets(); }, 10000); });
+loadSpec().then(() => { loadUnits(); loadResources(); setInterval(() => { loadUnits(); loadDets(); loadResources(); }, 10000); setInterval(loadEvents, 5000); });
 </script>

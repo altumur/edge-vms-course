@@ -77,7 +77,7 @@ GET /det/units       -> the det subsystem's rows with the read model; POST /det/
 
 ## Step 6 — The ticks on the timeline come from somewhere else
 
-The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, and why none of that is a subsystem is [Lesson 9](09-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
+The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, why none of that is a subsystem — and the page's events list, live feed and Mark button — are [Lesson 9](09-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
 
 **Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 10) serving the page; a camera added from the page, edited, disabled and deleted; a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
 

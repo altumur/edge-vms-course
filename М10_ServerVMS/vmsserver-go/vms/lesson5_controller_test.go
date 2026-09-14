@@ -373,7 +373,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 			t.Fatal(want)
 		}
 	}
-	if body := strings.SplitN(string(page), "-->", 2)[1]; strings.Contains(strings.ToLower(body), "camera") { // the page is the spec's, not the VMS's
+	if body := string(page)[strings.LastIndex(string(page), "-->"):]; strings.Contains(strings.ToLower(body), "camera") { // the page (after its comments) is the spec's, not the VMS's
 		t.Fatal("the page names a camera")
 	}
 	_, spec, _ := call(t, "GET", base+"/spec", nil, nil) // what the page reads first: the YAML, not code
