@@ -179,7 +179,7 @@ IDLE ──▶ STARTING ──▶ RUNNING ──▶ FAILED ──▶ (backoff) �
 
 This lives in a `CameraPipeline` object, one per camera, driven by the loop from Lesson 6 — **not** in a coroutine per camera, for the reasons that lesson gave.
 
-The backoff you wrote in Lesson 6 needs no changes. It was tested against a fake actuator that returned `False`; here `False` means `set_state` returned `Gst.StateChangeReturn.FAILURE` or the bus produced an error before `RUNNING`. **That the policy did not have to change is the point of having built it separately** — and it is worth noticing explicitly, because it is the same property that lets Lesson 9 argue the whole thing could be rewritten in Go without redesigning anything.
+The backoff you wrote in Lesson 6 needs no changes. It was tested against a fake actuator that returned `False`; here `False` means `set_state` returned `Gst.StateChangeReturn.FAILURE` or the bus produced an error before `RUNNING`. **That the policy did not have to change is the point of having built it separately** — and it is worth noticing explicitly, because it is the same property that lets М10's Go port run this loop's tests unchanged: the risky part was the design, and the design is language-independent.
 
 ## Step 7 — The spool becomes the archive
 

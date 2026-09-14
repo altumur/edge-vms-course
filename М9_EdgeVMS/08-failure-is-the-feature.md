@@ -256,4 +256,4 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 
 The recorder now converges, and keeps converging through the four failures that actually happen. Nobody can see any of it — the only interface is `psql`.
 
-**Lesson 9 builds the console**, with a login against Lesson 5's `operators` table, and a status vocabulary that keeps *positions* apart from *reasons*. It also closes the module by asking the uncomfortable question: now that the design is proven, which parts of it should not stay in Python — and the answer is more interesting than "the slow parts", because the reconcile loop you wrote by hand turns out to be the part that survives.
+**Lesson 9 builds the console**, with a login against Lesson 5's `operators` table, and a status vocabulary that keeps *positions* apart from *reasons*. It closes the module honestly: the console is an API, and the page that lists cameras, draws a timeline and plays footage waits for М10, when the archive is on the box.
