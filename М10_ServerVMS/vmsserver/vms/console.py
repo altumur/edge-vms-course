@@ -49,10 +49,16 @@ import os
 from http.server import ThreadingHTTPServer
 
 import json
+import logging
+import socket
+import threading
+import time
 import urllib.error
 import urllib.request
 
 from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from psimplatform.eventindex import EventIndex
+from psimplatform.events import buckets_under, read_bucket, subsystems_under
 from psimplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
@@ -75,6 +81,67 @@ from .controller import VmsController
 #   here, so on one box no span is marked `fenced` by this route; the `Manifest.timeline` fencing is
 #   exercised directly in `test_lesson3_archive.py`.
 # - anything else — `None`, so the console answers 404.
+class LocalArchiveReader:
+    """The platform's `EventIndex` reads resources through a reader — HTTP in М11, a
+    directory here: the one resource a box has is its own archive."""
+
+    def __init__(self, root: str, bucket_seconds: int = 600):
+        self.root, self.bucket_seconds = root, bucket_seconds
+
+    def buckets(self, url, sub, unit):
+        return buckets_under(self.root, sub, unit, self.bucket_seconds)
+
+    def events(self, url, b):
+        return read_bucket(os.path.join(self.root, b.path))
+
+    def mirrored(self, url, server):
+        return []                                                         # one box has no peer to mirror to
+
+    def mirrored_events(self, url, server, b):
+        return []
+
+
+class LocalIndex:
+    """The eventindex on one box: the same class М11 runs as a job beside the
+    console, over the local archive instead of the resources' HTTP. Not a
+    subsystem — a stateless cache with nothing to place — rebuilt on start and
+    tailed every few seconds, so a detector's event is on the timeline within
+    one tail. `resources()` stands in for the resource heartbeat the box does
+    not publish: this server, this archive, every unit under it."""
+
+    def __init__(self, archive_root: str, wall=time.time, server: str | None = None, interval: float = 3.0):
+        self.root, self.wall, self.interval = archive_root, wall, interval
+        self.server = server or socket.gethostname()
+        self.index = EventIndex(LocalArchiveReader(archive_root), wall=wall)
+        self._stop = threading.Event()
+
+    def resources(self) -> dict:
+        return {self.server: {"server": self.server, "ts": self.wall(), "url": f"file://{self.root}", "units": subsystems_under(self.root)}}
+
+    def tail(self) -> dict:
+        return self.index.tail(self.resources())
+
+    def rebuild(self) -> dict:
+        return self.index.rebuild(self.resources())
+
+    def start(self) -> "LocalIndex":
+        self.rebuild()
+        def loop():
+            while not self._stop.wait(self.interval):
+                try:
+                    self.tail()
+                except Exception:                                         # noqa: BLE001
+                    logging.getLogger("vms.console").exception("index tail failed")
+        threading.Thread(target=loop, daemon=True).start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def query(self, *a, **kw):
+        return self.index.query(*a, **kw)
+
+
 class LiveFront:
     """The console's side of live video: the WHEP door. `POST /whep/<cam>`
     creates the fan-out unit `live/streams/<cam>` if nobody is watching yet
@@ -182,23 +249,23 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
 # event log under `console/<hostname:pid>/e1/` on this server's resource, and `/spec` reports `media: true`
 # so the page draws a timeline and a player. Without one: no marks (503) and no media.
 def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None, live_ctl: SpecController | None = None,
-                 mounts: dict[str, SpecController] | None = None) -> Mount:
+                 mounts: dict[str, SpecController] | None = None, index=None) -> Mount:
     """One console process for the box: the VMS at `/` (the page, /cameras, the media routes, the WHEP door),
     and every other subsystem the console fronts under its name — `/live/…`, `/det/…` — each a SpecConsole over
     that subsystem's spec with the console's token. `live_ctl` opens the WHEP door and is mounted at /live;
     `mounts` adds the rest by name."""
     live = LiveFront(ctl, live_ctl) if live_ctl is not None else None
-    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None)
+    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None, index=index)
     m = Mount(root)
     if live_ctl is not None:
-        m.mount("live", SpecConsole(live_ctl, wall=wall))
+        m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))
     for name, c in (mounts or {}).items():
-        m.mount(name, SpecConsole(c, wall=wall))
+        m.mount(name, SpecConsole(c, wall=wall, index=index))            # every mount answers /events from the one index
     return m
 
 
 # `make_console(...).serve(host, port)`: the server in a daemon thread, returned so the caller can
 # `shutdown()` it. `__main__.console` calls it with `$CONSOLE_HOST:$CONSOLE_PORT`; the tests with `port=0`.
 def serve(ctl: VmsController, archive: ArchiveResource | None, host: str = "127.0.0.1", port: int = 8080, wall=None,
-          live_ctl: SpecController | None = None, mounts: dict[str, SpecController] | None = None) -> ThreadingHTTPServer:
-    return make_console(ctl, archive, wall, live_ctl, mounts).serve(host, port)
+          live_ctl: SpecController | None = None, mounts: dict[str, SpecController] | None = None, index=None) -> ThreadingHTTPServer:
+    return make_console(ctl, archive, wall, live_ctl, mounts, index).serve(host, port)

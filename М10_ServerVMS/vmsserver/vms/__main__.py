@@ -215,7 +215,7 @@ def console() -> None:
     """The screen and the API: its own process, count as many as you like, a
     token for the operator's rows and nothing else."""
     from .config import SPEC
-    from .console import serve
+    from .console import LocalIndex, serve
     from psimplatform.spec import SpecController
     from .config import DET_SPEC, LIVE_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
@@ -223,11 +223,12 @@ def console() -> None:
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
+    index = LocalIndex(archive.root).start()                              # the eventindex on one box: every subsystem's buckets, tailed
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
-                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)})
+                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)}, index=index)
     logging.info("console on %s", srv.server_address)
     stop.wait()
-    srv.shutdown()
+    index.stop(); srv.shutdown()
 
 
 # The archive policy pass, run by `vms-archive-retain.timer` as a oneshot (`vms-archive-retain.container`):

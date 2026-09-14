@@ -32,7 +32,7 @@ The third subsystem answers the question the other two leave open: what does a s
 
 ## Step 2 — The console fronts it; the page shows it
 
-Lesson 6, Step 5 built the mount for exactly this. `python3 -m vms console` mounts `det` beside `live`: `/det/spec`, `/det/units` with the read model from the detector workers' heartbeats, `/det/where/<name>`, `/det/unplaceable`, `/det/metrics` — `det_worker_headroom` being what the autoscaler moves `N` on. The console's token carries `det`'s operator rows, so the camera's page can add a model to this camera (`POST /det/units {name: "7-linecross", cam, kind, params}`), list this camera's models with the worker's word on each — *running · 2 events · d-2*, *waiting · camera not recording*, *unsupported* — and enable, disable or delete them through `/det/units/<name>`. Nobody opens a detector console; the person's world is cameras.
+Lesson 6, Step 5 built the mount for exactly this. `python3 -m vms console` mounts `det` beside `live`: `/det/spec`, `/det/units` with the read model from the detector workers' heartbeats, `/det/where/<name>`, `/det/unplaceable`, `/det/metrics` — `det_worker_headroom` being what the autoscaler moves `N` on. The console's token carries `det`'s operator rows, so the camera's page can add a model to this camera (`POST /det/units {name: "7-linecross", cam, kind, params}`), list this camera's models with the worker's word on each — *running · 2 events · d-2*, *waiting · camera not recording*, *unsupported* — and enable, disable or delete them through `/det/units/<name>`. Nobody opens a detector console; the person's world is cameras. And the events arrive where the person looks: the console's index (Lesson 6, Step 6) tails `det/7-linecross/e1/…` like any bucket, so a line crossed shows as an amber tick on the camera's timeline — `linecross (det)` — beside the worker's `silent` and the operator's `mark`, and fenced the moment another detector instance takes the unit's epoch.
 
 ```
 POST /det/units {name: 1-linecross, cam: 1, kind: linecross}   -> 201 {labels: [gpu], worker: null}
@@ -44,7 +44,7 @@ GET  /det/unplaceable -> [{id: 1-lpr, labels: [gpu], workers_live: 1}]        no
 PUT  /det/units/1-linecross {enabled: false}  -> the model stops; the row says pending; the epoch is kept
 ```
 
-**Deliverable:** a line-crossing model added to the camera from the page, placed on the worker with a GPU label, its events under `det/1-linecross/e1/` on the resource beside the VMS's; a second worker without the label never chosen; the model waiting, not failed, while the camera is down; `test_lesson8_det.py` green.
+**Deliverable:** a line-crossing model added to the camera from the page, placed on the worker with a GPU label, its events under `det/1-linecross/e1/` on the resource beside the VMS's and on the camera's timeline within one tail; a second worker without the label never chosen; the model waiting, not failed, while the camera is down; `test_lesson8_det.py` green.
 
 ---
 

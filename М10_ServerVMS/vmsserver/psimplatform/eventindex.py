@@ -105,7 +105,7 @@ class EventIndex:
         self.reader, self.wall, self.lost_after = reader, wall, lost_after
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS seen   (server TEXT, path TEXT, PRIMARY KEY (server, path));
+            CREATE TABLE IF NOT EXISTS seen   (server TEXT, path TEXT, n INTEGER DEFAULT 0, PRIMARY KEY (server, path));
             CREATE TABLE IF NOT EXISTS events (subsystem TEXT, unit TEXT, cam INTEGER, epoch INTEGER, t REAL, kind TEXT,
                                                server TEXT, path TEXT, fields TEXT);
             CREATE INDEX IF NOT EXISTS events_cam_t ON events (cam, t);
@@ -148,17 +148,19 @@ class EventIndex:
                 for sub, units in hb.get("units", {}).items():
                     for unit in units:
                         for b in self.reader.buckets(hb["url"], sub, unit):
-                            if b.events == 0 or self.db.execute("SELECT 1 FROM seen WHERE server=? AND path=?", (server, b.path)).fetchone():
+                            row = self.db.execute("SELECT n FROM seen WHERE server=? AND path=?", (server, b.path)).fetchone()
+                            have = row[0] if row else 0
+                            if b.events <= have:                                  # nothing new in this bucket (an open one grows; a closed one never)
                                 continue
                             rows = []
-                            for e in self.reader.events(hb["url"], b):
+                            for e in self.reader.events(hb["url"], b)[have:]:     # buckets are append-only: the lines past what we hold
                                 cam = e.get("cam", int(unit) if unit.isdigit() else None)     # a numeric unit is its own `cam`; others may name one
                                 rows.append((sub, unit, cam, b.epoch, float(e["t"]), e["kind"], server, b.path,
                                              json.dumps({k: v for k, v in e.items() if k not in ("t", "kind", "cam")})))
                             with self.db:
                                 self.db.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?)", rows)
-                                self.db.execute("INSERT INTO seen VALUES (?,?)", (server, b.path))
-                            added += len(rows); self.indexed_segments += 1
+                                self.db.execute("INSERT OR REPLACE INTO seen VALUES (?,?,?)", (server, b.path, have + len(rows)))
+                            added += len(rows); self.indexed_segments += (0 if row else 1)
             except Exception:                          # noqa: BLE001 — fresh heartbeat, server not answering
                 unreachable.append(server)
         self.state = "live" + (f"; {', '.join(unreachable)} unreachable" if unreachable else "") \
@@ -189,7 +191,7 @@ class EventIndex:
                                      json.dumps({k: v for k, v in e.items() if k not in ("t", "kind", "cam")})))
                     with self.db:
                         self.db.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?)", rows)
-                        self.db.execute("INSERT INTO seen VALUES (?,?)", (server, b.path))
+                        self.db.execute("INSERT OR REPLACE INTO seen VALUES (?,?,?)", (server, b.path, len(rows)))
                     self._last_mirror_added += len(rows); self.indexed_segments += 1
             except Exception:                        # noqa: BLE001 — that peer is not answering either
                 continue

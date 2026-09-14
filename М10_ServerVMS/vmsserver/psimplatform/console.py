@@ -420,7 +420,7 @@ class SpecConsole:
             if path == "/events":
                 if con.index is None:
                     return h._send(503, {"error": "no eventindex behind this console"})
-                cur = {(spec.name, p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list(spec.name + "/epoch/")}
+                cur = {(p.split("/")[0], p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list("") if "/epoch/" in p}   # every subsystem's epochs: the timeline shows them all
                 cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
                 return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
                                                     int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
