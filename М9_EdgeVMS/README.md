@@ -67,7 +67,7 @@ The multi-node half of this module moved to [М11](../М11_ClusterVMS/module-des
 
 ## The artifacts, whole
 
-[`edgevms/`](./edgevms/README.md) assembles what the four lessons leave on the box: `bench/build-disk.sh` builds the A/B disk with everything that must be *in the image* installed before slot A is copied to B; `pki/` is the two-level CA and the three `openssl cms` proofs; `rauc/` is `system.conf`, the manifest and a bundle builder with `--broken-kernel`, `--broken-config`, `--rogue` and `--wrong-hardware` for Lessons 2 and 3; `boot/grub.cfg` is the ORDER/OK/TRY state machine; `quadlet/` and `spool/` are Lesson 4. One thing in it is newer than the lessons: **the health check's third row is no longer a stand-in.** When М9's recorder is installed it reads `recorder_camera_silent_seconds_max` from the recorder's own `/metrics`, locally, with the uplink down — so Lesson 3's rollback decision is finally made on *is footage being written*, which is what the lesson said it had to be.
+[`edgevms/`](./edgevms/README.md) is the module's one project — the box (Lessons 1–4) and, under `edgevms/recorder/`, the recorder that runs on it (Lessons 5–9). Its first half assembles what the four lessons leave on the box: `bench/build-disk.sh` builds the A/B disk with everything that must be *in the image* installed before slot A is copied to B; `pki/` is the two-level CA and the three `openssl cms` proofs; `rauc/` is `system.conf`, the manifest and a bundle builder with `--broken-kernel`, `--broken-config`, `--rogue` and `--wrong-hardware` for Lessons 2 and 3; `boot/grub.cfg` is the ORDER/OK/TRY state machine; `quadlet/` and `spool/` are Lesson 4. One thing in it is newer than the lessons: **the health check's third row is no longer a stand-in.** When М9's recorder is installed it reads `recorder_camera_silent_seconds_max` from the recorder's own `/metrics`, locally, with the uplink down — so Lesson 3's rollback decision is finally made on *is footage being written*, which is what the lesson said it had to be.
 
 ```bash
 cd edgevms && pki/make-ca.sh && pki/verify-chain.sh && python3 spool/test_spool.py   # no VM needed
@@ -109,10 +109,10 @@ Two corrections worth knowing before you start, both found by running the thing 
 
 ### The code, whole (Lessons 5–9)
 
-[`recorder/`](./recorder/README.md) is the five lessons assembled into one runnable recorder: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, worker glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
+[`edgevms/recorder/`](./edgevms/recorder/README.md) is the five lessons assembled into one runnable recorder: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, worker glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
 
 ```bash
-cd recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
+cd edgevms/recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
 ```
 
 [`recorder-go/`](./recorder-go/README.md) is Lesson 9's rewrite argument made into a number: the reconciler in Go, the same eight tests passing, and the two controllers measured at idle — 6.0 MB against 25.7 MB, one 5.5 MB static binary against an interpreter and its packages.

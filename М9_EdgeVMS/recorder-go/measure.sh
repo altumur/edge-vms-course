@@ -1,10 +1,10 @@
 #!/bin/sh
 # М9 Lesson 9, Step 5 — the rewrite argument as a number. Runs both
 # controller baselines at idle and prints PSS, plus binary sizes.
-# Needs: go, python3, and RECORDER_PATH pointing at ../recorder.
+# Needs: go, python3, and RECORDER_PATH pointing at ../edgevms/recorder.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export RECORDER_PATH="${RECORDER_PATH:-$HERE/../recorder}"
+export RECORDER_PATH="${RECORDER_PATH:-$HERE/../edgevms/recorder}"
 cd "$HERE"
 CGO_ENABLED=0 go build -ldflags="-s -w" -o /tmp/recorder-baseline ./cmd/baseline
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o /tmp/recorder-baseline-arm64 ./cmd/baseline

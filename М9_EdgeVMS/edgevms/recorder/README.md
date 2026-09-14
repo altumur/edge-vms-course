@@ -22,7 +22,7 @@ recorder/
   tools/
     provision.py       key, operator, camera, migrate — the hand-provisioned things Lesson 5 counts
     fake_camera.py     an RTSP camera you can stall with a signal, socket held open
-  quadlet/             Lesson 5, Step 9 — postgres.container, worker.container, env example
+  (quadlet units)      Lesson 5, Step 9 — postgres.container, worker.container, worker.env.example: in ../quadlet/, beside Lesson 4's
   Containerfile
 ```
 

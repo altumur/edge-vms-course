@@ -1,9 +1,11 @@
 # EdgeVMS — the М9 artifacts, whole
 
-Lessons 1–4 assembled: the bench, the PKI, the RAUC configuration and
-bundle builder, the GRUB state machine, the health check, the Quadlet units,
-and the spool. None of this is code the recorder runs; it is the box the recorder
-runs on.
+One project, two halves. Lessons 1–4 are the box: the bench, the PKI, the
+RAUC configuration and bundle builder, the GRUB state machine, the health
+check, the Quadlet units, and the spool. Lessons 5–9 are what runs on it:
+[`recorder/`](recorder/README.md) — the migrations, the worker, the console,
+the commissioning tools and 27 tests. The Quadlet units for both live in one
+`quadlet/`, because on the box they are one `systemd`.
 
 ```
 edgevms/
@@ -30,9 +32,13 @@ edgevms/
     spool-uploader.container   L4 — the uploader as its own process
     agent.env.example      L4 — the first temporary secret, named
     check-quadlet.sh       L4 — generator --dryrun, not systemd-analyze
+    postgres.container     L5 — the recorder's database, ordered before the worker
+    worker.container       L6–9 — the worker: reconcile, pump_buses, report, retention, console; SIGTERM finalises segments
+    worker.env.example     L5 — DATABASE_URL and the rest, hand-provisioned (the stand-in М12 resolves)
   spool/
     spool.py               L4 — Spool, drain, the two signals, and the uploader main loop
     test_spool.py          L4 — the five tests, plus one for the signals
+  recorder/                L5–9 — the recorder itself: worker/, console/, migrations/, tools/, tests/ (its own README)
 ```
 
 ## The seam this closes
