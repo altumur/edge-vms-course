@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 import "encoding/json"
 

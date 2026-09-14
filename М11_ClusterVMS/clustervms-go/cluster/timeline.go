@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 // ManifestReader: how the console gets a manifest from a resource — HTTP, or a fake for tests.

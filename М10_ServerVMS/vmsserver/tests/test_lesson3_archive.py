@@ -99,7 +99,7 @@ def test_events_are_buckets_on_the_resource_recording_or_not():
     recorded span when one overlaps, fenced by the epoch, rebuilt by repair,
     retained by their own policy. No controller wrote any of it."""
     from vms.archive import event_log
-    from vmsplatform.events import parse_bucket, read_bucket
+    from psimplatform.events import parse_bucket, read_bucket
     box = Box(); res = ArchiveResource(box.spool, box.archive, wall=lambda: box.wall())
     t0 = utc("2026-09-12T10:00:00").timestamp()
     box.wall.t = t0 + 2000                                                     # the resource's clock: every bucket below is over
@@ -120,7 +120,7 @@ def test_events_are_buckets_on_the_resource_recording_or_not():
     tl = Manifest(box.archive, 7).timeline(t0 + 600, t0 + 1200, current_epoch=4)
     assert [(x["media"] is not None, x["epoch"], x["events"], x["fenced"]) for x in tl] == [(False, 3, 1, True), (True, 4, 1, False)]
     # repair rebuilds both kinds from the files; media retention is the VMS's, bucket retention the platform's
-    from vmsplatform.resource import Resource
+    from psimplatform.resource import Resource
     os.remove(Manifest(box.archive, 7).path)
     assert res.repair() == {"added": 4, "dropped": 0}
     assert res.retain(7, days=1, now=t0 + 3 * 86400) == 1 and len(Manifest(box.archive, 7).buckets()) == 3

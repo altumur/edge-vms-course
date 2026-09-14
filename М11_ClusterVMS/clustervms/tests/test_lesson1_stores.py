@@ -3,8 +3,8 @@ the cluster's fakes: the same ModifyIndex and CAS, the same ACL, the same
 base classes — nothing in vms/ notices."""
 import threading
 from cluster.variables import Conflict, FakeVariables, Forbidden
-from vmsplatform.contract import Controller, Subsystem, Worker
-from vmsplatform.epoch import next_epoch
+from psimplatform.contract import Controller, Subsystem, Worker
+from psimplatform.epoch import next_epoch
 from tests.conftest import Cluster
 
 
@@ -58,7 +58,7 @@ def test_the_object_store_on_this_cluster_is_variables():
     processes: not the volume the keep-raft-small rule was about. The contract
     is the point — nothing in vms/ knows which store it is talking to."""
     from cluster.objectstore import VariablesObjectStore
-    from vmsplatform.contract import Controller, Subsystem, Worker
+    from psimplatform.contract import Controller, Subsystem, Worker
     v = FakeVariables(); objects = VariablesObjectStore(v.as_writer("vmsworker", ["objects/*", "vms/epoch/*", "vms/slots/*"]))
     sub = Subsystem("vms"); c = Cluster()
     w = Worker(sub, "w-1", v, objects, clock=c.clock, wall=c.wall)

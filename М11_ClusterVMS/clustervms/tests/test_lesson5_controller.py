@@ -106,7 +106,7 @@ def test_the_console_over_http():
     st, out = call("POST", "/marks", {"cam": 1, "note": "check the gate"}, {"Idempotency-Key": "m1", "X-User": "murat"})
     m = json.loads(out); assert st == 201 and m["bucket"].startswith(f"console/{m['unit']}/e1/")
     from cluster.resource import cluster_resource, resources_seen
-    from vmsplatform.eventindex import EventIndex
+    from psimplatform.eventindex import EventIndex
     from tests.test_lesson3_events import DirReader
     cluster_resource(c.servers["srv-a"].resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall).heartbeat()
     idx = EventIndex(DirReader(c), wall=c.wall); idx.rebuild(resources_seen(c.objects))
@@ -114,7 +114,7 @@ def test_the_console_over_http():
     assert [(e["subsystem"], e["kind"], e["user"]) for e in ev] == [("console", "mark", "murat")]
     # the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
     assert "<video" in call("GET", "/")[1] and "/segment/" in call("GET", "/")[1]
-    from vmsplatform.resource import serve as serve_resource
+    from psimplatform.resource import serve as serve_resource
     from cluster.resource import vms_routes
     from tests.test_lesson3_resources import _segment
     _segment(c.servers["srv-a"], 1, 1, c.wall() - 600, size=256)

@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"clustervms/cluster"
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 func threeWorkers(t *testing.T, c *Cluster) map[string]*cluster.ClusterWorker {

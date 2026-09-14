@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"clustervms/cluster"
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 func TestAnEditDuringTheFailoverIsSimplyThere(t *testing.T) {

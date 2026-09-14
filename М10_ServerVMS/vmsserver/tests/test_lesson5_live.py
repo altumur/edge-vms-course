@@ -7,8 +7,8 @@ import threading
 import urllib.error
 import urllib.request
 
-from vmsplatform.spec import SpecController
-from vmsplatform.variables import Forbidden
+from psimplatform.spec import SpecController
+from psimplatform.variables import Forbidden
 from vms.config import LIVE_SPEC, SPEC
 from vms.controller import VmsController
 from vms.gateway import LiveGateway

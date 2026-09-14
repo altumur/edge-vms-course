@@ -6,10 +6,10 @@ lost; a detector's event about camera 7 found by a field, not by living in
 camera 7's bucket."""
 import os
 from datetime import datetime, timezone
-from vmsplatform.eventindex import EventIndex
+from psimplatform.eventindex import EventIndex
 from cluster.resource import cluster_resource, peers_of, resources_seen
 from vms.archive import Manifest, event_log, segment_path
-from vmsplatform.events import EventLog, buckets_under, read_bucket, subsystems_under
+from psimplatform.events import EventLog, buckets_under, read_bucket, subsystems_under
 from tests.conftest import Cluster
 
 B = 600
@@ -26,7 +26,7 @@ class DirReader:
     def events(self, url, b): return read_bucket(os.path.join(self._srv(url).archive, b.path))
     # the mirror, as the index reads it
     def mirrored(self, url, server):
-        from vmsplatform.resource import mirrored_buckets
+        from psimplatform.resource import mirrored_buckets
         return mirrored_buckets(self._srv(url).archive, server, B)
     def mirrored_events(self, url, server, b): return read_bucket(os.path.join(self._srv(url).archive, ".mirror", server, b.path))
     # the mirror, as a resource writes and restores it (PeerClient's three calls)
@@ -127,7 +127,7 @@ def test_the_events_knob_is_a_peer_copy_and_the_owner_restores():
     resource copied its CLOSED buckets to the next live resource after it, and
     a fresh index answers completely from the peer, saying so. Back with an
     empty disk, the owner pulls its buckets home; nobody else ever writes them."""
-    from vmsplatform.resource import MIRROR_KEY, mirrored_buckets
+    from psimplatform.resource import MIRROR_KEY, mirrored_buckets
     import shutil
     assert peers_of("srv-a", ["srv-a", "srv-b", "srv-c"], 1) == ["srv-b"] and peers_of("srv-c", ["srv-a", "srv-b", "srv-c"], 1) == ["srv-a"]
     assert peers_of("srv-b", ["srv-a", "srv-b", "srv-c"], 2) == ["srv-c", "srv-a"] and peers_of("srv-a", ["srv-a"], 1) == []

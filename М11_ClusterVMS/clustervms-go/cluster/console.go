@@ -10,7 +10,7 @@ package cluster
 //
 // The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 // /resources, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
-// vmsplatform.SpecConsole reading vms.subsystem.yaml. A console for the
+// psimplatform.SpecConsole reading vms.subsystem.yaml. A console for the
 // counter subsystem is the same type with a different YAML and no extra.
 
 import (
@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 // ConsoleOptions: the pieces a cluster console may have beside its controller.

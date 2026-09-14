@@ -1,6 +1,6 @@
 # resource.py — the VMS's part of the platform's `resource` job: `ArchivePolicy` registered as the `vms` hook, `/manifest` and `/segment` plugged in
 
-**Role in the module.** Lesson 3. On a cluster the resource is the platform's `vmsplatform.resource.Resource` (see `../../../М10_ServerVMS/vmsserver/vmsplatform/resource.py.md`): a `system` job on every server with `meta.archive`, serving buckets, taking mirrors from peers, retaining every subsystem's buckets by that subsystem's retention row, heartbeating as `platform/resources/<server>`. Nothing about mirrors, heartbeats or peers is the VMS's — the docstring insists on the names: `platform/resources/<server>/heartbeat`, `platform/mirror`, job `resource`. What this module adds is the VMS's registration: М10's `ArchivePolicy` (repair manifests, close buckets into them, retain media per camera) as the `vms` hook, and two read routes on the resource's HTTP server for the console's timeline and player. Used by `__main__.resource`, `console.py` indirectly (through the resource's URL), and the Lesson 3/5 tests.
+**Role in the module.** Lesson 3. On a cluster the resource is the platform's `psimplatform.resource.Resource` (see `../../../М10_ServerVMS/vmsserver/psimplatform/resource.py.md`): a `system` job on every server with `meta.archive`, serving buckets, taking mirrors from peers, retaining every subsystem's buckets by that subsystem's retention row, heartbeating as `platform/resources/<server>`. Nothing about mirrors, heartbeats or peers is the VMS's — the docstring insists on the names: `platform/resources/<server>/heartbeat`, `platform/mirror`, job `resource`. What this module adds is the VMS's registration: М10's `ArchivePolicy` (repair manifests, close buckets into them, retain media per camera) as the `vms` hook, and two read routes on the resource's HTTP server for the console's timeline and player. Used by `__main__.resource`, `console.py` indirectly (through the resource's URL), and the Lesson 3/5 tests.
 
 ## Module-level names
 - `ArchivePolicy`, `ArchiveResource`, `Manifest` — М10's archive (`vms/archive.py.md`); re-exported.
@@ -9,7 +9,7 @@
 ## Functions
 
 ### `vms_routes(archive) -> extra`
-The VMS's reads on the resource, in the `extra(path, headers) -> (status, bytes[, headers]) | None` shape `vmsplatform.resource.serve` consults after its own `/buckets`, `/mirrored`, `/events` routes. `root = archive.root`.
+The VMS's reads on the resource, in the `extra(path, headers) -> (status, bytes[, headers]) | None` shape `psimplatform.resource.serve` consults after its own `/buckets`, `/mirrored`, `/events` routes. `root = archive.root`.
 - `GET /manifest/<cam>` — `200` and the camera's manifest lines joined verbatim (`Manifest(root, cam)._lines()`, all lines — media and event-bucket entries alike, none filtered). This is what `timeline.ManifestReader.read` fetches.
 - `GET /segment/<path>` — the bytes of one segment under the archive root, `Range` honoured: `..` or a missing file → `404`; a `Range: bytes=a-b` header (either end optional) → `206` with `Content-Range: bytes a-b/size` and exactly `b-a+1` bytes; no Range → `200` and the whole file. The console's `/segment/<path>?server=` proxies this and adds `Content-Type`/`Accept-Ranges`.
 - anything else → `None` (the platform's 404).

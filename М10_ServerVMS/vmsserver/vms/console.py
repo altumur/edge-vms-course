@@ -5,7 +5,7 @@ from the VMS spec, plus the two routes only a VMS has (the bytes):
     GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
 
 Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the
-POST/PUT/DELETE of a camera — is `vmsplatform.console.SpecConsole` reading
+POST/PUT/DELETE of a camera — is `psimplatform.console.SpecConsole` reading
 `vms.subsystem.yaml`; nothing here knows what a camera's fields are. Its own
 process (`python3 -m vms console`), with its own token: the operator's rows —
 cameras, next_id, retention — and never placement.
@@ -18,8 +18,8 @@ cameras, next_id, retention — and never placement.
 # only a VMS has
 #
 # **Role in the module.** Lesson 5. Everything an operator's console needs to list, create, edit and delete
-# cameras, show where they run, export metrics and take marks is `vmsplatform.console.SpecConsole` reading
-# `vms.subsystem.yaml` (see `vmsplatform/console.py`); nothing in this file knows what a camera's fields
+# cameras, show where they run, export metrics and take marks is `psimplatform.console.SpecConsole` reading
+# `vms.subsystem.yaml` (see `psimplatform/console.py`); nothing in this file knows what a camera's fields
 # are. What the VMS adds is the bytes: `GET /timeline/<id>?from&to` (segments and event buckets from this
 # box's archive manifest, fenced ones marked) and `GET /segment/<path>` (one promoted segment, `Range`
 # honoured, for the page's `<video>`). They are *registered* as the console's `extra` route function, not
@@ -28,7 +28,7 @@ cameras, next_id, retention — and never placement.
 # Depends on `archive.py` (`ArchiveResource`, `Manifest`) and `controller.py`.
 #
 # ## Module-level names
-# - `PAGE`, `send_file` — re-exported from `vmsplatform.console` (`noqa: F401`) for М11, which serves the
+# - `PAGE`, `send_file` — re-exported from `psimplatform.console` (`noqa: F401`) for М11, which serves the
 #   same page and the same ranged file replies from a Nomad job.
 #
 # ## Notes
@@ -52,8 +52,8 @@ import json
 import urllib.error
 import urllib.request
 
-from vmsplatform.console import PAGE, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
-from vmsplatform.spec import Refused, SpecController
+from psimplatform.console import PAGE, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from psimplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
 from .controller import VmsController

@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 // The event log — a platform piece. What the platform knows about events:
 //

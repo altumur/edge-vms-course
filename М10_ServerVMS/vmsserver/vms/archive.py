@@ -4,7 +4,7 @@
     <archive>/vms/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media
     <archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl
                                                    the camera's EVENT BUCKETS — the platform's event log
-                                                   (vmsplatform.events), written by the worker holding the
+                                                   (psimplatform.events), written by the worker holding the
                                                    camera's epoch, whether or not it is recording
     <archive>/vms/<cam>/manifest.jsonl             one line per media segment and one per closed event bucket:
                                                    the index that lives beside the footage
@@ -24,7 +24,7 @@ The manifest is append-only and rebuildable from the files.
 
 Retention is a policy, per kind. Media is the VMS's: `retain()` after
 `retention_days`, files first then lines. Buckets are the PLATFORM's
-(vmsplatform.resource): the controller writes `vms/retention/<cam>
+(psimplatform.resource): the controller writes `vms/retention/<cam>
 {days: events_retention_days}` and the resource job deletes the files —
 events are small and often kept a year where footage is kept a month —
 and `repair()` drops the lines whose files are gone.
@@ -47,7 +47,7 @@ resource job: its own pass over its own part of the tree.
 #   (archivesink writes here).
 # - `<archive>/vms/<cam>/e<epoch>/<start>Z.mp4` — promoted: the resource's media.
 # - `<archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl` — the camera's event buckets: the platform's event
-#   log (`vmsplatform.events`, see `events.py`), written by the worker holding the camera's epoch, recording
+#   log (`psimplatform.events`, see `events.py`), written by the worker holding the camera's epoch, recording
 #   or not.
 # - `<archive>/vms/<cam>/manifest.jsonl` — one line per media segment and one per closed event bucket: the
 #   index that lives beside the footage.
@@ -59,7 +59,7 @@ resource job: its own pass over its own part of the tree.
 # only after that; a bucket is written in place one flushed line at a time and gets its manifest line when
 # it closes. The manifest is append-only and rebuildable from the files. Retention is a policy per kind:
 # media is the VMS's (`retain`, by `retention_days`, files first then lines); buckets are the platform's
-# (`vmsplatform.resource` deletes files by `vms/retention/<cam>`, and `repair` drops the orphaned lines).
+# (`psimplatform.resource` deletes files by `vms/retention/<cam>`, and `repair` drops the orphaned lines).
 # The tree is `<subsystem>/<unit>/…`, the platform resource's, so other subsystems' buckets sit on the same
 # server under their own prefix. Used by `gstvms/archivesink.py` (`promote` on fragment-closed), `worker.py`
 # (`event_log`), `console.py` (`Manifest.timeline`, `root`), `__main__` (`closed_in_spool` on worker start;
@@ -91,7 +91,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from vmsplatform.events import Bucket, EventLog, buckets_under, read_bucket, unit_dir
+from psimplatform.events import Bucket, EventLog, buckets_under, read_bucket, unit_dir
 
 SUB = "vms"
 SEGMENT = re.compile(r"^(\d{8}T\d{6}Z)\.mp4$")
@@ -150,7 +150,7 @@ class Segment:
 
 
 # Parses a manifest line of `kind: "events"` (the form `Bucket.line()` writes) back into a platform
-# `Bucket`. Same shape as `vmsplatform.resource.bucket_from_line`.
+# `Bucket`. Same shape as `psimplatform.resource.bucket_from_line`.
 def bucket_from_line(line: str) -> Bucket:
     d = json.loads(line)
     return Bucket(d["subsystem"], str(d["unit"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["events"]))
@@ -162,7 +162,7 @@ def bucket_from_line(line: str) -> Bucket:
 class Manifest:
     """Per camera, append-only, beside the footage."""
 
-    # Computes `self.path` via `vmsplatform.events.unit_dir`; creates nothing.
+    # Computes `self.path` via `psimplatform.events.unit_dir`; creates nothing.
     def __init__(self, archive_root: str, cam: int):
         self.path = os.path.join(unit_dir(archive_root, SUB, str(cam)), "manifest.jsonl")
 

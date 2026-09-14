@@ -1,5 +1,5 @@
 """Nomad Variables — the cluster's small, consistent store: М10's
-`vmsplatform.variables.Variables` contract, implemented by raft.
+`psimplatform.variables.Variables` contract, implemented by raft.
 
 `NomadVariables` speaks the HTTP API with the task's own workload-identity
 token (NOMAD_TOKEN). `FakeVariables` is the same contract in memory, with
@@ -18,7 +18,7 @@ import urllib.request
 from typing import Protocol
 
 
-from vmsplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
+from psimplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
 
 
 class Variables(Protocol):

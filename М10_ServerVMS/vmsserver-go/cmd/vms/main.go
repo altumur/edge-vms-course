@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 func env(k, def string) string {

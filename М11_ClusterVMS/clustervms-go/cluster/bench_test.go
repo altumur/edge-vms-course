@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"clustervms/cluster"
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 func BenchmarkIssueAnEpochByCAS(b *testing.B) {

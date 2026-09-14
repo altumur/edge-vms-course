@@ -7,7 +7,7 @@ package vms
 //	GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
 //
 // Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the
-// POST/PUT/DELETE of a camera — is vmsplatform.SpecConsole reading
+// POST/PUT/DELETE of a camera — is psimplatform.SpecConsole reading
 // vms.subsystem.yaml; nothing here knows what a camera's fields are. Its own
 // process (`vms console`), with its own token: the operator's rows — cameras,
 // next_id, retention — and never placement.
@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 // VmsRoutes: what the VMS adds to the generic console — the media. Returns

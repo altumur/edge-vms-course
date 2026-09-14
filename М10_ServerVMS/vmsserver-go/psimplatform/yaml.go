@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 // A YAML subset, enough for a subsystem spec and nothing more: block
 // mappings and sequences by indentation, flow mappings {a: b} and sequences

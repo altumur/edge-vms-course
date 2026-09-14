@@ -15,7 +15,7 @@ The design brief is [`module-design.md`](module-design.md); the first NodeVMS de
 | State | none: computation over the stores | none but a spool | the footage and its manifest |
 | When it is down | edits stop; nothing running stops | its cameras pause until it is restarted; the edit made meanwhile is waiting | promotion pauses; recording continues into the spool |
 
-> **The controller writes, the platform stores, the worker reads its share.** The platform — a config store with check-and-set, an object store, an epoch issuer, a lease, and slots that give `count = N` processes stable names by claim — knows the shape of a subsystem and nothing about a camera. `vmsplatform/` has no import from `vms/`, and a test greps it for the word.
+> **The controller writes, the platform stores, the worker reads its share.** The platform — a config store with check-and-set, an object store, an epoch issuer, a lease, and slots that give `count = N` processes stable names by claim — knows the shape of a subsystem and nothing about a camera. `psimplatform/` has no import from `vms/`, and a test greps it for the word.
 
 **What changed since М9's Node**, and what did not. KVS is gone — the archive is ours. The per-Node Postgres is gone — configuration lives in the platform's store and has one writer. The worker is gone — the thing that holds the pipeline supervises itself. What is kept, and enforced by the same tests: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons, the epoch in the path, commit-then-publish, the heartbeat carrying its status.
 

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"clustervms/cluster"
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 func media(t *testing.T, c *Cluster, server string, cam, epoch int, start float64) {

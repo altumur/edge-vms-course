@@ -4,7 +4,7 @@ The five lessons as one runnable package. No scheduler, no KVS, no database: two
 
 ```
 vmsserver/
-  vmsplatform/                 the platform (named so because Python owns `platform`)
+  psimplatform/                 the platform (named so because Python owns `platform`)
     variables.py               Lesson 1  a config store with ModifyIndex and check-and-set, as files; one writer per prefix
     objects.py                 Lesson 1  an object store: a directory
     epoch.py                   Lesson 1  the fencing-token issuer and the lease — generic
@@ -63,7 +63,7 @@ python3 -m vms worker                                  # no name: claims the fir
 
 **The controller never decides how many workers there are.** It has no scheduler client and no `count`. `test_scale_in_releases_a_slot_and_the_controller_redistributes` shows the only thing it does about worker numbers: moving the cameras of a slot whose holder *said* it was stopping — and leaving a merely silent one alone for Nomad. The workers export `headroom`; `/metrics` serves it; whoever runs `count` reads it.
 
-**The platform knows nothing about video.** `test_the_platform_knows_nothing_about_video` greps `vmsplatform/` — `events.py` included — for an import from `vms/` and for the word *camera*, and `test_second_subsystem.py` runs a controller and a worker that count seconds through the same base classes with a different prefix, and writes their events into `counter/b/…` on the same resource.
+**The platform knows nothing about video.** `test_the_platform_knows_nothing_about_video` greps `psimplatform/` — `events.py` included — for an import from `vms/` and for the word *camera*, and `test_second_subsystem.py` runs a controller and a worker that count seconds through the same base classes with a different prefix, and writes their events into `counter/b/…` on the same resource.
 
 ## Verified where
 

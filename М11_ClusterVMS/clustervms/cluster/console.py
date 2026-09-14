@@ -8,7 +8,7 @@ adds is where the bytes are — two routes, registered, not subclassed:
 
 The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 /resources, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
-`vmsplatform.console.SpecConsole` reading `vms.subsystem.yaml`. A console for
+`psimplatform.console.SpecConsole` reading `vms.subsystem.yaml`. A console for
 the counter subsystem is the same class with a different YAML and no extra.
 """
 from __future__ import annotations
@@ -17,9 +17,9 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from vmsplatform.console import SpecConsole, heartbeats   # noqa: F401
-from vmsplatform.epoch import current_epoch
-from vmsplatform.resource import resources_seen
+from psimplatform.console import SpecConsole, heartbeats   # noqa: F401
+from psimplatform.epoch import current_epoch
+from psimplatform.resource import resources_seen
 
 from .controller import ClusterController
 from .timeline import ManifestReader, merged_timeline

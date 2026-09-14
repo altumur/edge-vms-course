@@ -12,7 +12,7 @@ never retires a slot from a silence.
 from __future__ import annotations
 
 from vms.controller import VmsController as ClusterController  # noqa: F401
-from vmsplatform.contract import Heartbeat
+from psimplatform.contract import Heartbeat
 
 
 def heartbeats(objects, prefix: str = "vms/") -> dict[str, Heartbeat]:

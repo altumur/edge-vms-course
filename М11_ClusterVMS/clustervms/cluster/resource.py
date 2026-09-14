@@ -1,4 +1,4 @@
-"""The resource job on a cluster is the platform's (vmsplatform.resource):
+"""The resource job on a cluster is the platform's (psimplatform.resource):
 a `system` job on every server with meta.archive, serving buckets, taking
 mirrors from its peers, retaining every subsystem's buckets by that
 subsystem's policy. What this module adds is the VMS's part of it:
@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 
 from vms.archive import ArchivePolicy, ArchiveResource, Manifest  # noqa: F401
-from vmsplatform.resource import (PeerClient, Resource, mirror_settings, mirrored_buckets, peers_of,  # noqa: F401
+from psimplatform.resource import (PeerClient, Resource, mirror_settings, mirrored_buckets, peers_of,  # noqa: F401
                                   resources_seen, serve)
 
 

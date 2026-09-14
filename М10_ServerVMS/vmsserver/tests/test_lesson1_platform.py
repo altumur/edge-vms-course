@@ -1,9 +1,9 @@
 """Lesson 1 — the subsystem contract, and the platform that knows nothing."""
 import os
 import threading
-from vmsplatform.contract import Assignment, Controller, Heartbeat, Subsystem, Worker
-from vmsplatform.epoch import Lease, current_epoch, next_epoch
-from vmsplatform.variables import Conflict, FileVariables, Forbidden
+from psimplatform.contract import Assignment, Controller, Heartbeat, Subsystem, Worker
+from psimplatform.epoch import Lease, current_epoch, next_epoch
+from psimplatform.variables import Conflict, FileVariables, Forbidden
 from tests.conftest import Box, Clock
 
 
@@ -75,8 +75,8 @@ def test_lease_on_a_monotonic_clock():
 
 
 def test_the_platform_knows_nothing_about_video():
-    """No import from vms/ anywhere under vmsplatform/."""
-    here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vmsplatform")
+    """No import from vms/ anywhere under psimplatform/."""
+    here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "psimplatform")
     for f in os.listdir(here):
         if f.endswith(".py"):
             src = "\n".join(l for l in open(os.path.join(here, f)) if not l.lstrip().startswith("#"))   # the code, not the notes
@@ -138,8 +138,8 @@ def test_the_resource_is_a_platform_job_that_mirrors_any_subsystems_buckets():
     the next live resource after it; a resource back with an empty disk pulls
     its own buckets home. Nothing here knows what a bucket is about."""
     import os, shutil, tempfile
-    from vmsplatform.events import EventLog, buckets_under
-    from vmsplatform.resource import MIRROR_KEY, Resource, mirrored_buckets, peers_of, resources_seen
+    from psimplatform.events import EventLog, buckets_under
+    from psimplatform.resource import MIRROR_KEY, Resource, mirrored_buckets, peers_of, resources_seen
     box = Box(); t = box.wall() - 7200
     roots = {s: tempfile.mkdtemp(prefix=f"res-{s}-") for s in ("srv-a", "srv-b", "srv-c")}
 

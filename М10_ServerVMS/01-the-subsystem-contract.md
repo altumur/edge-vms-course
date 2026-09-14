@@ -47,7 +47,7 @@ The VMS is the first subsystem: `vmscontroller` and `vmsworker`. Detectors will 
 
 ## Step 2 — The config store, as files
 
-М11 Lesson 2 will use Nomad Variables: a small, consistent key-value store where every entry carries a raft-assigned `ModifyIndex`, and a PUT with `cas=<index>` succeeds only if the index still matches. On one box there is no raft, so `vmsplatform/variables.py` promises the same thing with files: one JSON file per path, one counter for the index, one lock, every write atomic.
+М11 Lesson 2 will use Nomad Variables: a small, consistent key-value store where every entry carries a raft-assigned `ModifyIndex`, and a PUT with `cas=<index>` succeeds only if the index still matches. On one box there is no raft, so `psimplatform/variables.py` promises the same thing with files: one JSON file per path, one counter for the index, one lock, every write atomic.
 
 ```
 put ->  1001
@@ -75,7 +75,7 @@ Four threads issuing twenty-five epochs each get `1..100` with no number twice. 
 
 ## Step 4 — The contract
 
-`vmsplatform/contract.py` is the document, as code:
+`psimplatform/contract.py` is the document, as code:
 
 | The platform provides | The subsystem provides |
 |---|---|
@@ -85,7 +85,7 @@ Four threads issuing twenty-five epochs each get `1..100` with no number twice. 
 | an epoch prefix `<name>/epoch/<unit>`, taken by workers by CAS | which key the epoch goes in |
 | a slot prefix `<name>/slots/<worker>` — a worker's *name*, claimed by CAS and renewed (Step 5a) | a headroom number in its heartbeat, for whoever decides `N` |
 | an event log per unit on the resource — `<name>/<unit>/e<epoch>/<start>Z.events.jsonl`, written by the worker holding that unit's epoch (Lesson 3, Step 5a) | what its events say |
-| **the resource** — a platform job per server (`vmsplatform/resource.py`): every subsystem's buckets served, mirrored to a peer with `platform/mirror` on, restored, and retained by the rows `<name>/retention` and `<name>/retention/<unit>`; a pass a subsystem registers runs on its timer | its retention rows (the controller writes them); its own pass over its own part of the tree (the VMS: manifests and media) |
+| **the resource** — a platform job per server (`psimplatform/resource.py`): every subsystem's buckets served, mirrored to a peer with `platform/mirror` on, restored, and retained by the rows `<name>/retention` and `<name>/retention/<unit>`; a pass a subsystem registers runs on its timer | its retention rows (the controller writes them); its own pass over its own part of the tree (the VMS: manifests and media) |
 | a metrics scrape per job (М13) | its two numbers |
 
 ```
@@ -143,7 +143,7 @@ Four words now, not five: Server, Cluster, Domain, Site. *Node* is retired. М9 
 | Two processes on one box both think they won | They are using different `PLATFORM_DIR`s. The lock and the index are per root. |
 | `next_epoch` raises after two hundred conflicts | Something is hammering one key in a tight loop. That is the test's four threads, or a worker retrying a start without backoff — Lesson 4's loop has the backoff. |
 | `Forbidden` from the controller | It was constructed as a worker identity. The identity is the process's, set once in `__main__`. |
-| The platform test fails on a docstring | You wrote *camera* into `vmsplatform/`. The test is the boundary; move the sentence. |
+| The platform test fails on a docstring | You wrote *camera* into `psimplatform/`. The test is the boundary; move the sentence. |
 
 ## Recap
 

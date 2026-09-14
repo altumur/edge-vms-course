@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 func mustCreate(t *testing.T, ctl *vms.VmsController, fields map[string]any) vms.Camera {

@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"clustervms/cluster"
+	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 const bucketSeconds = 600

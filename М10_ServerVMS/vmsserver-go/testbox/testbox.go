@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 // Clock is a clock the tests own.

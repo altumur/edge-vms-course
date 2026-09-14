@@ -128,7 +128,7 @@ The row to read twice is the second. An edit made *while the worker was dead* is
 
 ## Step 6 — The console
 
-`vmsplatform/console.py` — `SpecConsole`, standard library — is М12 Lesson 3's console on one box: reads never touch a worker, writes go through the controller. It is the platform's, not the VMS's, and it runs from the same YAML the controller does; `vms/console.py` is the two routes only a VMS has, `/timeline` and `/segment`, registered as extras.
+`psimplatform/console.py` — `SpecConsole`, standard library — is М12 Lesson 3's console on one box: reads never touch a worker, writes go through the controller. It is the platform's, not the VMS's, and it runs from the same YAML the controller does; `vms/console.py` is the two routes only a VMS has, `/timeline` and `/segment`, registered as extras.
 
 ```
 GET  /spec                           -> {name: vms, rows: cameras, id: numeric, fields: [...], media: true, metrics: {...}}   what the page reads first
@@ -141,7 +141,7 @@ POST /marks {"cam": 1, "note": …}   -> 201 {subsystem: console, unit: <host:pi
                                         the operator's observation is the CONSOLE's event, never a worker's (Lesson 4, Step 3a)
 GET  /metrics                        -> vms_epoch_conflicts, vms_workers_live, vms_worker_headroom{worker="w-1"} 49,
                                         vms_headroom, vms_worker_load{worker="w-1"} 0.020, vms_cameras_recording 1   the autoscaler scrapes this
-GET  /                               -> the page (vmsplatform/console.html), built from /spec
+GET  /                               -> the page (psimplatform/console.html), built from /spec
 DELETE /cameras/1                    -> 200 {deleted: 1}; the row is marked deleted, its assignment goes, its footage stays until retention
 GET  /segment/vms/1/e1/<start>Z.mp4  -> the bytes of one promoted segment, Range honoured — what the page's <video> asks for
 ```

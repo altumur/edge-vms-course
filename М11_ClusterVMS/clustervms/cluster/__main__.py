@@ -65,8 +65,8 @@ def console() -> None:
     next pass."""
     from cluster.console import serve
     from cluster.controller import ClusterController
-    from vmsplatform.eventindex import EventIndex, ResourceReader
-    from vmsplatform.resource import resources_seen
+    from psimplatform.eventindex import EventIndex, ResourceReader
+    from psimplatform.resource import resources_seen
     ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
     index = EventIndex(ResourceReader(), os.environ.get("EVENTINDEX_DB", ":memory:"))     # a cache: rebuilt on every start
@@ -86,7 +86,7 @@ def resource() -> None:
     """The platform's resource job with the VMS registered on it."""
     from vms.archive import ArchiveResource
     from cluster.resource import cluster_resource, vms_routes
-    from vmsplatform.resource import serve
+    from psimplatform.resource import serve
     arch = ArchiveResource(spool, archive)
     server = os.environ.get("NOMAD_NODE_NAME") or os.uname().nodename
     url = os.environ.get("RESOURCE_URL", f"http://{server}:8090")

@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 // The fencing token and the lease — generic to any writer that can have two
 // instances. The subsystem decides what key the epoch goes in; the platform

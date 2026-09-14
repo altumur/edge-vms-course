@@ -1,9 +1,9 @@
 """Lesson 5 — the second subsystem: a controller and a worker that count
 seconds, through the same platform code, with a different prefix. If this
 works, the VMS is a subsystem and not the platform."""
-from vmsplatform.contract import Subsystem, Worker
-from vmsplatform.events import EventLog, read_bucket, subsystems_under
-from vmsplatform.spec import Refused, SpecController, SubsystemSpec
+from psimplatform.contract import Subsystem, Worker
+from psimplatform.events import EventLog, read_bucket, subsystems_under
+from psimplatform.spec import Refused, SpecController, SubsystemSpec
 from tests.conftest import Box
 import os
 
@@ -82,7 +82,7 @@ def test_the_second_subsystem_gets_a_console_for_free():
     import json
     import urllib.error
     import urllib.request
-    from vmsplatform.console import SpecConsole
+    from psimplatform.console import SpecConsole
     box = Box(); ctl, w = CounterController(box), CounterWorker(box, "c-1")
     srv = SpecConsole(ctl).serve("127.0.0.1", 0); port = srv.server_address[1]
     def call(method, path, body=None, headers=None):

@@ -95,7 +95,7 @@ console:
 #
 # **Role.** Lesson 5. The one file a subsystem gives the platform. `vms/config.py` loads it into
 # `SubsystemSpec` at import (`SPEC`); `VmsController` is `SpecController(SPEC, …)` and the console is
-# `SpecConsole` over the same controller (see `vmsplatform/spec.py` and `console.py` for what each class
+# `SpecConsole` over the same controller (see `psimplatform/spec.py` and `console.py` for what each class
 # does with each section). Its header comment draws the line: "Everything the controller does for this
 # subsystem is here; the worker (vmsworker) is the part that knows what a camera is." Nothing in the file
 # says how a camera records. `tests/test_second_subsystem.py` proves the same classes run a counter from a
@@ -103,7 +103,7 @@ console:
 #
 # - `row: retention/{id}` — `vms/retention/<id>`, written on create and refreshed on update only when a
 #   source field changed. This is the row the platform's resource job reads for bucket retention
-#   (`vmsplatform.resource.retention_days`: the unit's row, else the subsystem's `vms/retention`, else a
+#   (`psimplatform.resource.retention_days`: the unit's row, else the subsystem's `vms/retention`, else a
 #   year). Its first path segment, `vms/retention/*`, is in the console's ACL because the console's token
 #   creates cameras.
 #

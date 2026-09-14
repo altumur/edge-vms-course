@@ -69,8 +69,8 @@ import signal
 import sys
 import threading
 
-from vmsplatform.objects import FsObjectStore
-from vmsplatform.variables import FileVariables
+from psimplatform.objects import FsObjectStore
+from psimplatform.variables import FileVariables
 
 from .archive import ArchiveResource
 from .controller import VmsController
@@ -121,7 +121,7 @@ def worker() -> None:
 
 # Builds `vmscontroller` and runs the placement pass every 5 s:
 # - Variables as writer `vmscontroller` with `SPEC.acl_controller()` — `vms/workers/*`, `vms/placement/*`,
-#   `vms/slots/*`; never a camera's row (see `vmsplatform/spec.py`).
+#   `vms/slots/*`; never a camera's row (see `psimplatform/spec.py`).
 # - `VmsController(vars_, objects, capacity=$CAPACITY)`.
 # - Each pass: `ensure_placed()` (deleted rows unplaced first, then every unplaced camera onto the workers
 #   it currently sees by their heartbeats), `redistribute()` (only the cameras of a *released* slot —
@@ -152,7 +152,7 @@ def controller() -> None:
 def livecontroller() -> None:
     """The third subsystem's controller: the platform's class from live.subsystem.yaml, placing fan-outs on
     gateways by viewer headroom. No code of its own."""
-    from vmsplatform.spec import SpecController
+    from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="livecontroller", acl={"livecontroller": LIVE_SPEC.acl_controller()})
     _controller_loop(SpecController(LIVE_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
@@ -161,7 +161,7 @@ def livecontroller() -> None:
 def gateway() -> None:
     """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
-    from vmsplatform.spec import SpecController
+    from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
     from .gateway import LiveGateway
     vars_ = FileVariables(os.path.join(root, "config"), writer="livegateway",
@@ -195,7 +195,7 @@ def console() -> None:
     token for the operator's rows and nothing else."""
     from .config import SPEC
     from .console import serve
-    from vmsplatform.spec import SpecController
+    from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
                           acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console()})   # the operator's rows of BOTH subsystems it fronts
@@ -219,7 +219,7 @@ def console() -> None:
 #   the row through `config.row` and calls `res.retain(c["id"], c["retention_days"], now)`, logging what was
 #   removed.
 # - Events — the platform's, by the derived row `vms/retention/<cam>`: builds
-#   `vmsplatform.resource.Resource(archive, hostname, "", vars_, objects)` (url `""` — nothing is served
+#   `psimplatform.resource.Resource(archive, hostname, "", vars_, objects)` (url `""` — nothing is served
 #   here, the object is used only for its policy) and calls `platform.retain()`, which deletes every bucket
 #   file on this resource older than its unit's days (`retention_days(vars, sub, unit)`: the derived row,
 #   else `vms/retention`, else a year) and logs the count. Files only: the manifest lines for those buckets
@@ -235,7 +235,7 @@ def retain() -> None:
     repair, close event buckets, retain media and events by each camera's days."""
     import socket
     import time
-    from vmsplatform.resource import Resource
+    from psimplatform.resource import Resource
     from .config import row
     archive = os.environ.get("ARCHIVE", "/data/archive")
     res = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), archive)

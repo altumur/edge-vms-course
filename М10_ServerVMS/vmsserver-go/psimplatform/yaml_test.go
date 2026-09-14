@@ -1,10 +1,10 @@
-package vmsplatform_test
+package psimplatform_test
 
 import (
 	"os"
 	"testing"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 func TestYAMLSubsetReadsTheSpec(t *testing.T) {

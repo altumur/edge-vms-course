@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"clustervms/cluster"
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 func TestCASIsTheSamePromiseAsTheFilesMade(t *testing.T) {

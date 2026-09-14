@@ -14,8 +14,8 @@ package cluster
 import (
 	"strings"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 type (

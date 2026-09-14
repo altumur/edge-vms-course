@@ -166,7 +166,7 @@ def test_the_worker_observes_what_it_holds_recording_or_not():
     the camera's bucket on this server's resource. Not recording is not a
     reason; not holding it is. A lost pipeline writes `silent` — the event
     that cannot have a segment."""
-    from vmsplatform.events import read_bucket
+    from psimplatform.events import read_bucket
     box, ctl = _box_with_cameras(2)
     ctl.assign("w-1", ["1"])
     act = FakeActuator(); w = VmsWorker("w-1", box.vars, box.objects, act, clock=box.clock, wall=box.wall, archive_root=box.archive)

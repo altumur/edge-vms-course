@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 // Env is a process's environment; nil means the real one.

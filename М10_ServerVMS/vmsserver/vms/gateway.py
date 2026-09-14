@@ -30,10 +30,10 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from vmsplatform.console import SendMixin, heartbeats
-from vmsplatform.contract import Worker
-from vmsplatform.spec import SpecController
-from vmsplatform.variables import Variables
+from psimplatform.console import SendMixin, heartbeats
+from psimplatform.contract import Worker
+from psimplatform.spec import SpecController
+from psimplatform.variables import Variables
 
 from .config import LIVE_SPEC
 

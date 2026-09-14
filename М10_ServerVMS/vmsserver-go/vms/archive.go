@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/vmsplatform"
+	p "vmsserver/psimplatform"
 )
 
 const Sub = "vms"

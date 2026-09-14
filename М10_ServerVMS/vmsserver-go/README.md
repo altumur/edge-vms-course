@@ -5,7 +5,7 @@
 ```
 vmsserver-go/
   go.mod                       module vmsserver; standard library only
-  vmsplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
+  psimplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
     variables.go               Variables: the interface (Get/Put/List/Delete, ModifyIndex, cas) and FileVariables (one box, files, flock)
     objects.go                 ObjectStore: the interface and FsObjectStore
     epoch.go                   NextEpoch by CAS; Lease (Renew = read my epoch; MayWrite on a monotonic clock)

@@ -1,4 +1,4 @@
-// Package vmsplatform is the platform, on one box — in Go. Everything here
+// Package psimplatform is the platform, on one box — in Go. Everything here
 // would host any fleet of stateless shards writing bulk data; nothing here
 // knows what the units of work are.
 //
@@ -12,7 +12,7 @@
 //
 // М11 replaces variables.go with Nomad Variables behind the same interface
 // and changes nothing above this line.
-package vmsplatform
+package psimplatform
 
 import (
 	"encoding/json"

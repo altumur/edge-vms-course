@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"clustervms/cluster"
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 func env(k, def string) string {

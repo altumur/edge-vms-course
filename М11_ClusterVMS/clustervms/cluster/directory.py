@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 
-from vmsplatform.contract import Assignment
+from psimplatform.contract import Assignment
 
 
 class Directory:

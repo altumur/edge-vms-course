@@ -25,7 +25,7 @@ What the environment hands a process, on a box or in an allocation:
 # a lease, a heartbeat with server, labels and capacity
 #
 # **Role in the module.** Lesson 4. One process, N pipelines, its own loop. `VmsWorker` extends
-# `vmsplatform.contract.Worker` (see `contract.py` for `claim_slot`, `renew_slot`, `release_slot`,
+# `psimplatform.contract.Worker` (see `contract.py` for `claim_slot`, `renew_slot`, `release_slot`,
 # `take_epoch`, `renew_leases`, `heartbeat`) and is the thing that knows what a camera is. It reads its
 # assignment `vms/workers/<me>` and the camera rows it names, runs М9's `Reconciler` over them
 # (`reconciler.py`) with an actuator that builds `driverpacksrc ! tee ! archivesink` (`gstvms/actuator.py`;
@@ -81,9 +81,9 @@ import os
 import socket
 import time
 
-from vmsplatform.contract import Subsystem, Worker
-from vmsplatform.objects import ObjectStore
-from vmsplatform.variables import Variables
+from psimplatform.contract import Subsystem, Worker
+from psimplatform.objects import ObjectStore
+from psimplatform.variables import Variables
 
 from .archive import event_log
 from .config import row
@@ -214,7 +214,7 @@ class VmsWorker(Worker):
         self.previous_hb, self.previous_instance = 0.0, ""
         raw = objects.get(self.sub.heartbeat_key(self.name))
         if raw:
-            from vmsplatform.contract import Heartbeat
+            from psimplatform.contract import Heartbeat
             old = Heartbeat.from_bytes(raw)
             if old.extra.get("instance") != self.instance:
                 self.previous_hb, self.previous_instance = old.ts, old.extra.get("instance", "")

@@ -7,9 +7,9 @@ from cluster.controller import ClusterController  # noqa: E402
 from cluster.directory import Directory  # noqa: E402
 from cluster.objectstore import FsObjectStore  # noqa: E402
 from cluster.variables import FakeVariables  # noqa: E402
-from vmsplatform.contract import Assignment, Heartbeat  # noqa: E402
-from vmsplatform.epoch import next_epoch  # noqa: E402
-from vmsplatform.events import parse_bucket  # noqa: E402
+from psimplatform.contract import Assignment, Heartbeat  # noqa: E402
+from psimplatform.epoch import next_epoch  # noqa: E402
+from psimplatform.events import parse_bucket  # noqa: E402
 
 
 def bench(name, fn, setup=lambda: None, min_seconds=1.0):

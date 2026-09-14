@@ -1,7 +1,7 @@
 """eventindex — the event "database", which is a cache. A platform job.
 
 Events are observations: written by the worker that holds a unit's epoch,
-into that unit's bucket on its server's resource (vmsplatform.events).
+into that unit's bucket on its server's resource (psimplatform.events).
 Cross-unit search needs an index over all of them, and this is it: one
 per cluster (or per box), holding a SQLite table it can rebuild entirely
 by re-reading every resource's buckets. It knows which subsystems exist by

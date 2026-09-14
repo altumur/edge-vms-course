@@ -1,6 +1,6 @@
 # resource-policy.hcl — the ACL policy bound to job `resource`'s workload identity: its own heartbeat, the mirror knob, every subsystem's retention rows
 
-**Role.** Lesson 2/3. Applied with `nomad acl policy apply -namespace default -job resource resource deploy/resource-policy.hcl` (though `verify-bench.sh` only applies it unbound in item 4 — see Notes). The platform's resource (`vmsplatform.resource.Resource`, run by `python3 -m cluster resource`) writes exactly one Variable — its heartbeat object — and reads three kinds of rows: the mirror setting, each subsystem's retention rows, and (for the VMS hook) the camera rows. The header comment fixes two lines: it never writes any subsystem's configuration, and mirrors go resource to resource over HTTP (`PUT /mirror/...`), not through any store.
+**Role.** Lesson 2/3. Applied with `nomad acl policy apply -namespace default -job resource resource deploy/resource-policy.hcl` (though `verify-bench.sh` only applies it unbound in item 4 — see Notes). The platform's resource (`psimplatform.resource.Resource`, run by `python3 -m cluster resource`) writes exactly one Variable — its heartbeat object — and reads three kinds of rows: the mirror setting, each subsystem's retention rows, and (for the VMS hook) the camera rows. The header comment fixes two lines: it never writes any subsystem's configuration, and mirrors go resource to resource over HTTP (`PUT /mirror/...`), not through any store.
 
 ## Stanza by stanza
 

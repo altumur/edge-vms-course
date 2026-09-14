@@ -1,4 +1,4 @@
-package vmsplatform_test
+package psimplatform_test
 
 // Lesson 1 — the subsystem contract, and the platform that knows nothing.
 
@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
-	p "vmsserver/vmsplatform"
 )
 
 func TestTheConfigStoreSurvivesARestartAndRefusesAStaleCAS(t *testing.T) {
@@ -145,7 +145,7 @@ func TestLeaseOnAMonotonicClock(t *testing.T) {
 }
 
 func TestThePlatformKnowsNothingAboutVideo(t *testing.T) {
-	// No import from vms/ anywhere under vmsplatform/ — not even the word "camera".
+	// No import from vms/ anywhere under psimplatform/ — not even the word "camera".
 	ents, _ := os.ReadDir(".")
 	for _, e := range ents {
 		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {

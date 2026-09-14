@@ -1,4 +1,4 @@
-package vmsplatform_test
+package psimplatform_test
 
 // Lesson 5 — the second subsystem: a controller and a worker that count
 // seconds, through the same platform code, with a different prefix. If this
@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
-	p "vmsserver/vmsplatform"
 )
 
 var counter = p.Subsystem{Name: "counter"}

@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 // The controller as data. A subsystem gives the platform a spec — one YAML
 // file — and the platform runs the controller from it:

@@ -1,4 +1,5 @@
-"""The platform, on one box (the package is `vmsplatform` only because Python owns the name `platform`). Everything here would host any fleet of
+"""The platform, on one box. It is not the VMS: the name says so — PSIM, the product's whole family, of which
+video is one subsystem (and Python owns the bare name `platform`). Everything here would host any fleet of
 stateless shards writing bulk data; nothing here knows what a camera is.
 
     variables.py   a small, consistent config store with ModifyIndex and check-and-set (file-backed)
@@ -15,10 +16,10 @@ behind the same interfaces, and changes nothing above this line.
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # __init__.py — the package docstring: what `vmsplatform` is and what each module holds
+# # __init__.py — the package docstring: what `psimplatform` is and what each module holds
 #
 # **Role in the module.** The file contains no code, only the package docstring. It names the package
-# (`vmsplatform` rather than `platform` because Python's standard library already owns `platform`), states
+# (`psimplatform` rather than `platform` because Python's standard library already owns `platform`), states
 # the one design line that governs everything under it — *nothing here knows what a camera is*; anything
 # here would host any fleet of stateless shards writing bulk data — and gives a one-line map of the modules:
 # `variables.py` (config store with ModifyIndex and check-and-set), `objects.py` (object store), `epoch.py`
@@ -31,8 +32,8 @@ behind the same interfaces, and changes nothing above this line.
 # `ObjectStore` Protocols) and changes nothing above that line.
 #
 # ## Module-level names
-# None. There are no imports either, so `import vmsplatform` pulls in nothing; each module is imported
-# explicitly (`from vmsplatform.spec import SpecController`).
+# None. There are no imports either, so `import psimplatform` pulls in nothing; each module is imported
+# explicitly (`from psimplatform.spec import SpecController`).
 #
 # ## Notes
 # - `tests/test_lesson1_platform.py::test_the_platform_knows_nothing_about_video` greps every `.py` under

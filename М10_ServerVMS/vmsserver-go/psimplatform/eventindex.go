@@ -1,4 +1,4 @@
-package vmsplatform
+package psimplatform
 
 // eventindex — the event "database", which is a cache. A platform job.
 //

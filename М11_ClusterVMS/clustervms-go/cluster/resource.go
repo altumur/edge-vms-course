@@ -1,6 +1,6 @@
 package cluster
 
-// The resource job on a cluster is the platform's (vmsplatform.Resource): a
+// The resource job on a cluster is the platform's (psimplatform.Resource): a
 // system job on every server with meta.archive, serving buckets, taking
 // mirrors from its peers, retaining every subsystem's buckets by that
 // subsystem's policy. What this module adds is the VMS's part of it:
@@ -20,8 +20,8 @@ import (
 	"strconv"
 	"strings"
 
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
-	p "vmsserver/vmsplatform"
 )
 
 // VmsRoutes: the VMS's reads on the resource, plugged into the platform's server.
