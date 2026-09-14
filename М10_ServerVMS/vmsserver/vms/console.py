@@ -1,6 +1,8 @@
 """The one-box console, standard library. Reads never touch a worker;
 writes go through the controller, the only writer.
 
+    GET  /                        the page: the camera list, a camera's timeline, playback of a span (console.html)
+    GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
     GET  /cameras                 the read model: every camera from the workers' heartbeats, with age
     GET  /where/<id>              which worker — from the stored placement
     GET  /timeline/<id>?from&to   segments from the archive resource's manifest, fenced ones marked
@@ -26,6 +28,24 @@ from .archive import ArchiveResource, Manifest
 from .controller import Refused, VmsController
 
 
+PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console.html")
+
+
+def send_file(handler, path: str, content_type: str) -> None:
+    """A file, whole or by Range — what a <video> element asks for."""
+    size = os.path.getsize(path); start, end = 0, size - 1
+    rng = handler.headers.get("Range")
+    if rng and rng.startswith("bytes="):
+        a, b = rng[6:].split("-"); start = int(a or 0); end = int(b) if b else end
+    with open(path, "rb") as f:
+        f.seek(start); data = f.read(end - start + 1)
+    handler.send_response(206 if rng else 200); handler.send_header("Content-Type", content_type)
+    handler.send_header("Accept-Ranges", "bytes"); handler.send_header("Content-Length", str(len(data)))
+    if rng:
+        handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    handler.end_headers(); handler.wfile.write(data)
+
+
 def make_handler(ctl: VmsController, archive: ArchiveResource | None, wall=None):
     seen: dict[str, tuple[int, dict]] = {}
     instance = f"{socket.gethostname()}:{os.getpid()}"
@@ -45,6 +65,13 @@ def make_handler(ctl: VmsController, archive: ArchiveResource | None, wall=None)
         def do_GET(self):
             u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
+                if u.path in ("/", "/index.html"):
+                    return send_file(self, PAGE, "text/html; charset=utf-8")
+                if u.path.startswith("/segment/") and archive:
+                    rel = u.path[len("/segment/"):]; p = os.path.join(archive.root, rel)
+                    if ".." in rel or not os.path.isfile(p):
+                        return self._send(404, {"detail": "no such segment"})
+                    return send_file(self, p, "video/mp4")
                 if u.path == "/cameras":
                     return self._send(200, {"rows": ctl.read_model(), "configured": ctl.cameras()})
                 if u.path.startswith("/where/"):

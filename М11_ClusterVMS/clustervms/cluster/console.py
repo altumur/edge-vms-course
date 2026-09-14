@@ -1,6 +1,8 @@
 """The cluster console, standard library. М10's console with three more reads
 and no more writes:
 
+    GET /                  М10's page, unchanged: the camera list, a timeline merged across resources, playback
+    GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
     GET /cameras           the read model from every worker's heartbeat, with server and age
     GET /where/<id>        the stored placement (why), and the directory's answer (where, one scan)
     GET /timeline/<id>     merged across the resources that hold the camera; unreachable ones named
@@ -23,6 +25,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+import urllib.error
+import urllib.request
+
+from vms.console import PAGE, send_file
 from vms.controller import Refused
 from vmsplatform.epoch import current_epoch
 from vmsplatform.events import EventLog
@@ -76,6 +82,24 @@ def make_handler(ctl: ClusterController, reader=None, worst_failover: float = 0.
 
         def do_GET(self):
             u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path in ("/", "/index.html"):
+                return send_file(self, PAGE, "text/html; charset=utf-8")
+            if u.path.startswith("/segment/"):
+                rel = u.path[len("/segment/"):]; res = resources_seen(ctl.objects).get(q.get("server", ""))
+                if ".." in rel or res is None:
+                    return self._send(404, {"error": "no such resource"})
+                req = urllib.request.Request(f"{res['url']}/segment/{rel}", headers={k: v for k, v in (("Range", self.headers.get("Range")),) if v})
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = r.read(); status = r.status; crange = r.headers.get("Content-Range")
+                except urllib.error.HTTPError as e:
+                    return self._send(e.code, {"error": f"the resource on {q['server']} said {e.code}"})
+                except OSError:
+                    return self._send(503, {"error": f"the resource on {q['server']} is not answering — unavailable, not lost"})
+                self.send_response(status); self.send_header("Content-Type", "video/mp4"); self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", str(len(data)))
+                if crange: self.send_header("Content-Range", crange)
+                self.end_headers(); self.wfile.write(data); return
             if u.path == "/cameras":
                 return self._send(200, {"rows": ctl.read_model(), "configured": ctl.cameras()})
             if u.path.startswith("/where/"):

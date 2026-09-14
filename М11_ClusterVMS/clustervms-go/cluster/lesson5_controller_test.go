@@ -223,4 +223,38 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if len(ev) != 1 || ev[0].Subsystem != "console" || ev[0].Kind != "mark" || ev[0].Fields["user"] != "murat" {
 		t.Fatal(ev)
 	}
+	// the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
+	if _, page := call(t, "GET", base+"/", nil, nil); !strings.Contains(page, "<video") || !strings.Contains(page, "/segment/") {
+		t.Fatal("page")
+	}
+	segment(t, c.Servers["srv-a"], 1, 1, c.Wall.Now()-600, 600, 256)
+	res := cluster.ClusterResource(c.Servers["srv-a"].Resource, "srv-a", "", c.Vars, c.Objects, c.Wall.Now, nil)
+	rsrv, rln, err := p.Serve(res, "127.0.0.1:0", cluster.VmsRoutes(c.Servers["srv-a"].Resource))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rsrv.Close()
+	res.URL = "http://" + rln.Addr().String()
+	res.Heartbeat()
+	_, out = call(t, "GET", base+"/timeline/1", nil, nil)
+	var tl map[string]any
+	json.Unmarshal([]byte(out), &tl)
+	seg := tl["segments"].([]any)[0].(map[string]any)
+	if seg["server"] != "srv-a" {
+		t.Fatal(out)
+	}
+	req, _ := http.NewRequest("GET", base+"/segment/"+seg["path"].(string)+"?server=srv-a", nil)
+	req.Header.Set("Range", "bytes=0-9")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 206 || len(part) != 10 || resp.Header.Get("Content-Range") != "bytes 0-9/256" {
+		t.Fatal(resp.StatusCode, len(part), resp.Header.Get("Content-Range"))
+	}
+	if st, _ := call(t, "GET", base+"/segment/"+seg["path"].(string)+"?server=srv-b", nil, nil); st != 404 { // srv-b has never heartbeaten
+		t.Fatal(st)
+	}
 }

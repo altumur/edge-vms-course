@@ -1,0 +1,134 @@
+<!doctype html>
+<!-- The console's one page: pick a camera, see its timeline, play a span.
+     No framework, no build step: three fetches against the console's own
+     routes — /cameras, /timeline/<id>, /events?cam= — and /segment/<path>
+     for the bytes. Served at GET / by М10's console (one box) and М11's
+     (a cluster) unchanged; the page tells the two apart by the shape of
+     /timeline (a list on one box, {segments, unreachable} on a cluster). -->
+<meta charset="utf-8">
+<title>VMS console</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1b1b; --muted:#6b6b6b; --line:#d8d8d8; --media:#3b7dd8; --events:#c58a1a; --fenced:#b0b0b0; --live:#2a9d5c; --stale:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#e8e8e8; --muted:#9a9a9a; --line:#333; --fenced:#555; } }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; color:var(--fg); background:var(--bg); display:grid; grid-template-columns: 280px 1fr; min-height:100vh; }
+  aside { border-right:1px solid var(--line); padding:12px; overflow:auto; }
+  main { padding:12px 16px; min-width:0; }
+  h1 { font-size:15px; margin:0 0 8px; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:6px 8px; border-radius:6px; cursor:pointer; display:flex; justify-content:space-between; gap:8px; }
+  li:hover, li.on { background:color-mix(in srgb, var(--fg) 8%, transparent); }
+  li.stale { color:var(--muted); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--fenced); margin-right:6px; vertical-align:middle; }
+  .running .dot { background:var(--live); } .failed .dot { background:var(--stale); }
+  small { color:var(--muted); }
+  #meta { color:var(--muted); margin:4px 0 10px; }
+  #timeline { position:relative; height:64px; border:1px solid var(--line); border-radius:6px; margin:8px 0; overflow:hidden; }
+  .span { position:absolute; top:12px; height:26px; border-radius:3px; background:var(--media); cursor:pointer; min-width:2px; }
+  .span.events-only { background:var(--events); top:20px; height:12px; }
+  .span.fenced { opacity:.45; }
+  .span.playing { outline:2px solid var(--fg); }
+  .tick { position:absolute; bottom:4px; width:1px; height:8px; background:var(--events); }
+  #axis { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
+  video { width:100%; max-height:60vh; background:#000; border-radius:6px; margin-top:8px; }
+  #note { color:var(--stale); }
+  button { font:inherit; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--fg); border-radius:6px; cursor:pointer; }
+  .legend span { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 12px; vertical-align:middle; }
+</style>
+<aside>
+  <h1>Cameras <small id="count"></small></h1>
+  <ul id="cameras"></ul>
+</aside>
+<main>
+  <h1 id="title">Pick a camera</h1>
+  <div id="meta"></div>
+  <div class="legend"><small><span style="background:var(--media)"></span>recorded <span style="background:var(--events)"></span>events only (watched, not recorded) <span style="background:var(--fenced)"></span>fenced — an older epoch</small></div>
+  <div id="timeline"></div>
+  <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><span id="t1"></span></div>
+  <div id="note"></div>
+  <video id="player" controls></video>
+  <div id="playing"><small></small></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const fmt = t => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
+let cameras = [], current = null, window_ = null, spans = [], queue = [];
+
+async function loadCameras() {
+  const d = await (await fetch('/cameras')).json();
+  const byId = {};
+  for (const c of d.configured || []) byId[c.id] = { ...c, phase: 'silent', worker_state: 'stale' };
+  for (const r of d.rows || []) byId[r.id] = { ...byId[r.id], ...r };   // the heartbeat's word wins over the row's
+  cameras = Object.values(byId).sort((a, b) => a.id - b.id);
+  $('#count').textContent = cameras.length ? `(${cameras.length})` : '';
+  const ul = $('#cameras'); ul.innerHTML = '';
+  for (const c of cameras) {
+    const li = document.createElement('li');
+    li.className = `${c.phase || 'silent'} ${c.worker_state === 'stale' ? 'stale' : ''} ${current === c.id ? 'on' : ''}`;
+    li.innerHTML = `<span><span class="dot"></span>${c.name || 'cam' + c.id} <small>#${c.id}</small></span>` +
+                   `<small>${c.worker ? c.worker + (c.server ? ' · ' + c.server : '') : 'unplaced'}${c.age != null ? ' · ' + c.age + ' s' : ''}</small>`;
+    li.onclick = () => select(c.id);
+    ul.appendChild(li);
+  }
+}
+
+async function select(id) {
+  current = id; queue = [];
+  const c = cameras.find(x => x.id === id) || {};
+  $('#title').textContent = `${c.name || 'cam' + id}`;
+  $('#meta').textContent = [c.phase, c.worker && `on ${c.worker}`, c.server, c.epoch ? `epoch ${c.epoch}` : null,
+                            c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
+  for (const li of $('#cameras').children) li.classList.toggle('on', li.textContent.includes('#' + id + ' ') || li.textContent.endsWith('#' + id));
+  await loadTimeline();
+}
+
+async function loadTimeline() {
+  const now = Date.now() / 1000;
+  const [from, to] = window_ || [0, 1e12];
+  const d = await (await fetch(`/timeline/${current}?from=${from}&to=${to}`)).json();
+  const raw = Array.isArray(d) ? d : (d.segments || []);          // one box: a list; a cluster: {segments, unreachable, note}
+  $('#note').textContent = (!Array.isArray(d) && d.note) ? d.note : '';
+  spans = raw.map(s => ({ start: s.start, end: s.end, epoch: s.epoch, fenced: !!s.fenced, events: s.events || 0,
+                          media: s.media ?? s.path ?? null, server: s.server || null }));
+  let events = [];
+  try { const e = await fetch(`/events?from=${from}&to=${to}&cam=${current}`); if (e.ok) events = (await e.json()).events || []; } catch (_) {}
+  const lo = window_ ? from : Math.min(...spans.map(s => s.start), ...events.map(e => e.t), now - 3600);
+  const hi = window_ ? to : Math.max(...spans.map(s => s.end), ...events.map(e => e.t), now);
+  const tl = $('#timeline'); tl.innerHTML = '';
+  const x = t => 100 * (t - lo) / Math.max(1, hi - lo);
+  spans.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = `span ${s.media ? '' : 'events-only'} ${s.fenced ? 'fenced' : ''}`;
+    el.style.left = x(s.start) + '%'; el.style.width = Math.max(0.2, x(s.end) - x(s.start)) + '%';
+    el.title = `${fmt(s.start)} – ${fmt(s.end)} · epoch ${s.epoch}${s.fenced ? ' (fenced)' : ''}${s.server ? ' · ' + s.server : ''}${s.events ? ' · ' + s.events + ' events' : ''}${s.media ? '' : ' · not recorded'}`;
+    if (s.media) el.onclick = () => play(i);
+    tl.appendChild(el);
+  });
+  for (const e of events) {
+    const el = document.createElement('div'); el.className = 'tick'; el.style.left = x(e.t) + '%';
+    el.title = `${fmt(e.t)} · ${e.kind}${e.subsystem ? ' (' + e.subsystem + ')' : ''}${e.note ? ': ' + e.note : ''}`;
+    tl.appendChild(el);
+  }
+  $('#t0').textContent = fmt(lo); $('#t1').textContent = fmt(hi);
+}
+
+function segmentURL(s) { return `/segment/${s.media}` + (s.server ? `?server=${encodeURIComponent(s.server)}` : ''); }
+
+// One segment at a time, the next when this one ends. Gapless playback of
+// fragmented MP4 through MSE is the gateway's job (М12); the console plays
+// what the resource serves.
+function play(i) {
+  queue = spans.map((s, j) => j).filter(j => j >= i && spans[j].media);
+  next();
+}
+function next() {
+  if (!queue.length) return;
+  const i = queue.shift(); const s = spans[i];
+  [...$('#timeline').children].forEach((el, j) => el.classList.toggle('playing', j === i));
+  $('#playing small').textContent = `${fmt(s.start)} – ${fmt(s.end)} · epoch ${s.epoch}${s.server ? ' · from ' + s.server : ''}`;
+  const v = $('#player'); v.src = segmentURL(s); v.play().catch(() => {});
+}
+$('#player').onended = next;
+$('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
+$('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
+loadCameras(); setInterval(loadCameras, 10000);
+</script>

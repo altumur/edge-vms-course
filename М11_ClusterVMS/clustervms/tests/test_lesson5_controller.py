@@ -111,4 +111,19 @@ def test_the_console_over_http():
     idx = EventIndex(DirReader(c), wall=c.wall); idx.rebuild(resources_seen(c.objects))
     ev = idx.query(0, 1e12, cam=1)["events"]
     assert [(e["subsystem"], e["kind"], e["user"]) for e in ev] == [("console", "mark", "murat")]
+    # the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
+    assert "<video" in call("GET", "/")[1] and "/segment/" in call("GET", "/")[1]
+    from vmsplatform.resource import serve as serve_resource
+    from cluster.resource import vms_routes
+    from tests.test_lesson3_resources import _segment
+    _segment(c.servers["srv-a"], 1, 1, c.wall() - 600, size=256)
+    res = cluster_resource(c.servers["srv-a"].resource, "srv-a", "http://127.0.0.1:0", c.vars, c.objects, wall=c.wall)
+    rsrv = serve_resource(res, "127.0.0.1", 0, extra=vms_routes(c.servers["srv-a"].resource)); res.url = f"http://127.0.0.1:{rsrv.server_address[1]}"; res.heartbeat()
+    st, out = call("GET", "/timeline/1"); seg = json.loads(out)["segments"][0]
+    assert st == 200 and seg["server"] == "srv-a"
+    req = urllib.request.Request(f"{base}/segment/{seg['path']}?server=srv-a", headers={"Range": "bytes=0-9"})
+    with urllib.request.urlopen(req) as r:
+        assert r.status == 206 and len(r.read()) == 10 and r.headers["Content-Range"] == "bytes 0-9/256"
+    assert call("GET", f"/segment/{seg['path']}?server=srv-b")[0] == 404          # srv-b has never heartbeaten
+    rsrv.shutdown()
     srv.shutdown()

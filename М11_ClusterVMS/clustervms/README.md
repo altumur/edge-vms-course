@@ -12,6 +12,7 @@ clustervms/
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  the VMS's part of the platform's resource job: ArchivePolicy (repair, close, media retention) registered as the `vms` hook; /manifest and /segment plugged in
     eventindex.py    L3  a name for vmsplatform.eventindex — the platform's index over every subsystem's buckets on every resource
+    console.py       L5  the cluster console: М10's page at /, the merged timeline, /segment/<path>?server= proxied from that server's resource, /events, /metrics
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console, standard library: /cameras /where /timeline /resources /unplaceable /events /metrics; /marks into the console's own bucket
     __main__.py      python3 -m cluster worker | controller | resource   (the controller job also runs the eventindex beside the console)

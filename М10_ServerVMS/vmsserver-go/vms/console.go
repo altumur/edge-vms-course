@@ -3,6 +3,8 @@ package vms
 // The one-box console, standard library. Reads never touch a worker;
 // writes go through the controller, the only writer.
 //
+//	GET  /                        the page: the camera list, a camera's timeline, playback of a span (console.html)
+//	GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
 //	GET  /cameras                 the read model: every camera from the workers' heartbeats, with age
 //	GET  /where/<id>              which worker — from the stored placement
 //	GET  /timeline/<id>?from&to   segments from the archive resource's manifest, fenced ones marked
@@ -12,6 +14,7 @@ package vms
 //	GET  /metrics                 vms_epoch_conflicts, vms_workers_live, vms_worker_headroom, vms_worker_load, vms_cameras_recording
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +30,52 @@ import (
 
 	p "vmsserver/vmsplatform"
 )
+
+//go:embed console.html
+var Page []byte
+
+// SendFile serves a file whole or by Range — what a <video> element asks for.
+func SendFile(w http.ResponseWriter, req *http.Request, path, contentType string) {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		SendJSON(w, 404, map[string]any{"detail": "no such segment", "error": "no such segment"})
+		return
+	}
+	start, end := int64(0), st.Size()-1
+	rng := req.Header.Get("Range")
+	if strings.HasPrefix(rng, "bytes=") {
+		a, b, _ := strings.Cut(rng[6:], "-")
+		if a != "" {
+			start, _ = strconv.ParseInt(a, 10, 64)
+		}
+		if b != "" {
+			end, _ = strconv.ParseInt(b, 10, 64)
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	defer f.Close()
+	f.Seek(start, 0)
+	data := make([]byte, end-start+1)
+	n, _ := io.ReadFull(f, data)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.Itoa(n))
+	if rng != "" {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, st.Size()))
+		w.WriteHeader(206)
+	}
+	w.Write(data[:n])
+}
+
+func SendPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(Page)))
+	w.Write(Page)
+}
 
 type Reply struct {
 	Status int
@@ -208,6 +257,15 @@ func NewHandler(ctl *VmsController, archive *ArchiveResource, wall p.Clock) http
 		switch req.Method {
 		case "GET":
 			switch {
+			case path == "/" || path == "/index.html":
+				SendPage(w)
+			case strings.HasPrefix(path, "/segment/") && archive != nil:
+				rel := strings.TrimPrefix(path, "/segment/")
+				if strings.Contains(rel, "..") {
+					SendJSON(w, 404, map[string]any{"detail": "no such segment"})
+					return
+				}
+				SendFile(w, req, filepath.Join(archive.Root, rel), "video/mp4")
 			case path == "/cameras":
 				SendJSON(w, 200, map[string]any{"rows": ctl.ReadModel(45), "configured": camerasMaps(ctl.Cameras())})
 			case strings.HasPrefix(path, "/where/"):

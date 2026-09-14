@@ -139,7 +139,11 @@ POST /marks {"cam": 1, "note": …}   -> 201 {subsystem: console, unit: <host:pi
                                         the operator's observation is the CONSOLE's event, never a worker's (Lesson 4, Step 3a)
 GET  /metrics                        -> vms_epoch_conflicts, vms_workers_live, vms_worker_headroom{worker="w-1"} 49,
                                         vms_headroom, vms_worker_load{worker="w-1"} 0.020, vms_cameras_recording 1   the autoscaler scrapes this
+GET  /                               -> the page (console.html)
+GET  /segment/vms/1/e1/<start>Z.mp4  -> the bytes of one promoted segment, Range honoured — what the page's <video> asks for
 ```
+
+**The page.** `GET /` is the screen М8 had and М9 lost when the archive moved on-box: the camera list on the left (name, phase, worker and server, the heartbeat's age, greyed when stale — the read model, drawn), and for the chosen camera its timeline from `/timeline/<id>` — recorded spans in blue, *watched but not recorded* spans (Lesson 3's events-only buckets) in amber, fenced epochs faded — and a player. Click a span and the console serves that segment's bytes from the archive resource through `/segment/<path>`; when it ends the next one starts. It is one file, no framework, three fetches, and it plays what the resource holds — *one segment at a time*. Gapless playback of fragmented MP4 through MSE, live view, transcoding and TURN are the gateway's job (М12, *Who serves browsers*), and the reason the page is deliberately this small is the same reason the console never calls a worker: the web tier's problems must never reach the recorder.
 
 `python3 -m vms controller` serves it and runs two things beside it, every five seconds: `ensure_placed()`, which places cameras that have no placement onto the workers it sees, and `redistribute()`, which moves the cameras of a *released* slot. Nothing else, ever — not a rebalance (an operator asks for that), not a heal (Nomad restarts workers), not a scale (the autoscaler does that, from `/metrics`).
 
@@ -155,7 +159,7 @@ vms/*: []            the two subsystems share the platform and see nothing of ea
 
 Diff the two subsystems and you get a YAML file and a worker. That is what "each new subsystem provides its controller and its worker to the platform" means as an artifact — and the VMS is no exception: `vms/vms.subsystem.yaml` is *its* controller, and `vms/controller.py` is twenty lines that call the platform's class by the VMS's names (`create_camera`, not `create`). The spec's vocabulary is deliberately small: fields, a derived row, a constraint and a tie-break **by name** from a catalogue of two (`labels-subset`, `most-free-capacity`), a snapshot list. A subsystem that needs another rule registers a function under a name — code, not YAML pretending to be code. Detectors in М11 will be `det.subsystem.yaml` with `constraint: labels-subset` against GPU labels and a `detectorworker` that runs them — the same class, the same stores, the same ACL shape.
 
-**Deliverable:** one box, two subsystems, one console. `POST /cameras` starts a recording within one worker pass; stop the controller and show recording, the read model and a worker restart all unaffected; kill the worker and show the edit made meanwhile applied on restart; and `test_second_subsystem.py` green, with a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, and nothing else.
+**Deliverable:** one box, two subsystems, one console. `POST /cameras` starts a recording within one worker pass; open `/` and watch the camera appear in the list, then its first promoted segment on the timeline, and play it; stop the controller and show recording, the read model and a worker restart all unaffected; kill the worker and show the edit made meanwhile applied on restart; and `test_second_subsystem.py` green, with a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, and nothing else.
 
 ---
 

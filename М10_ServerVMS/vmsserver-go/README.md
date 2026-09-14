@@ -25,7 +25,8 @@ vmsserver-go/
     worker.go                  VmsWorker: the slot, server, labels and capacity from the environment (a box or an allocation); the gate (an epoch
                                per start), LeasePass, Fence, Observe, PumpOnce, Status, Headroom, Run
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
-    console.go                 the one-box console: /cameras /where /timeline /metrics; POST /cameras, POST /marks, PUT /cameras
+    console.go                 the one-box console: / (console.html, embedded), /segment/<path> with Range, /cameras /where /timeline /metrics; POST /cameras, /marks; PUT /cameras
+    console.html               the page, the same file as the Python package's: the list, the timeline, playback one segment at a time
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
   cmd/vms/main.go              vms worker|controller — the two processes on one box, with the fake actuator

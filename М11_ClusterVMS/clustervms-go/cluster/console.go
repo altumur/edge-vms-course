@@ -3,6 +3,8 @@ package cluster
 // The cluster console, standard library. М10's console with three more reads
 // and no more writes:
 //
+//	GET /                  М10's page, unchanged: the camera list, a timeline merged across resources, playback
+//	GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
 //	GET /cameras           the read model from every worker's heartbeat, with server and age
 //	GET /where/<id>        the stored placement (why), and the directory's answer (where, one scan)
 //	GET /timeline/<id>     merged across the resources that hold the camera; unreachable ones named
@@ -17,11 +19,13 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"vmsserver/vms"
 	p "vmsserver/vmsplatform"
@@ -98,6 +102,38 @@ func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {
 		switch req.Method {
 		case "GET":
 			switch {
+			case path == "/" || path == "/index.html":
+				vms.SendPage(w)
+			case strings.HasPrefix(path, "/segment/"):
+				rel := strings.TrimPrefix(path, "/segment/")
+				res, ok := p.ResourcesSeen(ctl.Objects)[q.Get("server")]
+				if strings.Contains(rel, "..") || !ok {
+					vms.SendJSON(w, 404, map[string]any{"error": "no such resource"})
+					return
+				}
+				up, _ := http.NewRequest("GET", res.URL+"/segment/"+rel, nil)
+				if rng := req.Header.Get("Range"); rng != "" {
+					up.Header.Set("Range", rng)
+				}
+				resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(up)
+				if err != nil {
+					vms.SendJSON(w, 503, map[string]any{"error": "the resource on " + q.Get("server") + " is not answering — unavailable, not lost"})
+					return
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode >= 400 {
+					vms.SendJSON(w, resp.StatusCode, map[string]any{"error": fmt.Sprintf("the resource on %s said %d", q.Get("server"), resp.StatusCode)})
+					return
+				}
+				data, _ := io.ReadAll(resp.Body)
+				w.Header().Set("Content-Type", "video/mp4")
+				w.Header().Set("Accept-Ranges", "bytes")
+				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+				if cr := resp.Header.Get("Content-Range"); cr != "" {
+					w.Header().Set("Content-Range", cr)
+				}
+				w.WriteHeader(resp.StatusCode)
+				w.Write(data)
 			case path == "/cameras":
 				cams := []map[string]any{}
 				for _, c := range ctl.Cameras() {

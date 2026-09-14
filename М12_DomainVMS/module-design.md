@@ -247,6 +247,8 @@ That leaves two processes, and they are separate because they fail differently.
 
 **What this does to the lessons:** Lesson 3 is the console's lesson already and grows a section for the gateway; its deliverable gains *and a browser watching one of them live through the gateway, with the worker's viewer count still zero*.
 
+**What the course actually ships as a screen** is М10's `console.html`, served unchanged by М11's console: the camera list from the read model, the timeline from the manifest (merged across resources on a cluster, each span naming its server), and playback of promoted segments one at a time through `/segment/<path>` — the console fetching the bytes from the resource job that has them. That is the single-cluster console of the table above with no gateway: no live view, no fMP4, no TURN, and no viewer ever reaching a worker. The gateway is what turns that page's *play this segment* into *watch this camera*, and it is described here rather than built.
+
 ---
 
 ## Lessons
@@ -506,6 +508,6 @@ Two things went back down for it, both operator fields rather than mechanism: `r
 - [Nomad Pack](https://developer.hashicorp.com/nomad/tools/nomad-pack) · [Nomad LICENSE](https://raw.githubusercontent.com/hashicorp/nomad/main/LICENSE)
 - [Eliminate Phase and simplify Conditions](https://github.com/kubernetes/kubernetes/issues/7856) — why phase enums were a mistake
 - [`where-the-database-lives.md`](where-the-database-lives.md) — five revisions ending with one database in the whole design, and a sixth note on what 2c did to that one
-- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · [`worker-and-process-model.md`](../М9_EdgeVMS/worker-and-process-model.md)
+- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · [`apphost-and-process-model.md`](../М9_EdgeVMS/apphost-and-process-model.md)
 
 *Written 5 September 2026. Split from the combined DomainVMS module on 7 September 2026. Rewritten to the 2c shape (workers, resources, one controller per cluster; Node retired) on 12 September 2026.*

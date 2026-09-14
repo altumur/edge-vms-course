@@ -89,9 +89,11 @@ GET /unplaceable        [{id, labels, workers_live}]
 GET /metrics            vms_workers_live 3 · vms_worker_headroom{worker,server} · vms_worker_load · vms_epoch_conflicts
                         vms_failover_seconds{kind="worst"} 48.0 · vms_resources_live · vms_cameras_recording
 POST /cameras  (Idempotency-Key)   PUT /cameras/1 {"worker": …} -> 400
+GET /                   М10's page, unchanged: the list, the merged timeline (each span says which server), playback
+GET /segment/<path>?server=srv-a     the bytes, fetched from THAT server's resource job — Range passed through, 503 "unavailable, not lost" when it is silent
 ```
 
-`test_the_console_over_http` runs it on a real port: the same POST twice makes one camera; the PUT that tries to set `worker` is refused; `/where/1` agrees with the directory; `/metrics` carries the autoscaler's number and the RTO.
+`test_the_console_over_http` runs it on a real port: the same POST twice makes one camera; the PUT that tries to set `worker` is refused; `/where/1` agrees with the directory; `/metrics` carries the autoscaler's number and the RTO; and the page plays a segment that lives on srv-a's resource through the console, by server. The page is М10's file: the only thing a cluster changed is that a span carries a `server`, and the console proxies the bytes from the resource job that has them rather than reading a disk of its own — the console has no archive, and must not.
 
 ## Step 7 — What the controller does not decide
 

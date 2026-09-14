@@ -176,5 +176,21 @@ def test_the_console_over_http():
         ev = read_bucket(os.path.join(box.archive, m["bucket"]))
         assert ev == [{"t": box.wall(), "kind": "mark", "cam": 1, "user": "murat", "note": "left the bag"}]
         assert subsystems_under(box.archive) == {"console": [m["unit"]]}                          # not in vms/1/: that bucket has one writer
+        # the page, and the bytes it plays: three fetches and a Range
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
+        assert "/cameras" in page and "/timeline/" in page and "/segment/" in page and "<video" in page
+        from datetime import datetime, timezone
+        from vms.archive import segment_path
+        seg = segment_path(box.spool, 1, 1, datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)); os.makedirs(os.path.dirname(seg), exist_ok=True)
+        open(seg, "wb").write(bytes(range(256))); ArchiveResource(box.spool, box.archive).promote(seg)
+        tl = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/timeline/1"))
+        assert len(tl) == 1 and tl[0]["media"] == "vms/1/e1/20260912T100000Z.mp4"
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/segment/{tl[0]['media']}", headers={"Range": "bytes=10-19"})
+        with urllib.request.urlopen(req) as r:
+            assert r.status == 206 and r.read() == bytes(range(10, 20)) and r.headers["Content-Range"] == "bytes 10-19/256"
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/segment/vms/1/e1/nope.mp4"); raise AssertionError()
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
     finally:
         srv.shutdown(); srv.server_close()

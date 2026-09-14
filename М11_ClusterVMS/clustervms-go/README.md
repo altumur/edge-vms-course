@@ -14,7 +14,7 @@ clustervms-go/
     directory.go               where is camera 7 — one scan of vms/workers/*, cached by time; "w-1+w-2" during a move
     resource.go                VmsRoutes (/manifest, /segment with Range) on the platform's resource server; ClusterResource registers the VMS hook
     timeline.go                MergedTimeline across resources; unreachable named; "not lost"
-    console.go                 /cameras /where /timeline /resources /unplaceable /events /metrics; POST /cameras, /marks; PUT /cameras
+    console.go                 / (М10's page), /segment/<path>?server= proxied from that resource, /cameras /where /timeline /resources /unplaceable /events /metrics; POST /cameras, /marks
     *_test.go                  29 tests; bench_test.go — five operations timed
   cmd/clustervms/main.go       worker | controller | resource | eventindex — the four jobs, the same environment as the Python ones
   cmd/baseline/main.go         a server at idle: one worker and one controller with fifty cameras; prints its PSS
