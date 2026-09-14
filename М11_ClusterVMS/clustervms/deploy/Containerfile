@@ -1,15 +1,13 @@
 # deploy/Containerfile — localhost/clustervms:latest
-# Build from the COURSE ROOT: М10's vmsserver plus this package. One image,
-# four entrypoints: python3 -m cluster worker | controller | console | resource.
-#   podman build -f М11_ClusterVMS/clustervms/deploy/Containerfile -t localhost/clustervms:latest .
-FROM docker.io/library/debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-gi \
-        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-        gir1.2-gst-plugins-base-1.0 curl \
-    && rm -rf /var/lib/apt/lists/*
+# М10's image plus this package: the same Python, GStreamer and vmsserver a
+# Quadlet unit runs on the М9 box, with `cluster` on top — so a job here and
+# a unit there differ only in who starts the process. Build М10's first,
+# then this one from the module directory:
+#   podman build -f ../../М10_ServerVMS/vmsserver/deploy/Containerfile -t localhost/vmsserver:latest ../../М10_ServerVMS/vmsserver
+#   podman build -f deploy/Containerfile -t localhost/clustervms:latest .
+# Four entrypoints: python3 -m cluster worker | controller | console | resource.
+FROM localhost/vmsserver:latest
 WORKDIR /app
-COPY М10_ServerVMS/vmsserver vmsserver
-COPY М11_ClusterVMS/clustervms/cluster cluster
-ENV VMSSERVER_PATH=/app/vmsserver PYTHONPATH=/app/vmsserver
+COPY cluster cluster
+ENV VMSSERVER_PATH=/app PYTHONPATH=/app
 CMD ["python3", "-m", "cluster", "worker"]

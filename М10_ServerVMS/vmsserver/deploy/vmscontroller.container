@@ -1,0 +1,21 @@
+# /etc/containers/systemd/vmscontroller.container — the controller: one per
+# box (one per cluster in М11). Stateless — restart it freely. No port:
+# nothing asks it anything. Its token writes placement only — vms/workers/*,
+# vms/placement/*, vms/slots/*, the snapshot — and never a camera's row.
+[Unit]
+Description=VMS controller — the only writer of placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms controller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

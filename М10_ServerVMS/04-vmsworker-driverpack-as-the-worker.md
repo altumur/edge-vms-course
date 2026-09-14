@@ -133,7 +133,7 @@ assert w2.reconcile_once() == [("start", 1), ("start", 2), ("start", 3)]
 assert act2.epochs == {1: 2, 2: 2, 3: 2}                  # the next epoch for each
 ```
 
-The restart read its assignment and its rows from the store and asked nobody. The old instance — if it is still alive somewhere, paused, partitioned — holds epochs 1 and will find out on its next renewal. That is the property М11's whole failover story rests on, and it is a five-line test here. `deploy/vmsworker@.service` has `Restart=always`; the platform's job is to restart the process, and the process's job is to need nothing else.
+The restart read its assignment and its rows from the store and asked nobody. The old instance — if it is still alive somewhere, paused, partitioned — holds epochs 1 and will find out on its next renewal. That is the property М11's whole failover story rests on, and it is a five-line test here. `deploy/vmsworker@.container` has `Restart=always`; the platform's job is to restart the process, and the process's job is to need nothing else.
 
 ## Step 6 — The zombie, and the reassignment that is not one
 

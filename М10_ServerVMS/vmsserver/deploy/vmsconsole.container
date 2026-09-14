@@ -1,0 +1,27 @@
+# /etc/containers/systemd/vmsconsole.container — the console: the page and
+# the API, its own process on this box (a system job on every server in М11,
+# nothing in front). Its token writes the operator's rows only — vms/cameras/*,
+# vms/next_id, vms/retention/*, vms/idem/* — and never placement; a camera
+# created here is placed by the controller's next pass. The archive is
+# mounted read-only: the console serves segments, it never writes them.
+[Unit]
+Description=VMS console — the operator's rows, the read model, the page
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms console
+Environment=CONSOLE_HOST=0.0.0.0
+Environment=CONSOLE_PORT=8080
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Volume=/data/spool:/data/spool:ro,z
+Volume=/data/archive:/data/archive:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

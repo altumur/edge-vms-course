@@ -1,0 +1,17 @@
+# /etc/containers/systemd/vms-archive-retain.container — the archive resource
+# has no controller; it has a policy, and this is the policy: repair, close
+# event buckets, retain media and events by each camera's own days. Run by
+# vms-archive-retain.timer, so the unit is oneshot and Restart is not set.
+[Unit]
+Description=VMS archive resource — the policy pass
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms retain
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:ro,z
+Volume=/data/spool:/data/spool:z
+Volume=/data/archive:/data/archive:z
+
+[Service]
+Type=oneshot

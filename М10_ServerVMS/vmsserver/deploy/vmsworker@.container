@@ -1,0 +1,31 @@
+# /etc/containers/systemd/vmsworker@.container — the worker, on М9's box.
+# `systemctl start vmsworker@w-1` — the instance name is the slot the worker
+# claims (М10 Lesson 4). One instance on one box; in М11 this unit becomes
+# vmsworker.nomad.hcl with count = N and the slot from NOMAD_ALLOC_INDEX.
+# М9's worker.container, with Postgres gone: the worker's truth is the
+# platform's stores on the data partition, and its archive is the resource.
+[Unit]
+Description=VMS worker %i — pipelines against its assignment
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms worker
+Environment=WORKER_NAME=%i
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Volume=/data/spool:/data/spool:z
+Volume=/data/archive:/data/archive:z
+Volume=/data/media:/data/media:ro,z
+Network=host
+# SIGTERM lets every splitmuxsink finalize its open segment and the worker
+# release its slot; SIGKILL loses exactly that segment (М10 Lesson 3) and
+# leaves the slot to lapse (Lesson 4).
+StopTimeout=20
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

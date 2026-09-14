@@ -1,9 +1,12 @@
+# /etc/containers/systemd/vms-archive-retain.timer — a plain timer beside the
+# Quadlet unit; Quadlet generates vms-archive-retain.service from the .container.
 [Unit]
 Description=Run the archive resource's policy every ten minutes
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=10min
+Unit=vms-archive-retain.service
 
 [Install]
 WantedBy=timers.target

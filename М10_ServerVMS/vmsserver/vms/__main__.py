@@ -1,4 +1,4 @@
-"""python3 -m vms worker|controller|console — the three processes, on one box.
+"""python3 -m vms worker|controller|console|retain — the three processes on one box, and the archive policy pass.
 
     PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
     SPOOL=/data/spool  ARCHIVE=/data/archive  MEDIA_DIR=/data/media
@@ -78,5 +78,19 @@ def console() -> None:
     srv.shutdown()
 
 
+def retain() -> None:
+    """The archive resource has no controller — it has a policy, run by a timer:
+    repair, close event buckets, retain media and events by each camera's days."""
+    import time
+    from .config import row
+    res = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
+    vars_ = FileVariables(os.path.join(root, "config"))
+    now = time.time()
+    logging.info("repair %s; closed %d buckets", res.repair(), len(res.close_buckets(now)))
+    for p in vars_.list("vms/cameras/"):
+        c = row(vars_.get(p)[0])
+        logging.info("camera %s: removed %s", c["id"], res.retain(c["id"], c["retention_days"], now, c["events_retention_days"]))
+
+
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "console": console}[sys.argv[1]]()
+    {"worker": worker, "controller": controller, "console": console, "retain": retain}[sys.argv[1]]()

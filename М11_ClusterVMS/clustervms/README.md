@@ -26,7 +26,7 @@ clustervms/
     vmsworker-policy.hcl, vmscontroller-policy.hcl, console-policy.hcl, resource-policy.hcl   L2  one writer per prefix: placement (workers/, placement/, slots/, the snapshot) for the controller; the operator's rows (cameras/, next_id, retention/) for the console; vms/epoch/*, vms/slots/* and its heartbeat for a worker; platform/resources/* for a resource
     verify-bench.sh            the six checks that need a real cluster, PASS/FAIL — including the ACL from inside an allocation and a scale drill
     failover-drill.sh          L4  the power pull, measured: three runs, worst case kept, the old instance's conflicts counted
-    Containerfile              the image: vmsserver + cluster, four entrypoints
+    Containerfile              the image: FROM М10's localhost/vmsserver (the Quadlet units' image) plus cluster/, four entrypoints
   tests/                       29 tests, no Nomad, no GStreamer, milliseconds: python3 tests/run.py
 ```
 

@@ -1,0 +1,18 @@
+# deploy/Containerfile — localhost/vmsserver:latest
+# One image, four entrypoints: python3 -m vms worker | controller | console | retain.
+# The same image М11's jobs run (its Containerfile starts FROM this one), so a
+# Quadlet unit on the М9 box and a Nomad job on a cluster differ only in who
+# starts the process. Build from the module directory:
+#   podman build -f deploy/Containerfile -t localhost/vmsserver:latest .
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-gi \
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+        gir1.2-gst-plugins-base-1.0 curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY vmsplatform vmsplatform
+COPY vms vms
+COPY gstvms gstvms
+ENV PYTHONPATH=/app
+CMD ["python3", "-m", "vms", "worker"]
