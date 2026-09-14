@@ -56,6 +56,7 @@ fi
 ctok="$(nomad acl token create -type client -policy console -ttl 10m -json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["SecretID"])')"
 if [ -n "$ctok" ]; then
   NOMAD_TOKEN="$ctok" nomad var put -force vms/cameras/verify name=probe >/dev/null 2>&1 && ok "console token writes vms/cameras/*" || bad "console token cannot write a camera row"
+  NOMAD_TOKEN="$ctok" nomad var put -force vms/idem/verify state=done >/dev/null 2>&1 && ok "console token writes vms/idem/* (a retry answered by any instance)" || bad "console token cannot write vms/idem/*"
   if NOMAD_TOKEN="$ctok" nomad var put -force vms/placement/verify worker=w-0 >/dev/null 2>&1; then bad "console token wrote vms/placement/* — a console that can place is a second controller"; else ok "console token refused on vms/placement/* (403)"; fi
   if NOMAD_TOKEN="$ctok" nomad var put -force vms/workers/w-verify units=1 >/dev/null 2>&1; then bad "console token wrote vms/workers/*"; else ok "console token refused on vms/workers/* (403)"; fi
   nomad var purge vms/cameras/verify >/dev/null 2>&1

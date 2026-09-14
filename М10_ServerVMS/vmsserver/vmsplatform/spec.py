@@ -131,8 +131,8 @@ class SubsystemSpec:
 
     # -- who writes what: two tokens, one prefix each ------------------------------------
     def acl_console(self) -> list[str]:
-        """The operator's rows: what a console (count ≥ 2, anywhere) may write — never placement."""
-        out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id"]
+        """The operator's rows: what a console (one per server, any of them) may write — never placement."""
+        out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*"]   # idem: a retried POST answered the same by ANY instance
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")
         return out

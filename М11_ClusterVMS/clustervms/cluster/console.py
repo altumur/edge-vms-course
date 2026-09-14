@@ -1,4 +1,4 @@
-"""The cluster console, standard library — its own job (count ≥ 2, anywhere),
+"""The cluster console, standard library — its own job (`system`: one on every server, nothing in front),
 its own token (the operator's rows, never placement). The platform's
 SpecConsole run from the VMS spec, exactly as М10 runs it; what a CLUSTER
 adds is where the bytes are — two routes, registered, not subclassed:

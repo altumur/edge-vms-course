@@ -15,7 +15,8 @@ package vmsplatform
 //	GET  /events?from&to&unit&kind&subsystem   from the eventindex, if this console runs one
 //	GET  /metrics                <name>_workers_live · _worker_headroom{worker,server} · _worker_load · _epoch_conflicts ·
 //	                             _failover_seconds{kind="worst"} · _resources_live · <name>_<running> (the spec names the gauge)
-//	POST /<rows>  (Idempotency-Key)   the row only — the controller places it on its next pass
+//	POST /<rows>  (Idempotency-Key)   the row only — the controller places it on its next pass; the key is a Variable
+//	                             (<sub>/idem/<key>), so the retry is answered the same by whichever console gets it
 //	PUT  /<rows>/<id>            the operator's fields; a new revision; refused where the controller refuses
 //	DELETE /<rows>/<id>          the row is marked; the controller's pass takes its placement back
 //	POST /marks  (Idempotency-Key)    an operator's observation {unit|cam, note}: the CONSOLE's event, into
@@ -135,25 +136,112 @@ type Reply struct {
 	Body   any
 }
 
-// Idempotent remembers each key's first reply.
-type Idempotent struct {
-	mu   sync.Mutex
-	seen map[string]Reply
+// IdempotencyKeys: a retried POST must be the same POST whichever console
+// answers it, so the key lives in the store, not in a process: <sub>/idem/<key>
+// is claimed by a create-only CAS before the write and filled with the reply
+// after it. A second instance that sees the claim waits for the reply and
+// serves it; it never repeats the write. Keys older than TTL are pruned on
+// the way past, at most once a minute.
+type IdempotencyKeys struct {
+	Vars   Variables
+	Prefix string
+	Wall   Clock
+	TTL    float64
+	Sleep  func(time.Duration)
+
+	mu     sync.Mutex
+	pruned time.Time
 }
 
-func NewIdempotent() *Idempotent { return &Idempotent{seen: map[string]Reply{}} }
-
-func (i *Idempotent) Get(key string) (Reply, bool) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	r, ok := i.seen[key]
-	return r, ok
+func NewIdempotencyKeys(vars Variables, prefix string, wall Clock) *IdempotencyKeys {
+	return &IdempotencyKeys{Vars: vars, Prefix: prefix, Wall: wall, TTL: 86400, Sleep: time.Sleep}
 }
 
-func (i *Idempotent) Set(key string, r Reply) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.seen[key] = r
+var ErrBadKey = errors.New("Idempotency-Key must be one path segment")
+
+func (k *IdempotencyKeys) path(key string) (string, error) {
+	if key == "" || strings.Contains(key, "/") || strings.Contains(key, "..") || len(key) > 200 {
+		return "", ErrBadKey
+	}
+	return k.Prefix + key, nil
+}
+
+// Claim: (nil, nil) means ours to answer — do the write, then Store. Otherwise the reply to serve.
+func (k *IdempotencyKeys) Claim(key string) (*Reply, error) {
+	path, err := k.path(key)
+	if err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := k.Vars.Put(path, Items{"state": "pending", "at": strconv.FormatFloat(k.Wall(), 'f', 3, 64)}, 0) // create-only: the first claimant wins
+		if err == nil {
+			k.Prune()
+			return nil, nil
+		}
+		if !errors.Is(err, ErrConflict) {
+			return nil, err
+		}
+		for i := 0; i < 40; i++ { // another instance holds it: its reply, when it lands
+			items, _, _ := k.Vars.Get(path)
+			if items == nil {
+				break // pruned or crashed mid-flight: claim again
+			}
+			if items["state"] == "done" {
+				st, _ := strconv.Atoi(items["status"])
+				var body any
+				json.Unmarshal([]byte(items["body"]), &body)
+				return &Reply{st, body}, nil
+			}
+			k.Sleep(50 * time.Millisecond)
+		}
+		if items, _, _ := k.Vars.Get(path); items != nil {
+			return &Reply{409, map[string]any{"detail": "the same request is in flight on another console", "error": "in flight"}}, nil
+		}
+	}
+	return &Reply{409, map[string]any{"detail": "the same request is in flight on another console", "error": "in flight"}}, nil
+}
+
+func (k *IdempotencyKeys) Store(key string, r Reply) {
+	path, err := k.path(key)
+	if err != nil {
+		return
+	}
+	raw, _ := json.Marshal(r.Body)
+	k.Vars.Put(path, Items{"state": "done", "status": strconv.Itoa(r.Status), "body": string(raw), "at": strconv.FormatFloat(k.Wall(), 'f', 3, 64)}, NoCAS)
+}
+
+// Prune deletes keys older than TTL; at most once a minute. Returns how many went.
+func (k *IdempotencyKeys) Prune() int {
+	k.mu.Lock()
+	if time.Since(k.pruned) < time.Minute {
+		k.mu.Unlock()
+		return 0
+	}
+	k.pruned = time.Now()
+	k.mu.Unlock()
+	n, now := 0, k.Wall()
+	paths, _ := k.Vars.List(k.Prefix)
+	for _, p := range paths {
+		items, idx, _ := k.Vars.Get(p)
+		if items == nil {
+			continue
+		}
+		at, _ := strconv.ParseFloat(items["at"], 64)
+		if now-at > k.TTL {
+			if k.Vars.Delete(p, idx) == nil {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// ForcePrune runs Prune regardless of the once-a-minute guard (tests, an operator's request).
+func (k *IdempotencyKeys) ForcePrune() int {
+	k.mu.Lock()
+	k.pruned = time.Time{}
+	k.mu.Unlock()
+	return k.Prune()
 }
 
 // Heartbeats: every worker's last heartbeat under prefix, whatever its age — the read model's source.
@@ -201,7 +289,7 @@ type SpecConsole struct {
 	O        ConsoleOptions
 	Instance string
 	Marks    *EventLog
-	Seen     *Idempotent
+	Seen     *IdempotencyKeys // in the store: any instance answers a retry
 
 	mu     sync.Mutex
 	scanAt time.Time
@@ -217,7 +305,7 @@ func NewSpecConsole(ctl *SpecController, o ConsoleOptions) *SpecConsole {
 		o.LostAfter = 45
 	}
 	host, _ := os.Hostname()
-	c := &SpecConsole{Ctl: ctl, Spec: ctl.Spec, O: o, Instance: fmt.Sprintf("%s:%d", host, os.Getpid()), Seen: NewIdempotent()}
+	c := &SpecConsole{Ctl: ctl, Spec: ctl.Spec, O: o, Instance: fmt.Sprintf("%s:%d", host, os.Getpid()), Seen: NewIdempotencyKeys(ctl.Vars, ctl.Spec.Name+"/idem/", o.Wall)}
 	if o.MarksRoot != "" {
 		c.Marks = NewEventLog(o.MarksRoot, "console", c.Instance, 1, 600) // the console's own log: one writer, so epoch 1
 	}
@@ -481,8 +569,11 @@ func (c *SpecConsole) Handler() http.Handler {
 				SendJSON(w, 400, map[string]any{"detail": "Idempotency-Key header is required", "error": "Idempotency-Key required"})
 				return
 			}
-			if r, ok := c.Seen.Get(key); ok {
-				SendJSON(w, r.Status, r.Body)
+			if prior, err := c.Seen.Claim(key); err != nil {
+				SendJSON(w, 400, map[string]any{"detail": err.Error(), "error": err.Error()})
+				return
+			} else if prior != nil {
+				SendJSON(w, prior.Status, prior.Body)
 				return
 			}
 			var r Reply
@@ -495,7 +586,7 @@ func (c *SpecConsole) Handler() http.Handler {
 			} else {
 				r = c.Create(ReadBody(req))
 			}
-			c.Seen.Set(key, r)
+			c.Seen.Store(key, r)
 			SendJSON(w, r.Status, r.Body)
 		case "PUT":
 			if !strings.HasPrefix(path, rowsPath+"/") {
@@ -504,14 +595,17 @@ func (c *SpecConsole) Handler() http.Handler {
 			}
 			key := req.Header.Get("Idempotency-Key")
 			if key != "" {
-				if r, ok := c.Seen.Get(key); ok {
-					SendJSON(w, r.Status, r.Body)
+				if prior, err := c.Seen.Claim(key); err != nil {
+					SendJSON(w, 400, map[string]any{"detail": err.Error(), "error": err.Error()})
+					return
+				} else if prior != nil {
+					SendJSON(w, prior.Status, prior.Body)
 					return
 				}
 			}
 			r := c.Update(LastSegment(path), ReadBody(req))
 			if key != "" {
-				c.Seen.Set(key, r)
+				c.Seen.Store(key, r)
 			}
 			SendJSON(w, r.Status, r.Body)
 		case "DELETE":

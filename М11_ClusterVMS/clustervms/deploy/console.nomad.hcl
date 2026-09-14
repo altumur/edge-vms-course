@@ -1,15 +1,18 @@
 # deploy/console.nomad.hcl — the console: the page, the API, the eventindex.
-# count = 2 because a person is waiting on it, and it is stateless: every
-# instance reads the same raft and the same heartbeats and rebuilds its
-# index from the resources on start. Placed on servers that run a resource
-# so that an operator's marks have a bucket to go into; drop the constraint
-# and /marks answers 503 on a server without one.
+# A system job: one instance on every server that runs a resource, so that
+# any server's :8080 is the console and nothing sits in front of it — no
+# load balancer, no ingress; a person types any server's name, or a DNS
+# name that resolves to all of them. It is stateless: every instance reads
+# the same raft and the same heartbeats and rebuilds its index from the
+# resources on start, and a retried POST is answered the same by whichever
+# instance gets it because the Idempotency-Key is a Variable (vms/idem/*).
+# Placed on servers that run a resource so that an operator's marks have a
+# bucket to go into; drop the constraint and /marks answers 503 there.
 job "console" {
   datacenters = ["room-a"]
-  type        = "service"
+  type        = "system"
 
   group "console" {
-    count = 2
     constraint {
       attribute = "${meta.archive}"
       operator  = "is_set"

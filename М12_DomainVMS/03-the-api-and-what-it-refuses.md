@@ -109,7 +109,7 @@ Everything so far is recorders talking to stores. Now people.
 
 **A worker serves few, trusted, internal clients. Something else serves many, untrusted, external ones.** A worker's memory is `B + n·I`, budgeted for cameras; a browser is numerous, on a bad network, behind NAT, inclined to open six tabs and leave them. The moment a worker serves browsers, a slow viewer on a Saturday night competes with recording for the same process. So the worker's clients are exactly one — the live gateway, on its tee — and the console never touches a worker at all; the two are separate processes because they fail differently:
 
-**The console** — the UI's static files, the API above, the read model, TLS, token verification. Stateless, `count = 2`, placed anywhere (`deploy/console.nomad.hcl`). `python3 -m domain.console` is the standard-library version; the test drives it over HTTP:
+**The console** — the UI's static files, the API above, the read model, TLS, token verification. Stateless, one per server or `count = 2`, placed anywhere (`deploy/console.nomad.hcl`). `python3 -m domain.console` is the standard-library version; the test drives it over HTTP:
 
 ```
 GET  /api/cameras?q=&page=&size=&cluster=     PUT /api/cameras/7   (Idempotency-Key required)
@@ -173,7 +173,7 @@ In no case does a web problem reach a recorder, and in no case does a recorder's
 1. Set `lost_after` below `HEARTBEAT_INTERVAL` and describe what the operator sees. Then say why the number must be М11's `lost_after` and not a console setting.
 2. Add М9's `conditions` to the worker's status (the heartbeat carries `position` only) and cost it: bytes per worker per interval at fifty cameras with three conditions each — and say at what count the object store stops being Variables.
 3. Write the `causes()` case for a whole datacenter — every server in one cluster silent while the cluster's Variables still answer (the servers are up, the cameras' network is gone). Which scope is that?
-4. The idempotency cache is in the console's memory and `count = 2`. Say what a retry that lands on the other instance does, and whether the controller's CAS on the row (М10 Lesson 5) saves you.
+4. The domain console's idempotency cache is in its memory and `count = 2`. Say what a retry that lands on the other instance does, and whether the controller's CAS on the row (М10 Lesson 5) saves you. Then read how М10's `SpecConsole` moved the key into the store (`vms/idem/<key>`, claimed by create-only CAS) and say what the domain's version should do.
 5. Replace the leaky queue with a blocking one on the *upstream* subscription and run the fan-out test. Then say, in one sentence, which process you just made a dependency of recording.
 
 ## Where this is going

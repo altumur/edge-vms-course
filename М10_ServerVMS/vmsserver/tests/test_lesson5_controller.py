@@ -3,6 +3,7 @@ property tests; two controllers; the read model; the failure arithmetic."""
 import json
 import os
 import threading
+import time
 import urllib.request
 from vms.console import serve
 from vms.controller import Refused, VmsController
@@ -218,3 +219,43 @@ def test_the_console_over_http():
             assert e.code == 404                                                                   # gone is gone
     finally:
         srv.shutdown(); srv.server_close()
+
+
+def test_a_retry_that_lands_on_another_console_is_one_camera():
+    """With a console on every server, a client's retry may reach a different
+    instance. The key is a Variable, claimed by create-only CAS, so the second
+    console serves the first one's reply and never repeats the write."""
+    import threading
+    from vms.config import SPEC
+    box = Box()
+    a = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    b = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    s1 = serve(a, None, port=0, wall=box.wall); s2 = serve(b, None, port=0, wall=box.wall)
+    p1, p2 = s1.server_address[1], s2.server_address[1]
+    try:
+        def post(port, key, name="gate"):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras", data=json.dumps({"name": name, "source": "driverpack://file/g.mp4"}).encode(),
+                                         method="POST", headers={"Idempotency-Key": key})
+            try:
+                with urllib.request.urlopen(req) as r: return r.status, json.load(r)
+            except urllib.error.HTTPError as e: return e.code, json.load(e)
+        first = post(p1, "k-1"); again = post(p2, "k-1")                     # the retry reaches the OTHER console
+        assert first == again and first[0] == 201 and len(a.cameras()) == 1
+        assert box.vars.get("vms/idem/k-1")[0]["state"] == "done"
+        # in flight: console B holds the claim and has not answered yet; A waits for B's reply rather than writing
+        box.vars.put("vms/idem/k-2", {"state": "pending", "at": box.wall()}, cas=0)
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", post(p1, "k-2"))); t.start()
+        time.sleep(0.15); assert "r" not in out and len(a.cameras()) == 1
+        box.vars.put("vms/idem/k-2", {"state": "done", "status": 201, "body": json.dumps({"id": 1, "worker": None}), "at": box.wall()})
+        t.join(3); assert out["r"] == (201, {"id": 1, "worker": None}) and len(a.cameras()) == 1
+        # a key with a slash is not a path segment
+        assert post(p1, "a/b")[0] == 400
+        # old keys go: a day later the next claim prunes them (at most once a minute)
+        from vmsplatform.console import IdempotencyKeys
+        keys = IdempotencyKeys(box.vars, "vms/idem/", box.wall, clock=box.clock)
+        box.wall.advance(90000); box.clock.advance(61)
+        assert keys.prune() == 2 and box.vars.list("vms/idem/") == [] and keys.prune() == 0
+        assert post(p2, "k-1")[1]["id"] == 2                                 # a forgotten key is a new request, by design
+    finally:
+        s1.shutdown(); s1.server_close(); s2.shutdown(); s2.server_close()

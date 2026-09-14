@@ -18,12 +18,7 @@ import urllib.request
 from typing import Protocol
 
 
-class Conflict(Exception):
-    """HTTP 409: the cas index did not match the current ModifyIndex."""
-
-
-class Forbidden(Exception):
-    """HTTP 403: this token may not write that path — one writer per key."""
+from vmsplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
 
 
 class Variables(Protocol):

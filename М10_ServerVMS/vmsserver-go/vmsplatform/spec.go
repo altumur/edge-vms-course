@@ -289,9 +289,9 @@ func LoadSpec(path string) (*SubsystemSpec, error) {
 
 func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
 
-// ACLConsole: the operator's rows — what a console (count ≥ 2, anywhere) may write; never placement.
+// ACLConsole: the operator's rows — what a console (one per server, any of them) may write; never placement.
 func (s *SubsystemSpec) ACLConsole() []string {
-	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id"}
+	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*"} // idem: a retried POST answered the same by ANY instance
 	for _, d := range s.Derived {
 		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")
 	}

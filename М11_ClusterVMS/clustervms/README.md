@@ -20,7 +20,7 @@ clustervms/
     server.hcl, client.hcl     L1  three servers, ACLs on, meta.labels and meta.archive, the Podman plugin
     vmsworker.nomad.hcl        L2  service, count = N, the `scaling` block on avg(vms_worker_load), the disconnect numbers, kill_timeout for the slot release
     vmscontroller.nomad.hcl    L2  service, count = 1, no port — safe at two; economy, not correctness
-    console.nomad.hcl          L2  service, count = 2 — the page, the API, the eventindex; a person is waiting on it
+    console.nomad.hcl          L2  system — one console on every server with a resource, nothing in front; the page, the API, the eventindex
     resource.nomad.hcl         L2  system, on meta.archive — the PLATFORM's resource job, with the VMS registered on it
     autoscaler.nomad.hcl       L2  the Nomad Autoscaler (MPL-2.0): the fifth job, and the only thing that changes count
     vmsworker-policy.hcl, vmscontroller-policy.hcl, console-policy.hcl, resource-policy.hcl   L2  one writer per prefix: placement (workers/, placement/, slots/, the snapshot) for the controller; the operator's rows (cameras/, next_id, retention/) for the console; vms/epoch/*, vms/slots/* and its heartbeat for a worker; platform/resources/* for a resource

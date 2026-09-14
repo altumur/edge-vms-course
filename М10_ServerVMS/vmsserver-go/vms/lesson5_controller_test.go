@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"vmsserver/testbox"
 	"vmsserver/vms"
@@ -413,5 +414,63 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	}
 	if st, _, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 { // gone is gone
 		t.Fatal(st)
+	}
+}
+
+func TestARetryThatLandsOnAnotherConsoleIsOneCamera(t *testing.T) {
+	// With a console on every server, a client's retry may reach a different
+	// instance. The key is a Variable, claimed by create-only CAS, so the
+	// second console serves the first one's reply and never repeats the write.
+	box := testbox.NewBox()
+	a := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
+	b := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
+	s1, l1, _ := vms.Serve(a, nil, "127.0.0.1:0", box.Wall.Now)
+	s2, l2, _ := vms.Serve(b, nil, "127.0.0.1:0", box.Wall.Now)
+	defer s1.Close()
+	defer s2.Close()
+	b1, b2 := "http://"+l1.Addr().String(), "http://"+l2.Addr().String()
+	body := map[string]any{"name": "gate", "source": "driverpack://file/g.mp4"}
+	st, first, _ := call(t, "POST", b1+"/cameras", body, map[string]string{"Idempotency-Key": "k-1"})
+	st2, again, _ := call(t, "POST", b2+"/cameras", body, map[string]string{"Idempotency-Key": "k-1"}) // the retry reaches the OTHER console
+	if st != 201 || st2 != 201 || !reflect.DeepEqual(first, again) || len(a.Cameras()) != 1 {
+		t.Fatal(st, st2, first, again)
+	}
+	if items, _, _ := box.Vars.Get("vms/idem/k-1"); items["state"] != "done" {
+		t.Fatal(items)
+	}
+	// in flight: console B holds the claim and has not answered yet; A waits for B's reply rather than writing
+	box.Vars.Put("vms/idem/k-2", p.Items{"state": "pending", "at": "0"}, 0)
+	done := make(chan map[string]any, 1)
+	go func() {
+		_, r, _ := call(t, "POST", b1+"/cameras", body, map[string]string{"Idempotency-Key": "k-2"})
+		done <- r
+	}()
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case r := <-done:
+		t.Fatal("answered before the claim was filled", r)
+	default:
+	}
+	if len(a.Cameras()) != 1 {
+		t.Fatal("wrote while another instance held the key")
+	}
+	box.Vars.Put("vms/idem/k-2", p.Items{"state": "done", "status": "201", "body": `{"id":1,"worker":null}`, "at": "0"}, p.NoCAS)
+	if r := <-done; r["id"] != 1.0 || len(a.Cameras()) != 1 {
+		t.Fatal(r)
+	}
+	if st, _, _ := call(t, "POST", b1+"/cameras", body, map[string]string{"Idempotency-Key": "a/b"}); st != 400 { // not a path segment
+		t.Fatal(st)
+	}
+	// old keys go: a day later the next claim prunes them
+	keys := p.NewIdempotencyKeys(box.Vars, "vms/idem/", box.Wall.Now)
+	box.Wall.Advance(90000)
+	if n := keys.ForcePrune(); n != 2 {
+		t.Fatal(n)
+	}
+	if paths, _ := box.Vars.List("vms/idem/"); len(paths) != 0 {
+		t.Fatal(paths)
+	}
+	if _, r, _ := call(t, "POST", b2+"/cameras", body, map[string]string{"Idempotency-Key": "k-1"}); r["id"] != 2.0 { // a forgotten key is a new request, by design
+		t.Fatal(r)
 	}
 }

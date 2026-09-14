@@ -60,7 +60,7 @@ def controller() -> None:
 
 
 def console() -> None:
-    """count ≥ 2, anywhere: the page, the API, the eventindex. Its token writes
+    """one per server, a system job: the page, the API, the eventindex. Its token writes
     the operator's rows and nothing else; a create is placed by the controller's
     next pass."""
     from cluster.console import serve

@@ -14,7 +14,8 @@ show them. So the console is one class, run from the same spec:
     GET  /metrics                <name>_workers_live · <name>_worker_headroom{worker,server} · <name>_worker_load ·
                                  <name>_epoch_conflicts · <name>_failover_seconds{kind="worst"} · <name>_resources_live ·
                                  <name>_<running> (units in phase "running"; the spec names the gauge)
-    POST /<rows>  (Idempotency-Key)   the row only — the controller places it on its next pass
+    POST /<rows>  (Idempotency-Key)   the row only — the controller places it on its next pass; the key is a Variable
+                                 (<sub>/idem/<key>), so the retry is answered the same by whichever console gets it
     PUT  /<rows>/<id>            the operator's fields; a new revision; refused where the controller refuses
     DELETE /<rows>/<id>          the row is marked; the controller's pass takes its placement back
     POST /marks  (Idempotency-Key)    an operator's observation {unit|cam, note}: the CONSOLE's event, into
@@ -44,6 +45,7 @@ from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
 from .spec import Refused, SpecController
+from .variables import Conflict
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console.html")
 
@@ -75,6 +77,58 @@ def heartbeats(objects, prefix: str) -> dict[str, Heartbeat]:
     return out
 
 
+class IdempotencyKeys:
+    """A retried POST must be the same POST whichever console answers it, so
+    the key lives in the store, not in a process: `<sub>/idem/<key>` is
+    claimed by a create-only CAS before the write and filled with the reply
+    after it. A second instance that sees the claim waits for the reply and
+    serves it; it never repeats the write. Keys older than `ttl` are pruned
+    on the way past, at most once a minute."""
+
+    def __init__(self, vars_, prefix: str, wall, ttl: float = 86400.0, clock=time.monotonic, sleep=time.sleep):
+        self.vars, self.prefix, self.wall, self.ttl, self.clock, self.sleep = vars_, prefix, wall, ttl, clock, sleep
+        self._pruned = -1e9
+
+    def _path(self, key: str) -> str:
+        if not key or "/" in key or ".." in key or len(key) > 200:
+            raise Refused("Idempotency-Key must be one path segment")
+        return self.prefix + key
+
+    def claim(self, key: str):
+        """None: ours to answer — do the write, then store(). Else the reply to serve."""
+        path = self._path(key)
+        try:
+            self.vars.put(path, {"state": "pending", "at": self.wall()}, cas=0)   # create-only: the first claimant wins
+            self.prune()
+            return None
+        except Conflict:
+            pass
+        for _ in range(40):                                              # another instance holds it: its reply, when it lands
+            items, _ = self.vars.get(path)
+            if items is None:
+                return self.claim(key)                                   # pruned or crashed mid-flight: claim again
+            if items.get("state") == "done":
+                return int(items["status"]), json.loads(items["body"])
+            self.sleep(0.05)
+        return 409, {"detail": "the same request is in flight on another console", "error": "in flight"}
+
+    def store(self, key: str, resp: tuple[int, dict]) -> None:
+        self.vars.put(self._path(key), {"state": "done", "status": resp[0], "body": json.dumps(resp[1]), "at": self.wall()})
+
+    def prune(self) -> int:
+        if self.clock() - self._pruned < 60:
+            return 0
+        self._pruned = self.clock(); n = 0; now = self.wall()
+        for path in self.vars.list(self.prefix):
+            items, idx = self.vars.get(path)
+            if items and now - float(items.get("at", 0)) > self.ttl:
+                try:
+                    self.vars.delete(path, cas=idx); n += 1
+                except Conflict:
+                    pass
+        return n
+
+
 class SpecConsole:
     """One console for every subsystem. `ctl` is the subsystem's SpecController
     holding the console's token; `media` says the page may draw a timeline and
@@ -87,7 +141,7 @@ class SpecConsole:
         self.instance = f"{socket.gethostname()}:{os.getpid()}"
         self.marks_root = marks_root
         self.marks = EventLog(marks_root, "console", self.instance, 1) if marks_root else None   # the console's own log: one writer, so epoch 1
-        self.seen: dict[str, tuple] = {}
+        self.seen = IdempotencyKeys(ctl.vars, f"{self.spec.name}/idem/", self.wall)   # in the store: any instance answers a retry
         self._scan: tuple[float, dict] = (-1e9, {})
         self.scans = 0
 
@@ -237,8 +291,12 @@ class SpecConsole:
                 key = self.headers.get("Idempotency-Key")
                 if not key:
                     self._send(400, {"detail": "Idempotency-Key header is required", "error": "Idempotency-Key required"}); return None
-                if key in con.seen:
-                    self._send(*con.seen[key]); return None
+                try:
+                    prior = con.seen.claim(key)
+                except Refused as e:
+                    self._send(400, {"detail": str(e), "error": str(e)}); return None
+                if prior is not None:
+                    self._send(*prior); return None
                 return key
 
             def do_POST(self):
@@ -254,18 +312,23 @@ class SpecConsole:
                     resp = con.mark(self._body(), self.headers.get("X-User", "operator"))
                 else:
                     resp = con.create(self._body())
-                con.seen[key] = resp; self._send(*resp)
+                con.seen.store(key, resp); self._send(*resp)
 
             def do_PUT(self):
                 u = urlsplit(self.path)
                 if not u.path.startswith(rows_path + "/"):
                     return self._send(404, {"detail": "no such route", "error": "no such path"})
                 key = self.headers.get("Idempotency-Key")
-                if key and key in con.seen:
-                    return self._send(*con.seen[key])
+                if key:
+                    try:
+                        prior = con.seen.claim(key)
+                    except Refused as e:
+                        return self._send(400, {"detail": str(e), "error": str(e)})
+                    if prior is not None:
+                        return self._send(*prior)
                 resp = con.update(self._uid(), self._body())
                 if key:
-                    con.seen[key] = resp
+                    con.seen.store(key, resp)
                 self._send(*resp)
 
             def do_DELETE(self):

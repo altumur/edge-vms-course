@@ -78,7 +78,7 @@ ctl.publish_snapshot()   -> vms/snapshot  {cluster: "north", ts, cameras: [{…r
 
 ## Step 6 — The console
 
-`cluster/console.py` — its own job now (`count = 2`, `console.nomad.hcl`, a token for the operator's rows and nothing else; М10 Lesson 5, Step 6 has the argument) — is the platform's `SpecConsole` over the VMS spec, exactly as М10 runs it, plus the two routes a *cluster* answers differently: the timeline merged across resources and the segment proxied from the server that has it. Registered as extras; nothing subclassed, no new writes:
+`cluster/console.py` — its own job now (`system`, one on every server and nothing in front — `console.nomad.hcl`; a token for the operator's rows and nothing else; М10 Lesson 5, Step 6 has the argument) — is the platform's `SpecConsole` over the VMS spec, exactly as М10 runs it, plus the two routes a *cluster* answers differently: the timeline merged across resources and the segment proxied from the server that has it. Registered as extras; nothing subclassed, no new writes:
 
 ```
 GET /cameras            rows from every heartbeat: phase, server, age, worker_state

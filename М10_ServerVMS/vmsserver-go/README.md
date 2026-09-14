@@ -31,11 +31,11 @@ vmsserver-go/
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
   cmd/vms/main.go              vms worker|controller — the two processes on one box, with the fake actuator
-  *_test.go                    43 tests, in the packages they test; -race clean
+  *_test.go                    44 tests, in the packages they test; -race clean
 ```
 
 ```bash
-go test ./...                    # 43 tests, ~130 ms
+go test ./...                    # 44 tests, ~130 ms
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```
