@@ -9,7 +9,8 @@ tests skip this package when `gi` is absent; the logic it calls
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # __init__.py — the package docstring: the two GStreamer elements and the actuator that uses them (Track 2)
+# # __init__.py — the package docstring: the two GStreamer elements and the actuator that uses them (Track
+# 2)
 #
 # **Role in the module.** No code, only the docstring. `gstvms` is the part of the VMS that needs a media
 # stack: PyGObject and GStreamer (`python3-gi`, `gst-plugins-good/bad` — the Containerfile installs exactly
@@ -21,11 +22,11 @@ tests skip this package when `gi` is absent; the logic it calls
 #
 # ## Module-level names
 # None, and no imports: importing `gstvms` does not import `gi`. `gstvms.uri` stays importable everywhere;
-# `gstvms.driverpacksrc`, `gstvms.archivesink` and `gstvms.actuator` each `import gi` at the top, which is why
-# `vms/__main__.worker` wraps `from gstvms.actuator import GstActuator` in `try/except ImportError` and falls
-# back to `FakeActuator`.
+# `gstvms.driverpacksrc`, `gstvms.archivesink` and `gstvms.actuator` each `import gi` at the top, which is
+# why `vms/__main__.worker` wraps `from gstvms.actuator import GstActuator` in `try/except ImportError` and
+# falls back to `FakeActuator`.
 #
 # ## Notes
-# - Dependency direction: `gstvms` imports from `vms` (`archivesink` uses `vms.archive`), never the other way
-#   round at import time; the worker reaches `gstvms` only through that guarded import in `__main__`.
+# - Dependency direction: `gstvms` imports from `vms` (`archivesink` uses `vms.archive`), never the other
+#   way round at import time; the worker reaches `gstvms` only through that guarded import in `__main__`.
 # ================================================================================================

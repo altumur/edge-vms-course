@@ -7,39 +7,16 @@
 # ================================================================================================
 # # vmscontroller.container — the controller: one per box, stateless, no port, the only writer of placement
 #
-# **Role.** The Quadlet unit for `vmscontroller` at `/etc/containers/systemd/vmscontroller.container` (one per
-# box; one per cluster in М11). It runs `python3 -m vms controller`: the placement pass every five seconds —
-# `ensure_placed`, `redistribute`, `publish_snapshot`. Stateless, restart it freely; nothing asks it anything,
-# so no port. Its token writes placement only — `vms/workers/*`, `vms/placement/*`, `vms/slots/*`
-# (`SPEC.acl_controller()`) and the snapshot object — and never a camera's row. Checked by
+# **Role.** The Quadlet unit for `vmscontroller` at `/etc/containers/systemd/vmscontroller.container` (one
+# per box; one per cluster in М11). It runs `python3 -m vms controller`: the placement pass every five
+# seconds — `ensure_placed`, `redistribute`, `publish_snapshot`. Stateless, restart it freely; nothing asks
+# it anything, so no port. Its token writes placement only — `vms/workers/*`, `vms/placement/*`,
+# `vms/slots/*` (`SPEC.acl_controller()`) and the snapshot object — and never a camera's row. Checked by
 # `tests/test_deploy_units.py`, which also asserts it mounts neither the archive nor the spool.
 #
-# ## Stanza by stanza
-#
-# ### `[Unit]`
 # - `Description=VMS controller — the only writer of placement`
-# - `After=network.target` — ordering only.
 #
-# ### `[Container]`
-# - `Image=localhost/vmsserver:latest` — the shared image.
-# - `Exec=python3 -m vms controller` — the `controller` verb: `VmsController` over a `FileVariables` opened as
-#   writer `vmscontroller` with the controller ACL.
-# - `EnvironmentFile=/data/config/vms.env` — it needs `PLATFORM_DIR` (the stores), `CAPACITY` (the fallback
-#   for a worker whose heartbeat says nothing) and `LOG_LEVEL`; the rest of the file is harmless to it.
-# - `Volume=/data/platform:/data/platform:z` — the only mount: the config store for rows, assignments,
-#   placement, slots and the object store for heartbeats (read) and the snapshot (write). No `/data/archive`,
-#   no `/data/spool`: "the ACL says which rows each token writes; the mounts say which bytes" — the controller
-#   has no bytes to write. `test_who_may_write_where_is_in_the_mounts_too` asserts both are absent.
-# - `Network=host` — nothing listens; kept for symmetry and for М11's stores.
-#
-# ### `[Service]`
-# - `Restart=always` — a crash loses nothing: every pass reads the store, decides, writes by CAS. Recording
-#   continues while it is down (`test_the_failure_arithmetic`; "the controller is never on the recovery
-#   path").
 # - `RestartSec=2`.
-#
-# ### `[Install]`
-# - `WantedBy=multi-user.target` — starts at boot.
 #
 # ## Notes
 # - No `count` and no scheduler client: how many workers exist is systemd's (`vmsworker@…` instances) or
@@ -49,18 +26,32 @@
 # ================================================================================================
 [Unit]
 Description=VMS controller — the only writer of placement
+# ordering only.
 After=network.target
 
 [Container]
+# the shared image.
 Image=localhost/vmsserver:latest
+# the `controller` verb: `VmsController` over a `FileVariables` opened as writer `vmscontroller` with the
+# controller ACL.
 Exec=python3 -m vms controller
+# it needs `PLATFORM_DIR` (the stores), `CAPACITY` (the fallback for a worker whose heartbeat says nothing)
+# and `LOG_LEVEL`; the rest of the file is harmless to it.
 EnvironmentFile=/data/config/vms.env
+# the only mount: the config store for rows, assignments, placement, slots and the object store for
+# heartbeats (read) and the snapshot (write). No `/data/archive`, no `/data/spool`: "the ACL says which rows
+# each token writes; the mounts say which bytes" — the controller has no bytes to write.
+# `test_who_may_write_where_is_in_the_mounts_too` asserts both are absent.
 Volume=/data/platform:/data/platform:z
+# nothing listens; kept for symmetry and for М11's stores.
 Network=host
 
 [Service]
+# a crash loses nothing: every pass reads the store, decides, writes by CAS. Recording continues while it is
+# down (`test_the_failure_arithmetic`; "the controller is never on the recovery path").
 Restart=always
 RestartSec=2
 
 [Install]
+# starts at boot.
 WantedBy=multi-user.target

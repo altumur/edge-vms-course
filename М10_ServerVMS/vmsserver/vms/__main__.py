@@ -10,11 +10,12 @@
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # __main__.py — `python3 -m vms worker | controller | console | retain`: the three processes on one box, and
+# # __main__.py — `python3 -m vms worker | controller | console | retain`: the three processes on one box,
+# and
 # the archive policy pass
 #
-# **Role in the module.** The entrypoint every deploy unit runs (`deploy/*.container` all say `Exec=python3 -m
-# vms <verb>`; the Containerfile's default `CMD` is `worker`). It reads the environment, opens the two
+# **Role in the module.** The entrypoint every deploy unit runs (`deploy/*.container` all say `Exec=python3
+# -m vms <verb>`; the Containerfile's default `CMD` is `worker`). It reads the environment, opens the two
 # file-backed stores under `$PLATFORM_DIR` with the *right token for the verb*, builds the process's object
 # from `worker.py` / `controller.py` / `console.py` / `archive.py`, and runs it until SIGTERM/SIGINT. It is
 # glue and nothing else: no logic of its own beyond wiring, and each verb's token is deliberately narrower
@@ -31,80 +32,15 @@
 # - `CAPACITY` (default `50`) — cameras this worker can carry; exported as `headroom`. Also passed to the
 #   controller and console as the *fallback* for a worker whose heartbeat says nothing.
 # - `SEGMENT_SECONDS` (default `600`) — segment length handed to `GstActuator`.
-# - `CONSOLE_HOST` (`127.0.0.1`), `CONSOLE_PORT` (`8080`) — where the console listens (`vmsconsole.container`
-#   sets `0.0.0.0`).
+# - `CONSOLE_HOST` (`127.0.0.1`), `CONSOLE_PORT` (`8080`) — where the console listens
+#   (`vmsconsole.container` sets `0.0.0.0`).
 # - `LOG_LEVEL` (`INFO`) — `logging.basicConfig` level.
 #
 # ## Module-level names
 # - `root` — `$PLATFORM_DIR`, read once at import.
-# - `stop` — a `threading.Event` set by the SIGTERM/SIGINT handler installed at import time; every verb loops
-#   on it. Because the handler is installed at import, importing the module (as the deploy test does) also
-#   installs the handlers in the importing process.
-#
-# ## Functions
-#
-# ### `worker()`
-# Builds `vmsworker`:
-# - Resolves the slot name: `WORKER_NAME`, else `w-$NOMAD_ALLOC_INDEX`, else `None`. (Same rule as
-#   `worker.slot_from_environment`, written out again here.)
-# - Opens Variables as writer `vmsworker` with the ACL `["vms/epoch/*", "vms/slots/*"]` — literally
-#   `Subsystem.acl_worker()` for `vms`: a worker takes epochs and claims its slot, and can write nothing else.
-#   A bug that tried to write a camera row would be a `Forbidden` from the store.
-# - Tries `gstvms.actuator.GstActuator(spool, archive, SEGMENT_SECONDS)`; on `ImportError` (no `gi`) logs a
-#   warning and uses `FakeActuator`, which records nothing. This is what the README means by "with GStreamer:
-#   records; without: the fake actuator".
-# - Before the worker exists, runs the restart step of М9 Lesson 4 / М10 Lesson 3:
-#   `ArchiveResource.closed_in_spool(grace_seconds=30, now)` lists segments the previous instance closed but
-#   did not promote (a `kill -9` between close and promote), and each is `promote`d now. The open segment at
-#   the time of the kill is the one that is lost.
-# - Constructs `VmsWorker(name, vars_, objects, act, capacity=$CAPACITY, archive_root=archive)` — the
-#   constructor claims the slot — logs the claimed name and instance, and calls `w.run(stop=stop)`. `run`
-#   releases the slot on the way out, so SIGTERM is an orderly stop (scale-in), while a kill leaves the slot
-#   to lapse.
-#
-# ### `controller()`
-# Builds `vmscontroller` and runs the placement pass every 5 s:
-# - Variables as writer `vmscontroller` with `SPEC.acl_controller()` — `vms/workers/*`, `vms/placement/*`,
-#   `vms/slots/*`; never a camera's row (see `vmsplatform/spec.py`).
-# - `VmsController(vars_, objects, capacity=$CAPACITY)`.
-# - Each pass: `ensure_placed()` (deleted rows unplaced first, then every unplaced camera onto the workers it
-#   currently sees by their heartbeats), `redistribute()` (only the cameras of a *released* slot — scale-in —
-#   move; a merely silent slot is a crash and is left for the scheduler), `publish_snapshot()` (`vms/snapshot`
-#   in the object store). Any exception is logged and the loop continues; `stop.wait(5)` between passes. No
-#   port, no state: the process can be restarted at any moment, and two of them agree by CAS.
-#
-# ### `console()`
-# The screen and the API, as its own process ("count as many as you like"):
-# - Variables as writer `vmsconsole` with `SPEC.acl_console()` — `vms/cameras/*`, `vms/next_id`, `vms/idem/*`,
-#   `vms/retention/*`; never placement. It holds a `VmsController` over that token, so a write it must not
-#   make (`place`) is a `Forbidden` from the store, not a rule in the console.
-# - `ArchiveResource($SPOOL, $ARCHIVE)` so the console can serve `/timeline/<id>` and `/segment/<path>` from
-#   this box's archive and write operator marks into its own bucket.
-# - `serve(ctl, archive, $CONSOLE_HOST, $CONSOLE_PORT)` from `vms/console.py` starts the `ThreadingHTTPServer`
-#   in a daemon thread; the main thread waits on `stop`, then `srv.shutdown()`.
-#
-# ### `retain()`
-# The archive policy pass, run by `vms-archive-retain.timer` as a oneshot (`vms-archive-retain.container`):
-# "the archive resource has no controller — it has a policy, run by a timer".
-# - `ArchiveResource($SPOOL, $ARCHIVE)`; Variables opened with *no* writer and no ACL — the pass only reads
-#   rows (the unit mounts `/data/platform` read-only for the same reason).
-# - Logs `res.repair()` (manifests made to agree with the files) and the number of `res.close_buckets(now)`
-#   (event buckets whose span is over and quiet get their manifest line).
-# - Media — the VMS's own policy, per camera, on its manifest: for every path under `vms/cameras/`, reads the
-#   row through `config.row` and calls `res.retain(c["id"], c["retention_days"], now)`, logging what was
-#   removed.
-# - Events — the platform's, by the derived row `vms/retention/<cam>`: builds
-#   `vmsplatform.resource.Resource(archive, hostname, "", vars_, objects)` (url `""` — nothing is served here,
-#   the object is used only for its policy) and calls `platform.retain()`, which deletes every bucket file on
-#   this resource older than its unit's days (`retention_days(vars, sub, unit)`: the derived row, else
-#   `vms/retention`, else a year) and logs the count. Files only: the manifest lines for those buckets are
-#   dropped by `res.repair()` on the *next* pass — the split `archive.py`'s docstring describes.
-#
-# Two halves, two owners, one pass — the division `test_events_are_buckets_on_the_resource_recording_or_not`
-# exercises by hand (`res.retain(...) == 1`, then `Resource(...).retain() == 3`, then `res.repair() ==
-# {dropped: 3}`). Note that `vars_.list("vms/cameras/")` includes rows marked `deleted: "true"`; `row()`
-# parses them like any other, so a deleted camera's media is still retained by its last `retention_days`,
-# while its buckets go at once because `delete_camera` set `vms/retention/<id>` to `{days: 0}`.
+# - `stop` — a `threading.Event` set by the SIGTERM/SIGINT handler installed at import time; every verb
+#   loops on it. Because the handler is installed at import, importing the module (as the deploy test does)
+#   also installs the handlers in the importing process.
 #
 # ### `if __name__ == "__main__"`
 # Dispatch table `{"worker", "controller", "console", "retain"}` on `sys.argv[1]`.
@@ -112,16 +48,16 @@
 # against the `Exec=` lines of the four Quadlet units.
 #
 # ## Notes
-# - Three tokens, three processes: `vmsworker` (epochs, slots), `vmscontroller` (placement), `vmsconsole` (the
-#   operator's rows). Together they partition `vms/*`; none of them can do another's job. The mounts in
+# - Three tokens, three processes: `vmsworker` (epochs, slots), `vmscontroller` (placement), `vmsconsole`
+#   (the operator's rows). Together they partition `vms/*`; none of them can do another's job. The mounts in
 #   `deploy/` repeat the same split in bytes (`test_who_may_write_where_is_in_the_mounts_too`).
 # - `CAPACITY` means two different things depending on the verb: the worker's own number (what it heartbeats
 #   and places by) versus the controller's fallback for a worker that has not spoken yet
 #   (`test_capacity_is_the_workers_word_not_the_controllers`).
-# - No verb runs the platform's `Resource` as a *job* on one box (no heartbeat, no HTTP, no mirror); `retain`
-#   instantiates one only to run its bucket-retention policy in the same timer pass as the VMS's media policy.
-#   The README calls the bucket half "the platform's" and the test proves it with a `Resource` object
-#   directly.
+# - No verb runs the platform's `Resource` as a *job* on one box (no heartbeat, no HTTP, no mirror);
+#   `retain` instantiates one only to run its bucket-retention policy in the same timer pass as the VMS's
+#   media policy. The README calls the bucket half "the platform's" and the test proves it with a `Resource`
+#   object directly.
 # ================================================================================================
 from __future__ import annotations
 
@@ -145,6 +81,23 @@ for s in (signal.SIGTERM, signal.SIGINT):
     signal.signal(s, lambda *_: stop.set())
 
 
+# Builds `vmsworker`:
+# - Resolves the slot name: `WORKER_NAME`, else `w-$NOMAD_ALLOC_INDEX`, else `None`. (Same rule as
+#   `worker.slot_from_environment`, written out again here.)
+# - Opens Variables as writer `vmsworker` with the ACL `["vms/epoch/*", "vms/slots/*"]` — literally
+#   `Subsystem.acl_worker()` for `vms`: a worker takes epochs and claims its slot, and can write nothing
+#   else. A bug that tried to write a camera row would be a `Forbidden` from the store.
+# - Tries `gstvms.actuator.GstActuator(spool, archive, SEGMENT_SECONDS)`; on `ImportError` (no `gi`) logs a
+#   warning and uses `FakeActuator`, which records nothing. This is what the README means by "with
+#   GStreamer: records; without: the fake actuator".
+# - Before the worker exists, runs the restart step of М9 Lesson 4 / М10 Lesson 3:
+#   `ArchiveResource.closed_in_spool(grace_seconds=30, now)` lists segments the previous instance closed but
+#   did not promote (a `kill -9` between close and promote), and each is `promote`d now. The open segment at
+#   the time of the kill is the one that is lost.
+# - Constructs `VmsWorker(name, vars_, objects, act, capacity=$CAPACITY, archive_root=archive)` — the
+#   constructor claims the slot — logs the claimed name and instance, and calls `w.run(stop=stop)`. `run`
+#   releases the slot on the way out, so SIGTERM is an orderly stop (scale-in), while a kill leaves the slot
+#   to lapse.
 def worker() -> None:
     name = os.environ.get("WORKER_NAME") or (f"w-{os.environ['NOMAD_ALLOC_INDEX']}" if "NOMAD_ALLOC_INDEX" in os.environ else None)
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsworker", acl={"vmsworker": ["vms/epoch/*", "vms/slots/*"]})
@@ -164,6 +117,16 @@ def worker() -> None:
     w.run(stop=stop)
 
 
+# Builds `vmscontroller` and runs the placement pass every 5 s:
+# - Variables as writer `vmscontroller` with `SPEC.acl_controller()` — `vms/workers/*`, `vms/placement/*`,
+#   `vms/slots/*`; never a camera's row (see `vmsplatform/spec.py`).
+# - `VmsController(vars_, objects, capacity=$CAPACITY)`.
+# - Each pass: `ensure_placed()` (deleted rows unplaced first, then every unplaced camera onto the workers
+#   it currently sees by their heartbeats), `redistribute()` (only the cameras of a *released* slot —
+#   scale-in — move; a merely silent slot is a crash and is left for the scheduler), `publish_snapshot()`
+#   (`vms/snapshot` in the object store). Any exception is logged and the loop continues; `stop.wait(5)`
+#   between passes. No port, no state: the process can be restarted at any moment, and two of them agree by
+#   CAS.
 def controller() -> None:
     from .config import SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmscontroller", acl={"vmscontroller": SPEC.acl_controller()})
@@ -179,6 +142,14 @@ def controller() -> None:
         stop.wait(5)
 
 
+# The screen and the API, as its own process ("count as many as you like"):
+# - Variables as writer `vmsconsole` with `SPEC.acl_console()` — `vms/cameras/*`, `vms/next_id`,
+#   `vms/idem/*`, `vms/retention/*`; never placement. It holds a `VmsController` over that token, so a write
+#   it must not make (`place`) is a `Forbidden` from the store, not a rule in the console.
+# - `ArchiveResource($SPOOL, $ARCHIVE)` so the console can serve `/timeline/<id>` and `/segment/<path>` from
+#   this box's archive and write operator marks into its own bucket.
+# - `serve(ctl, archive, $CONSOLE_HOST, $CONSOLE_PORT)` from `vms/console.py` starts the
+#   `ThreadingHTTPServer` in a daemon thread; the main thread waits on `stop`, then `srv.shutdown()`.
 def console() -> None:
     """The screen and the API: its own process, count as many as you like, a
     token for the operator's rows and nothing else."""
@@ -194,6 +165,27 @@ def console() -> None:
     srv.shutdown()
 
 
+# The archive policy pass, run by `vms-archive-retain.timer` as a oneshot (`vms-archive-retain.container`):
+# "the archive resource has no controller — it has a policy, run by a timer".
+# - `ArchiveResource($SPOOL, $ARCHIVE)`; Variables opened with *no* writer and no ACL — the pass only reads
+#   rows (the unit mounts `/data/platform` read-only for the same reason).
+# - Logs `res.repair()` (manifests made to agree with the files) and the number of `res.close_buckets(now)`
+#   (event buckets whose span is over and quiet get their manifest line).
+# - Media — the VMS's own policy, per camera, on its manifest: for every path under `vms/cameras/`, reads
+#   the row through `config.row` and calls `res.retain(c["id"], c["retention_days"], now)`, logging what was
+#   removed.
+# - Events — the platform's, by the derived row `vms/retention/<cam>`: builds
+#   `vmsplatform.resource.Resource(archive, hostname, "", vars_, objects)` (url `""` — nothing is served
+#   here, the object is used only for its policy) and calls `platform.retain()`, which deletes every bucket
+#   file on this resource older than its unit's days (`retention_days(vars, sub, unit)`: the derived row,
+#   else `vms/retention`, else a year) and logs the count. Files only: the manifest lines for those buckets
+#   are dropped by `res.repair()` on the *next* pass — the split `archive.py`'s docstring describes.
+#
+# Two halves, two owners, one pass — the division `test_events_are_buckets_on_the_resource_recording_or_not`
+# exercises by hand (`res.retain(...) == 1`, then `Resource(...).retain() == 3`, then `res.repair() ==
+# {dropped: 3}`). Note that `vars_.list("vms/cameras/")` includes rows marked `deleted: "true"`; `row()`
+# parses them like any other, so a deleted camera's media is still retained by its last `retention_days`,
+# while its buckets go at once because `delete_camera` set `vms/retention/<id>` to `{days: 0}`.
 def retain() -> None:
     """The archive resource has no controller — it has a policy, run by a timer:
     repair, close event buckets, retain media and events by each camera's days."""

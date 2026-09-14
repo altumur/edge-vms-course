@@ -11,36 +11,14 @@
 # **Role.** The Quadlet unit at `/etc/containers/systemd/vms-archive-retain.container`, from which Quadlet
 # generates `vms-archive-retain.service`. "The archive resource has no controller; it has a policy, and this
 # is the policy": `python3 -m vms retain` runs `ArchiveResource.repair()`, `close_buckets(now)` and, per
-# camera row, `retain(...)` by the camera's own days, then exits. It is started by `vms-archive-retain.timer`
-# every ten minutes, so the unit is `Type=oneshot` and `Restart` is not set — a timer-driven pass restarts by
-# the timer, not by systemd's restart logic. Checked by `tests/test_deploy_units.py` (`Type=oneshot`;
-# `/data/platform` mounted `:ro,z`).
+# camera row, `retain(...)` by the camera's own days, then exits. It is started by
+# `vms-archive-retain.timer` every ten minutes, so the unit is `Type=oneshot` and `Restart` is not set — a
+# timer-driven pass restarts by the timer, not by systemd's restart logic. Checked by
+# `tests/test_deploy_units.py` (`Type=oneshot`; `/data/platform` mounted `:ro,z`).
 #
-# ## Stanza by stanza
-#
-# ### `[Unit]`
 # - `Description=VMS archive resource — the policy pass`
 #
-# ### `[Container]`
 # - `Image=localhost/vmsserver:latest`
-# - `Exec=python3 -m vms retain` — the `retain` verb of `vms/__main__.py`: repair, close buckets, media
-#   retention per camera row (the VMS's), then the platform `Resource.retain()` for the event buckets by
-#   `vms/retention/<cam>` (see `vms/__main__.py`).
-# - `EnvironmentFile=/data/config/vms.env` — `PLATFORM_DIR` (to read the camera rows), `SPOOL`, `ARCHIVE`.
-# - `Volume=/data/platform:/data/platform:ro,z` — read-only: "the policy reads rows, never writes them".
-#   `retain` opens `FileVariables` with no writer and only calls `list` and `get` (the camera rows, and
-#   `vms/retention/<cam>` through the platform's `retention_days`); the mount enforces the same thing in
-#   bytes. The `Resource` it builds writes no heartbeat here — the object store is opened but only the
-#   retention policy runs.
-# - `Volume=/data/spool:/data/spool:z` — read-write, though the `retain` verb only constructs the
-#   `ArchiveResource` (which `makedirs` the root) and does not touch spool files; `repair` and `retain` work
-#   under the archive.
-# - `Volume=/data/archive:/data/archive:z` — read-write: `repair` rewrites manifests, `close_buckets` appends
-#   bucket lines, `retain` deletes expired media files and rewrites the manifest.
-#
-# ### `[Service]`
-# - `Type=oneshot` — the process runs once and exits; the service is "active" only while it runs, and
-#   `OnUnitActiveSec` in the timer counts from that activation.
 #
 # ### `[Install]`
 # None: the timer is what gets enabled; the service is pulled in by `Unit=` in the timer.
@@ -50,19 +28,33 @@
 #   everything is indexed, `retain` `0` when nothing is past its cutoff — running the pass twice changes
 #   nothing (`test_manifest_rebuilt_from_the_files_alone`,
 #   `test_events_are_buckets_on_the_resource_recording_or_not`).
-# - In М11 the same steps become `ArchivePolicy.pass_` registered on the platform's `Resource` job and run on
-#   its timer beside bucket retention and the mirror.
+# - In М11 the same steps become `ArchivePolicy.pass_` registered on the platform's `Resource` job and run
+#   on its timer beside bucket retention and the mirror.
 # ================================================================================================
 [Unit]
 Description=VMS archive resource — the policy pass
 
 [Container]
 Image=localhost/vmsserver:latest
+# the `retain` verb of `vms/__main__.py`: repair, close buckets, media retention per camera row (the VMS's),
+# then the platform `Resource.retain()` for the event buckets by `vms/retention/<cam>` (see
+# `vms/__main__.py`).
 Exec=python3 -m vms retain
+# `PLATFORM_DIR` (to read the camera rows), `SPOOL`, `ARCHIVE`.
 EnvironmentFile=/data/config/vms.env
+# read-only: "the policy reads rows, never writes them". `retain` opens `FileVariables` with no writer and
+# only calls `list` and `get` (the camera rows, and `vms/retention/<cam>` through the platform's
+# `retention_days`); the mount enforces the same thing in bytes. The `Resource` it builds writes no
+# heartbeat here — the object store is opened but only the retention policy runs.
 Volume=/data/platform:/data/platform:ro,z
+# read-write, though the `retain` verb only constructs the `ArchiveResource` (which `makedirs` the root) and
+# does not touch spool files; `repair` and `retain` work under the archive.
 Volume=/data/spool:/data/spool:z
+# read-write: `repair` rewrites manifests, `close_buckets` appends bucket lines, `retain` deletes expired
+# media files and rewrites the manifest.
 Volume=/data/archive:/data/archive:z
 
 [Service]
+# the process runs once and exits; the service is "active" only while it runs, and `OnUnitActiveSec` in the
+# timer counts from that activation.
 Type=oneshot

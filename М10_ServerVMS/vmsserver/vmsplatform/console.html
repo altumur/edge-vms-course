@@ -9,7 +9,7 @@
      /timeline/<id>, /events?cam=, /segment/<path> (one box: a list; a
      cluster: {segments, unreachable, note}, each span naming its server). -->
 <!--
-NOTES — what every part of this page does and why
+NOTES — what this page is, its regions and its state (each script function is described where it is defined)
 
 # console.html — the console's one page, for any subsystem: built from /spec, no framework, no build step
 
@@ -32,20 +32,20 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 ## DOM regions
 - `aside`
   - `#rows` — heading: the rows name from the spec plus a count.
-    - `#units` — the unit list (`li` per unit: a phase dot, the label, `#id`, and on the right `worker ·
-    server · age s` or `unplaced`).
-    - `#addbox` / `#addlabel` — a collapsible "Add" section containing form `#add` with `#addfields` (inputs
-    generated from the spec), a submit button, `#addnote` (how the id is made) and `#adderr`.
+        - `#units` — the unit list (`li` per unit: a phase dot, the label, `#id`, and on the right `worker ·
+      server · age s` or `unplaced`).
+        - `#addbox` / `#addlabel` — a collapsible "Add" section containing form `#add` with `#addfields`
+      (inputs generated from the spec), a submit button, `#addnote` (how the id is made) and `#adderr`.
   - `#status` — "N workers live · M <running gauge>" from `/metrics`.
 - `main`
   - `#title` — the selected unit's label, or "Pick one".
   - `#meta` — phase · worker · server · epoch · placement reason · "last known state" when stale.
-    - `#media` (only when `spec.media`) — a legend (recorded / events only / fenced), `#timeline` (spans and
-    ticks), `#axis` with `#t0`, `#t1` and the `#last24` / `#all` window buttons, `#note` (the cluster's
-    `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption.
-    - form `#edit` — `#editfields` (inputs from the spec minus `enabled` and the id field), Save, `#toggle`
-    (Enable/Disable, shown only if the spec has a bool `enabled`), `#del`, a reminder that
-    worker/epoch/revision/phase are the controller's, and `#editerr`.
+        - `#media` (only when `spec.media`) — a legend (recorded / events only / fenced), `#timeline` (spans
+      and ticks), `#axis` with `#t0`, `#t1` and the `#last24` / `#all` window buttons, `#note` (the
+      cluster's `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption.
+        - form `#edit` — `#editfields` (inputs from the spec minus `enabled` and the id field), Save,
+      `#toggle` (Enable/Disable, shown only if the spec has a bool `enabled`), `#del`, a reminder that
+      worker/epoch/revision/phase are the controller's, and `#editerr`.
 
 ## State variables
 - `spec` — the `/spec` reply; the page's only knowledge of the subsystem.
@@ -56,53 +56,6 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
   server}`.
 - `queue` — indexes into `spans` still to play.
 
-## Script functions
-### `$`, `fmt`, `ROWS`, `label`, `hasEnabled`
-Helpers: query selector; a UTC `YYYY-MM-DD HH:MM:SSZ` formatter; the rows path `/<spec.rows>`; a unit's
-display label (`name` if it has one, else singular rows name + id for numeric ids, else the id); whether the
-spec has a bool field named `enabled`.
-
-### `loadSpec()`
-`GET /spec`. Sets the document title, the rows heading, the add note (numbered by the controller vs. named
-by its `<id field>`), shows `#media` if `spec.media`, and renders the add form (every field but `enabled`)
-and the edit form (every field but `enabled` and the id field) with `input()`. Shows `#toggle` if
-`hasEnabled()`.
-
-### `input(f, adding)`
-One labelled input per spec field by type: checkbox for bool (checked by default value), number for
-int/float (`step="any"` for float; default as value when adding), text otherwise (placeholder `a, b` for
-lists, or the default when adding); `required` only on the add form.
-
-### `loadUnits()`
-`GET /<rows>`: starts from `configured` (each marked `phase: silent, worker_state: stale`) and overlays
-`rows` — the heartbeat's word wins over the row's. Sorts by id, rebuilds `#units` with class = phase,
-`stale` and `on`, and wires each `li` to `select`. Then fetches `/metrics` and writes the status line from
-`_workers_live` and `_<running gauge>`. Runs at load and every 10 s.
-
-### `select(id)`
-Marks the unit current, clears the play queue, sets `#title`, fetches `/where/<id>` for the placement
-reason, composes `#meta`, highlights the `li`, fills the edit form, and — if media — loads the timeline.
-
-### `loadTimeline()`
-`GET /timeline/<current>?from&to` (the subsystem's route). Accepts a plain list (one box) or `{segments,
-unreachable, note}` (a cluster), showing `note` in `#note`. Normalises spans; tries `GET
-/events?from&to&cam=<current>` and ignores a failure (503 without an index). Computes the visible range: the
-window if set, else from the earliest span/event (or now − 1 h) to the latest (or now). Draws each span as a
-`div.span` positioned by percentage — `events-only` when it has no media, `fenced` when fenced — with a
-tooltip naming times, epoch, server, event count and "not recorded"; clicking a span with media plays from
-it. Draws each event as a `div.tick` with a tooltip (time, kind, subsystem, note). Labels the axis.
-
-### `key()`
-A fresh UUID (or a random string) per request: the `Idempotency-Key`.
-
-### `fields(form)`
-Reads the form into a body by spec type: bools always sent as checked/unchecked; an empty input is omitted
-(the spec's default on create, unchanged on edit); lists split on commas and trimmed; ints/floats parsed.
-
-### `send(method, path, body)`
-`fetch` with `Content-Type: application/json` and a new `Idempotency-Key`; parses the reply; throws `detail
-|| error || status` when not OK. Every write below uses it.
-
 ### Form and button handlers
 - `#add` submit — `POST /<rows>` with the form fields; on success reset, reload, select the new id; on
   refusal show `refused: …` in `#adderr`.
@@ -112,21 +65,6 @@ Reads the form into a body by spec type: bools always sent as checked/unchecked;
   `DELETE /<rows>/<current>`; clears the selection and the timeline, reloads.
 - `#player.onended` — `next()`.
 - `#last24` click — window = last 24 h and reload the timeline; `#all` — no window.
-
-### `fillEdit(c)`
-Shows `#edit` and fills each spec field from the unit: checkbox for bool, comma-joined for list, value
-otherwise. Sets the toggle text to Enable/Disable from `c.enabled`.
-
-### `segmentURL(s)`
-`/segment/<media path>`, with `?server=` when the span names another server (a cluster).
-
-### `play(i)`
-Queue every span from index `i` onward that has media, then `next()`.
-
-### `next()`
-Pop the next index, outline that span as playing, write the caption (times, epoch, "from <server>"), set the
-video source to `segmentURL` and play. One segment at a time, the next when this one ends; gapless MSE
-playback of fragmented MP4 is the gateway's job (М12) — the console plays what the resource serves.
 
 ### Boot
 `loadSpec().then(() => { loadUnits(); setInterval(loadUnits, 10000); })`.
@@ -218,6 +156,9 @@ playback of fragmented MP4 is the gateway's job (М12) — the console plays wha
   </form>
 </main>
 <script>
+// Helpers: query selector; a UTC `YYYY-MM-DD HH:MM:SSZ` formatter; the rows path `/<spec.rows>`; a unit's
+// display label (`name` if it has one, else singular rows name + id for numeric ids, else the id); whether
+// the spec has a bool field named `enabled`.
 const $ = s => document.querySelector(s);
 const fmt = t => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
 let spec = null, units = [], current = null, window_ = null, spans = [], queue = [];
@@ -226,6 +167,10 @@ const label = u => u.name || (spec.id === 'numeric' ? spec.rows.replace(/s$/, ''
 const hasEnabled = () => spec.fields.some(f => f.name === 'enabled' && f.type === 'bool');
 
 // -- the spec: the page's only knowledge of the subsystem ------------------------------------
+// `GET /spec`. Sets the document title, the rows heading, the add note (numbered by the controller vs.
+// named by its `<id field>`), shows `#media` if `spec.media`, and renders the add form (every field but
+// `enabled`) and the edit form (every field but `enabled` and the id field) with `input()`. Shows `#toggle`
+// if `hasEnabled()`.
 async function loadSpec() {
   spec = await (await fetch('/spec')).json();
   document.title = spec.name + ' console';
@@ -238,6 +183,9 @@ async function loadSpec() {
   $('#editfields').innerHTML = spec.fields.filter(f => f.name !== 'enabled' && f.name !== spec.id).map(f => input(f, false)).join('');
   $('#toggle').style.display = hasEnabled() ? '' : 'none';
 }
+// One labelled input per spec field by type: checkbox for bool (checked by default value), number for
+// int/float (`step="any"` for float; default as value when adding), text otherwise (placeholder `a, b` for
+// lists, or the default when adding); `required` only on the add form.
 function input(f, adding) {
   const attrs = `name="${f.name}"${f.required && adding ? ' required' : ''}`;
   if (f.type === 'bool') return `<label>${f.name} <input type="checkbox" ${attrs} ${f.default ? 'checked' : ''}></label>`;
@@ -247,6 +195,10 @@ function input(f, adding) {
 }
 
 // -- the list: the read model (every worker's heartbeat) over the configured rows ----------------
+// `GET /<rows>`: starts from `configured` (each marked `phase: silent, worker_state: stale`) and overlays
+// `rows` — the heartbeat's word wins over the row's. Sorts by id, rebuilds `#units` with class = phase,
+// `stale` and `on`, and wires each `li` to `select`. Then fetches `/metrics` and writes the status line
+// from `_workers_live` and `_<running gauge>`. Runs at load and every 10 s.
 async function loadUnits() {
   const d = await (await fetch(ROWS())).json();
   const byId = {};
@@ -267,6 +219,8 @@ async function loadUnits() {
         $('#status').textContent = `${live ? live[1] : '?'} workers live · ${run ? run[1] : '?'} ${spec.metrics.running.replace(/_/g, ' ')}`; } catch (_) {}
 }
 
+// Marks the unit current, clears the play queue, sets `#title`, fetches `/where/<id>` for the placement
+// reason, composes `#meta`, highlights the `li`, fills the edit form, and — if media — loads the timeline.
 async function select(id) {
   current = id; queue = [];
   const c = units.find(x => x.id === id) || {};
@@ -281,6 +235,14 @@ async function select(id) {
 }
 
 // -- media: only when the spec says so (the subsystem registered /timeline and /segment) ----------
+// `GET /timeline/<current>?from&to` (the subsystem's route). Accepts a plain list (one box) or `{segments,
+// unreachable, note}` (a cluster), showing `note` in `#note`. Normalises spans; tries `GET
+// /events?from&to&cam=<current>` and ignores a failure (503 without an index). Computes the visible range:
+// the window if set, else from the earliest span/event (or now − 1 h) to the latest (or now). Draws each
+// span as a `div.span` positioned by percentage — `events-only` when it has no media, `fenced` when fenced
+// — with a tooltip naming times, epoch, server, event count and "not recorded"; clicking a span with media
+// plays from it. Draws each event as a `div.tick` with a tooltip (time, kind, subsystem, note). Labels the
+// axis.
 async function loadTimeline() {
   const now = Date.now() / 1000;
   const [from, to] = window_ || [0, 1e12];
@@ -312,7 +274,11 @@ async function loadTimeline() {
 }
 
 // -- writes: through the controller, with an Idempotency-Key per attempt, so a retried click is one unit
+// A fresh UUID (or a random string) per request: the `Idempotency-Key`.
 const key = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+// Reads the form into a body by spec type: bools always sent as checked/unchecked; an empty input is
+// omitted (the spec's default on create, unchanged on edit); lists split on commas and trimmed; ints/floats
+// parsed.
 const fields = form => {
   const out = {};
   for (const f of spec.fields) {
@@ -325,6 +291,9 @@ const fields = form => {
   }
   return out;
 };
+// `fetch` with `Content-Type: application/json` and a new `Idempotency-Key`; parses the reply; throws
+// `detail
+// || error || status` when not OK. Every write below uses it.
 async function send(method, path, body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key() }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await r.text();
@@ -353,6 +322,8 @@ $('#del').onclick = async () => {
   try { await send('DELETE', `${ROWS()}/${encodeURIComponent(current)}`); current = null; $('#edit').style.display = 'none'; $('#title').textContent = 'Pick one'; $('#meta').textContent = ''; $('#timeline').innerHTML = ''; await loadUnits(); }
   catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
 };
+// Shows `#edit` and fills each spec field from the unit: checkbox for bool, comma-joined for list, value
+// otherwise. Sets the toggle text to Enable/Disable from `c.enabled`.
 function fillEdit(c) {
   const f = $('#edit'); f.style.display = 'grid';
   for (const fd of spec.fields) {
@@ -364,15 +335,20 @@ function fillEdit(c) {
   if (hasEnabled()) $('#toggle').textContent = c.enabled === false ? 'Enable' : 'Disable';
 }
 
+// `/segment/<media path>`, with `?server=` when the span names another server (a cluster).
 function segmentURL(s) { return `/segment/${s.media}` + (s.server ? `?server=${encodeURIComponent(s.server)}` : ''); }
 
 // One segment at a time, the next when this one ends. Gapless playback of
 // fragmented MP4 through MSE is the gateway's job (М12); the console plays
 // what the resource serves.
+// Queue every span from index `i` onward that has media, then `next()`.
 function play(i) {
   queue = spans.map((s, j) => j).filter(j => j >= i && spans[j].media);
   next();
 }
+// Pop the next index, outline that span as playing, write the caption (times, epoch, "from <server>"), set
+// the video source to `segmentURL` and play. One segment at a time, the next when this one ends; gapless
+// MSE playback of fragmented MP4 is the gateway's job (М12) — the console plays what the resource serves.
 function next() {
   if (!queue.length) return;
   const i = queue.shift(); const s = spans[i];
