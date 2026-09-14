@@ -295,7 +295,8 @@ func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
 
 // ACLConsole: the operator's rows — what a console (one per server, any of them) may write; never placement.
 func (s *SubsystemSpec) ACLConsole() []string {
-	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*"} // idem: a retried POST answered the same by ANY instance
+	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*", // idem: a retried POST answered the same by ANY instance
+		s.Name + "/policy"} // the administrator's knobs: servers shared | distinct
 	for _, d := range s.Derived {
 		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")
 	}
@@ -692,6 +693,95 @@ func (c *SpecController) Eligible(r Row, workers []string) []string {
 	return out
 }
 
+// The administrator's knobs: one row, <name>/policy, written by the console.
+// servers: "shared" (default) — every worker is a place to put units, two on
+// one server included (a box IS several workers on one server); a dead
+// server's slot is Nomad's to reschedule onto a neighbour. "distinct" — one
+// worker per server carries units; a second worker Nomad put on the same
+// server idles by policy, and a server whose worker and resource both fall
+// silent is gone (GoneServers) — its units move.
+var PolicyDefaults = map[string]string{"servers": "shared"}
+var PolicyChoices = map[string][]string{"servers": {"distinct", "shared"}}
+
+func (c *SpecController) Policy() map[string]string {
+	out := map[string]string{}
+	for k, v := range PolicyDefaults {
+		out[k] = v
+	}
+	it, _, _ := c.Vars.Get(c.Sub.Config("policy"))
+	for k, v := range it {
+		if choices, ok := PolicyChoices[k]; ok {
+			for _, ch := range choices {
+				if ch == v {
+					out[k] = v
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (c *SpecController) SetPolicy(changes map[string]string) (map[string]string, error) {
+	for k, v := range changes {
+		ok := false
+		for _, ch := range PolicyChoices[k] {
+			ok = ok || ch == v
+		}
+		if !ok {
+			return nil, &Refused{fmt.Sprintf("policy %s must be one of %s", k, strings.Join(PolicyChoices[k], ", "))}
+		}
+	}
+	_, err := c.Write(c.Sub.Config("policy"), func(it Items) Items {
+		out := Items{}
+		for k, v := range it {
+			out[k] = v
+		}
+		for k, v := range changes {
+			out[k] = v
+		}
+		return out
+	})
+	if err != nil {
+		return nil, err
+	}
+	return c.Policy(), nil
+}
+
+// IdleByPolicy: under servers: distinct, the workers that a server's OTHER
+// workers must yield to — per server, the worker with units (the most, ties
+// to the first name), else the first by name; the rest idle. Under shared, nobody.
+func (c *SpecController) IdleByPolicy(workers []string) []string {
+	out := []string{}
+	if c.Policy()["servers"] != "distinct" {
+		return out
+	}
+	byServer := map[string][]string{}
+	sorted := append([]string{}, workers...)
+	sort.Slice(sorted, func(i, j int) bool { return SlotNumber(sorted[i]) < SlotNumber(sorted[j]) })
+	for _, w := range sorted {
+		s := c.ServerOf(w)
+		byServer[s] = append(byServer[s], w)
+	}
+	for server, ws := range byServer {
+		if server == "?" || len(ws) < 2 {
+			continue
+		}
+		keep := ws[0]
+		for _, w := range ws[1:] {
+			if c.Load(w) > c.Load(keep) {
+				keep = w
+			}
+		}
+		for _, w := range ws {
+			if w != keep {
+				out = append(out, w)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ResourceState: the state of the resource on a server, from
 // platform/resources/<server>/heartbeat — "live" (younger than lostAfter),
 // "silent" (older), "unknown" (never heartbeaten: a box before its resource
@@ -736,8 +826,8 @@ func (c *SpecController) WithoutResource(workers []string) []string {
 // spec requires a resource.
 func (c *SpecController) GoneServers(lostAfter float64) map[string]string {
 	out := map[string]string{}
-	if c.Spec.Requires != "resource" {
-		return out
+	if c.Spec.Requires != "resource" || c.Policy()["servers"] != "distinct" {
+		return out // shared: a dead server's slot is Nomad's to reschedule onto a neighbour
 	}
 	now := c.Wall()
 	for name, slot := range c.Slots() {
@@ -768,6 +858,9 @@ func (c *SpecController) pool(workers []string) []string {
 	all := c.seen(workers)
 	gone := map[string]bool{}
 	for _, w := range c.WithoutResource(all) {
+		gone[w] = true
+	}
+	for _, w := range c.IdleByPolicy(all) {
 		gone[w] = true
 	}
 	out := []string{}

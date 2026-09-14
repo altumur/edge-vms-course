@@ -22,7 +22,7 @@
 
 ### `constraint`
 - `attribute = "${meta.archive}"  operator = "is_set"` — the comment: a worker records into the resource on its own server, so only servers that have one.
-- `distinct_hosts = true` — one worker per server: a second worker on the same disks and NIC is no second place to record. So `count` ≤ the archive servers, and a dead server's worker stays pending rather than doubling up on a neighbour; the controller moves its cameras instead (`SpecController.gone_servers`, Lesson 4: the slot lapsed and the server's resource silent).
+- `spread { attribute = "${node.unique.id}" }` — a preference, not `distinct_hosts`: Nomad puts workers on different servers when it can and doubles up when it must (a dead server's worker rescheduled onto a neighbour). Whether a second worker on one server *carries* cameras is the administrator's choice on the console — `vms/policy {servers: shared | distinct}` (Lesson 4): shared, it does and a dead server's worker comes back on a neighbour with its cameras; distinct, it idles by policy and the controller moves a dead server's cameras on two silences (`SpecController.gone_servers`).
 
 ### `disconnect`
 Lesson 4 — the comment: the defaults are wrong for a worker.

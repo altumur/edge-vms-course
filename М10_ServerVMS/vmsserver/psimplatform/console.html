@@ -42,6 +42,8 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
         - `#addbox` / `#addlabel` — a collapsible "Add" section containing form `#add` with `#addfields`
       (inputs generated from the spec), a submit button, `#addnote` (how the id is made) and `#adderr`.
   - `#status` — "N workers live · M <running gauge>" from `/metrics`.
+  - `#policy` — the administrator's knob from `/servers`' `policy`: a select, servers `shared` | `distinct`,
+    `PUT /policy` on change, with one line saying what the choice means.
   - `#servers` — one line per server from `/servers`: the archive its workers record into (on a cluster
     Nomad's `meta.archive`, the label the scheduler placed by), its resource (`live`, `silent`, `unknown` —
     the fact), its workers with load/capacity, and *not placeable: …* in red when the controller would not
@@ -140,6 +142,8 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
   #servers .srv small { color:var(--muted); display:block; }
   #servers .bad { color:var(--stale); }
   #mounts { color:var(--muted); font-size:12px; margin-top:6px; }
+  #policy { font-size:12px; margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  #policy select { font-size:12px; }
   #axis { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
   video { width:100%; max-height:60vh; background:#000; border-radius:6px; margin-top:8px; }
   #note { color:var(--stale); }
@@ -165,6 +169,7 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
     </form>
   </details>
   <div id="status"></div>
+  <div id="policy"></div>
   <div id="servers"></div>
   <div id="mounts"></div>
 </aside>
@@ -573,6 +578,26 @@ $('#detadd').onsubmit = async e => {
   try { await send('POST', '/det/units', { name: `${current}-${f.kind}`, cam: String(current), kind: f.kind, params: f.params || '' }); e.target.reset(); loadDets(); }
   catch (err) { $('#deterr').textContent = 'refused: ' + err.message; }
 };
+// -- the administrator's knob: servers shared or distinct ----------------------------------------------
+// `PUT /policy {servers}` — one row, `<sub>/policy`, read by the controller on its next pass. `shared`: every
+// worker is a place to put units, two on one server included, and a dead server's slot is the scheduler's
+// to reschedule onto a neighbour. `distinct`: one worker per server carries units, a second one idles by
+// policy, and a server whose worker and resource both fall silent is gone — the controller moves its units.
+const POLICY_HELP = { shared: 'every worker carries units, two on one server included; a dead server\'s worker is rescheduled onto a neighbour by the scheduler',
+                      distinct: 'one worker per server carries units; a dead server\'s units are moved by the controller once its worker and its resource are both silent' };
+function renderPolicy(p) {
+  const box = $('#policy'); if (!p.servers) { box.innerHTML = ''; return; }
+  if (!box.querySelector('select')) {
+    box.innerHTML = `<span>servers</span><select id="servers-policy"><option value="shared">shared</option><option value="distinct">distinct</option></select><small id="policy-help"></small>`;
+    box.querySelector('select').onchange = async e => {
+      try { await send('PUT', '/policy', { servers: e.target.value }); } catch (err) { $('#policy-help').textContent = 'refused: ' + err.message; return; }
+      loadResources();
+    };
+  }
+  box.querySelector('select').value = p.servers;
+  $('#policy-help').textContent = POLICY_HELP[p.servers] || '';
+}
+
 // -- the servers, as placement sees them -------------------------------------------------------------
 // `GET /servers` → one block per server: `archive` (what its workers say they record into — on a cluster the
 // value of Nomad's `meta.archive`, i.e. the label the scheduler's constraint placed by), `resource` (the
@@ -582,10 +607,12 @@ $('#detadd').onsubmit = async e => {
 async function loadResources() {
   const box = $('#servers'); box.innerHTML = '';
   try {
-    const sv = await (await fetch('/servers')).json();
+    const d = await (await fetch('/servers')).json();
+    const sv = d.servers || {};
+    renderPolicy(d.policy || {});
     for (const [name, s] of Object.entries(sv)) {
       const el = document.createElement('div'); el.className = 'srv';
-      const ws = s.workers.map(w => `${w.worker} ${w.load}/${w.capacity}${w.state === 'stale' ? ' (stale)' : ''}`).join(', ') || 'no workers';
+      const ws = s.workers.map(w => `${w.worker} ${w.load}/${w.capacity}${w.state === 'stale' ? ' (stale)' : ''}${w.idle_by_policy ? ' (idle by policy)' : ''}`).join(', ') || 'no workers';
       el.innerHTML = `<strong>${name}</strong> <small>archive ${s.archive || '—'} · resource <span class="${s.resource === 'silent' ? 'bad' : ''}">${s.resource}</span></small>` +
                      `<small>${ws}</small>` + (s.placeable ? '' : `<small class="bad">not placeable: ${s.why}</small>`);
       box.appendChild(el);

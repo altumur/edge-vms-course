@@ -63,6 +63,10 @@ func TestAServerGoneWithNowhereToRescheduleTheControllerMovesTheCameras(t *testi
 	// that is here. One silence — a crashed process, its resource still answering —
 	// moves nothing: that process returns under the same name.
 	c, ctl, a, actA := recording(t, 3)
+	eq(t, ctl.Policy(), map[string]string{"servers": "shared"})                                                      // the default: a box is several workers on one server
+	if p, err := ctl.SetPolicy(map[string]string{"servers": "distinct"}); err != nil || p["servers"] != "distinct" { // the administrator's choice, one row: vms/policy
+		t.Fatal(p, err)
+	}
 	rs := c.resources(nil)
 	actB := vms.NewFakeActuator()
 	b := c.worker(t, 2, "srv-b", 0, actB) // the other server's worker, idle
@@ -109,6 +113,19 @@ func TestAServerGoneWithNowhereToRescheduleTheControllerMovesTheCameras(t *testi
 	eq(t, ctl.Where(1), "w-2")                        // adding a place to record moves nothing
 	eq(t, actA.Epochs, map[int]int{1: 1, 2: 1, 3: 1}) // the fenced instance's footage is intact under e1; B's under e2
 	_ = a
+	// under shared, the same two silences move nothing: the slot is Nomad's to reschedule, and its replacement inherits
+	ctl.SetPolicy(map[string]string{"servers": "shared"})
+	c.create(t, ctl, src(9))
+	pls, _ := ctl.EnsurePlaced(nil)
+	eq(t, pls[len(pls)-1].Worker, "w-1") // w-1, back on srv-a, has the most room
+	c.Wall.Advance(2*lostAfter + 3)      // srv-a dies again, w-1 with it
+	b.HeartbeatOnce()
+	rs["srv-b"].Heartbeat()
+	rs["srv-c"].Heartbeat()
+	if !ctl.Slots()["w-1"].Lapsed(c.Wall.Now()) || len(ctl.GoneServers(45)) != 0 || len(ctl.Redistribute(nil)) != 0 {
+		t.Fatal("shared: the controller waits for Nomad's replacement")
+	}
+	eq(t, ctl.Where(4), "w-1")
 }
 
 func TestTheOldInstanceWakesUpAndTheArchiveIsIntact(t *testing.T) {

@@ -13,7 +13,7 @@ job "vmsworker" {
     scaling {
       enabled = true
       min     = 1
-      max     = 12                                   # ≤ the archive servers (distinct_hosts): the budget B + n·I from М9 Lesson 7 is per server
+      max     = 12                                   # the servers' budget: B + n·I from М9 Lesson 7 (under `servers: distinct`, ≤ the archive servers)
       policy {
         cooldown            = "5m"                   # longer than a failover, so a reschedule is not read as demand
         evaluation_interval = "1m"
@@ -30,13 +30,15 @@ job "vmsworker" {
       attribute = "${meta.archive}"
       operator  = "is_set"
     }
-    # and one worker per server: a second worker on the same disks and NIC is no second place to record.
-    # So `count` ≤ the archive servers (scaling.max says the same), and when a server dies there is nowhere
-    # to reschedule its worker — the slot stays pending, and the CONTROLLER moves the cameras (two
-    # silences: the slot lapsed and the server's resource silent), rather than Nomad piling two workers on
-    # one server. Explicit, and visible in every placement reason.
-    constraint {
-      distinct_hosts = true
+    # spread, not distinct_hosts: Nomad puts workers on different servers when it can and doubles up when
+    # it must (a dead server's worker rescheduled onto a neighbour). Whether a second worker on one server
+    # CARRIES cameras is the administrator's choice on the console, not the scheduler's — `vms/policy
+    # {servers: shared | distinct}`: shared, every worker is a place to record and a dead server's worker
+    # comes back on a neighbour with its cameras; distinct, one worker per server carries cameras, a
+    # doubled-up worker idles by policy, and the CONTROLLER moves a dead server's cameras (two silences:
+    # the slot lapsed and the server's resource silent). Both readable in every placement reason.
+    spread {
+      attribute = "${node.unique.id}"
     }
 
     disconnect {                                     # Lesson 4: the defaults are wrong for a recorder

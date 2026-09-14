@@ -11,6 +11,7 @@ show them. So the console is one class, run from the same spec:
     GET  /resources              the platform's resources: usage, units, live | silent
     GET  /unplaceable            units nothing live can serve, with the labels that say why
     GET  /servers                every server as placement sees it: its archive (the label), its resource (the fact), its workers, placeable or why not
+    GET/PUT /policy              the administrator's knobs — servers: shared | distinct — one row, <sub>/policy, the console's to write
     GET  /events?from&to&unit&kind&subsystem   the resources' event databases, merged (MergedIndex), fenced by every subsystem's epochs
     GET  /metrics                <name>_workers_live · <name>_worker_headroom{worker,server} · <name>_worker_load ·
                                  <name>_epoch_conflicts · <name>_failover_seconds{kind="worst"} · <name>_resources_live ·
@@ -89,7 +90,7 @@ from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
 from .spec import Refused, SpecController
-from .variables import Conflict
+from .variables import Conflict, Forbidden
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console.html")
 
@@ -270,7 +271,12 @@ class SpecConsole:
             if hb.extra.get("archive"):
                 s["archive"] = hb.extra["archive"]
             s["workers"].append({"worker": w, "load": ctl.load(w), "capacity": ctl.capacity_of(w), "labels": hb.extra.get("labels", ""),
-                                 "state": "live" if now - hb.ts <= self.lost_after else "stale"})
+                                 "state": "live" if now - hb.ts <= self.lost_after else "stale", "idle_by_policy": False})
+        for w in ctl.idle_by_policy(list(heartbeats(ctl.objects, ctl.sub.name + "/"))):    # servers: distinct — one worker per server carries units
+            for s in out.values():
+                for row in s["workers"]:
+                    if row["worker"] == w:
+                        row["idle_by_policy"] = True
         for server in resources_seen(ctl.objects):
             out.setdefault(server, {"archive": None, "resource": "unknown", "workers": []})
         for server, s in out.items():
@@ -279,7 +285,7 @@ class SpecConsole:
             s["placeable"] = not (s["requires_resource"] and s["resource"] == "silent")
             s["why"] = f"resource on {server} silent" if not s["placeable"] else None
             s["workers"].sort(key=lambda x: x["worker"])
-        return dict(sorted(out.items()))
+        return {"policy": ctl.policy(), "servers": dict(sorted(out.items()))}
 
     def metrics_text(self) -> str:
         p = self.spec.name
@@ -444,6 +450,8 @@ class SpecConsole:
                                      for s, hb in resources_seen(ctl.objects).items()})
             if path == "/servers":
                 return h._send(200, con.servers())
+            if path == "/policy":
+                return h._send(200, {**ctl.policy(), "choices": ctl.POLICY_CHOICES})
             if path == "/unplaceable":
                 return h._send(200, ctl.unplaceable())
             if path == "/events":
@@ -473,6 +481,11 @@ class SpecConsole:
                 resp = con.create(h._body())
             con.seen.store(key, resp); return h._send(*resp)
         if method == "PUT":
+            if path == "/policy":                                        # the administrator's knobs: one row, no idempotency needed (a PUT is)
+                try:
+                    return h._send(200, ctl.set_policy(h._body()))
+                except (Refused, Forbidden) as e:
+                    return h._send(400 if isinstance(e, Refused) else 403, {"detail": str(e), "error": str(e)})
             if not path.startswith(rows_path + "/"):
                 if self._extra(h, "PUT", path, q):
                     return

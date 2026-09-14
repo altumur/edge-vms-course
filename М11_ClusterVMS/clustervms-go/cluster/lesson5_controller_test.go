@@ -170,7 +170,7 @@ func TestAWorkerRunsWhereAResourceAnswersAndLeavesWhenItStops(t *testing.T) {
 		t.Fatal(r)
 	}
 	// the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
-	sv := cluster.NewConsole(ctl, cluster.ConsoleOptions{}).Servers()
+	sv := cluster.NewConsole(ctl, cluster.ConsoleOptions{}).Servers()["servers"].(map[string]any)
 	sa, sb := sv["srv-a"].(map[string]any), sv["srv-b"].(map[string]any)
 	if sa["resource"] != "silent" || sa["placeable"] != false || sa["why"] != "resource on srv-a silent" || sa["archive"] != "/data/archive" {
 		t.Fatal(sa)

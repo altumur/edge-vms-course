@@ -378,7 +378,20 @@ func (c *SpecConsole) Servers() map[string]any {
 			state = "stale"
 		}
 		s.workers = append(s.workers, map[string]any{"worker": w, "load": c.Ctl.Load(w), "capacity": c.Ctl.CapacityOf(w),
-			"labels": hb.ExtraString("labels", ""), "state": state})
+			"labels": hb.ExtraString("labels", ""), "state": state, "idle_by_policy": false})
+	}
+	var names []string
+	for w := range Heartbeats(c.Ctl.Objects, c.Spec.Name+"/") {
+		names = append(names, w)
+	}
+	for _, w := range c.Ctl.IdleByPolicy(names) { // servers: distinct — one worker per server carries units
+		for _, s := range seen {
+			for _, row := range s.workers {
+				if row["worker"] == w {
+					row["idle_by_policy"] = true
+				}
+			}
+		}
 	}
 	for name := range ResourcesSeen(c.Ctl.Objects) {
 		if _, ok := seen[name]; !ok {
@@ -404,7 +417,7 @@ func (c *SpecConsole) Servers() map[string]any {
 		}
 		out[name] = map[string]any{"archive": archive, "resource": res, "workers": s.workers, "requires_resource": req, "placeable": placeable, "why": why}
 	}
-	return out
+	return map[string]any{"policy": c.Ctl.Policy(), "servers": out}
 }
 
 func (c *SpecConsole) MetricsText() string {
@@ -596,6 +609,12 @@ func (c *SpecConsole) Handler() http.Handler {
 				SendJSON(w, st, body)
 			case path == "/servers":
 				SendJSON(w, 200, c.Servers())
+			case path == "/policy":
+				body := map[string]any{"choices": PolicyChoices}
+				for k, v := range c.Ctl.Policy() {
+					body[k] = v
+				}
+				SendJSON(w, 200, body)
 			case path == "/resources":
 				now := c.O.Wall()
 				out := map[string]any{}
@@ -650,6 +669,23 @@ func (c *SpecConsole) Handler() http.Handler {
 			c.Seen.Store(key, r)
 			SendJSON(w, r.Status, r.Body)
 		case "PUT":
+			if path == "/policy" { // the administrator's knobs: one row; a PUT is idempotent by itself
+				changes := map[string]string{}
+				for k, v := range ReadBody(req) {
+					changes[k] = fmt.Sprint(v)
+				}
+				p, err := c.Ctl.SetPolicy(changes)
+				if err != nil {
+					st := 400
+					if errors.Is(err, ErrForbidden) {
+						st = 403
+					}
+					SendJSON(w, st, map[string]any{"detail": err.Error(), "error": err.Error()})
+					return
+				}
+				SendJSON(w, 200, p)
+				return
+			}
 			if !strings.HasPrefix(path, rowsPath+"/") {
 				notFound()
 				return

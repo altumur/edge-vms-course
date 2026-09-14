@@ -97,7 +97,7 @@ def test_a_worker_runs_where_a_resource_answers_and_leaves_when_it_stops():
     assert ctl.placement(a).reason.endswith("; on srv-b")
     # the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
     from cluster.console import make_console
-    sv = make_console(ctl).servers()
+    sv = make_console(ctl).servers()["servers"]
     assert sv["srv-a"]["resource"] == "silent" and sv["srv-a"]["placeable"] is False and sv["srv-a"]["why"] == "resource on srv-a silent"
     assert sv["srv-b"]["resource"] == "live" and sv["srv-b"]["placeable"] is True and [w["worker"] for w in sv["srv-b"]["workers"]] == ["w-1"]
     assert sv["srv-a"]["archive"] == "/data/archive"                                                # the worker's $ARCHIVE — Nomad's meta.archive on a cluster
@@ -142,6 +142,12 @@ def test_the_console_over_http():
     st, out = call("GET", "/metrics")
     assert 'vms_failover_seconds{kind="worst"} 48.0' in out and "vms_workers_live 3" in out and "vms_cameras_recording 1" in out
     st, out = call("GET", "/resources"); assert st == 200 and json.loads(out) == {}
+    # the administrator's knob: one row, the console's to write, the controller's to read on its next pass
+    st, out = call("GET", "/policy"); assert st == 200 and json.loads(out)["servers"] == "shared"
+    assert call("PUT", "/policy", {"servers": "distinct"})[0] == 200 and ctl.policy() == {"servers": "distinct"}
+    assert call("PUT", "/policy", {"servers": "everywhere"})[0] == 400 and ctl.policy() == {"servers": "distinct"}
+    st, out = call("GET", "/servers"); assert json.loads(out)["policy"] == {"servers": "distinct"}
+    call("PUT", "/policy", {"servers": "shared"})
     st, out = call("GET", "/unplaceable"); assert json.loads(out) == []
     # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
     from psimplatform.resource import serve as serve_resource

@@ -36,15 +36,20 @@ def test_the_power_pull():
 
 
 def test_a_server_gone_with_nowhere_to_reschedule_the_controller_moves_the_cameras():
-    """One worker per server (`distinct_hosts`), count = the archive servers: when
-    srv-a dies there is no spare server for Nomad to put w-1 on, so nobody claims
-    the slot. Two silences from one server — the slot lapsed and stayed lapsed for
-    another lost_after (Nomad's chance), and the resource on srv-a silent — are a
-    fact about the server, and the controller moves w-1's cameras to the worker
-    that is here. One silence — a crashed process, its resource still answering —
-    moves nothing: that process returns under the same name."""
+    """The administrator chose `servers: distinct` on the console: one worker per
+    server carries cameras. When srv-a dies nobody takes w-1's cameras by taking
+    its slot — a rescheduled w-1 on srv-b would idle by policy — so two silences
+    from one server — the slot lapsed and stayed lapsed for another lost_after
+    (Nomad's chance), and the resource on srv-a silent — are a fact about the
+    server, and the controller moves w-1's cameras to the worker that is here.
+    One silence — a crashed process, its resource still answering — moves
+    nothing: that process returns under the same name. Under `shared` (the
+    default) the controller does not act at all: Lesson 4's power pull — Nomad's
+    replacement on srv-b takes the slot and the assignment."""
     from cluster.resource import cluster_resource
     c, ctl, a, act_a = _recording()
+    assert ctl.policy() == {"servers": "shared"}                                              # the default: a box is several workers on one server
+    assert ctl.set_policy({"servers": "distinct"}) == {"servers": "distinct"}                 # the administrator's choice, one row: vms/policy
     rs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
     for r in rs.values(): r.heartbeat()
     act_b = FakeActuator(); b = c.worker(2, "srv-b", actuator=act_b); b.heartbeat_once()   # the other server's worker, idle
@@ -67,6 +72,12 @@ def test_a_server_gone_with_nowhere_to_reschedule_the_controller_moves_the_camer
     assert ctl.resource_state("srv-a") == "live" and ctl.where(1) == "w-2"                   # adding a place to record moves nothing
     # the fenced instance's footage is intact under e1; B's under e2 — the timeline says whose is whose
     assert act_a.epochs == {1: 1, 2: 1, 3: 1}
+    # under `shared`, the same two silences move nothing: the slot is Nomad's to reschedule, and its replacement inherits
+    ctl.set_policy({"servers": "shared"})
+    ctl.create_camera({"source": "driverpack://file/9.mp4"}); assert ctl.ensure_placed()[-1].worker == "w-1"   # w-1, back on srv-a, has the most room
+    c.wall.advance(2 * LOST_AFTER + 3); b.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()   # srv-a dies again, w-1 with it
+    assert ctl.slots()["w-1"].lapsed(c.wall()) and ctl.gone_servers() == {} and ctl.redistribute() == []
+    assert ctl.where(4) == "w-1"                                                               # waits for Nomad's replacement to claim w-1
 
 
 def test_the_old_instance_wakes_up_and_the_archive_is_intact():

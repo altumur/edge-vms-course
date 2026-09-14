@@ -45,6 +45,13 @@ and the worker is the subsystem.
 # - `PLATFORM_FIELDS = ("worker", "placement", "epoch", "revision", "observed_revision", "phase", "id")` —
 #   never the operator's. `SubsystemSpec.refuse` rejects any of them in a create/update body: placement is
 #   decided and stored by the controller with a reason; revision, epoch and phase are not the operator's.
+# - `SpecController.POLICY_DEFAULTS` / `POLICY_CHOICES` — the administrator's knobs, one row `<name>/policy`
+#   written by the console (`acl_console` includes it) and read by the controller on every pass: `servers`
+#   is `shared` (default: every worker carries units, two on one server included — a box is that; a dead
+#   server's slot is the scheduler's to reschedule onto a neighbour) or `distinct` (one worker per server
+#   carries units, `idle_by_policy` names the rest; a server whose worker and resource are both silent is
+#   gone, `gone_servers`, and its units move). The jobspec says `spread`, so both are possible without
+#   touching Nomad.
 # - `CONSTRAINTS` — the catalogue: `"none"` (always eligible) and `"labels-subset"` (`_labels_subset`).
 #   `requires: resource` is not a constraint on the unit but on the worker's server: `resource_state` reads
 #   `platform/resources/<server>/heartbeat` — `live`, `silent`, or `unknown` (never seen) — and `_pool`
@@ -67,7 +74,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from .contract import Controller, Subsystem
+from .contract import Controller, Subsystem, slot_number
 from .objects import ObjectStore
 from .variables import Variables
 
@@ -200,11 +207,12 @@ class SubsystemSpec:
 
     # -- who writes what: two tokens, one prefix each ------------------------------------
     # The operator's rows: `<name>/<rows>/*`, `<name>/next_id`, `<name>/idem/*` (a retried POST answered the
-    # same by any instance) and the first segment of every derived row (`<name>/retention/*`). Never
-    # placement. This is the console process's token.
+    # same by any instance), `<name>/policy` (the administrator's knobs) and the first segment of every
+    # derived row (`<name>/retention/*`). Never placement. This is the console process's token.
     def acl_console(self) -> list[str]:
         """The operator's rows: what a console (one per server, any of them) may write — never placement."""
-        out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*"]   # idem: a retried POST answered the same by ANY instance
+        out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*",   # idem: a retried POST answered the same by ANY instance
+               f"{self.name}/policy"]                                                         # the administrator's knobs: servers distinct | shared
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")
         return out
@@ -458,6 +466,48 @@ class SpecController(Controller):
         rule = CONSTRAINTS[self.spec.constraint]
         return [w for w in workers if rule(row, self.labels_of(w))]
 
+    # -- the administrator's knobs: one row, `<name>/policy`, written by the console ---------------
+    # `servers`: `shared` (default) — every worker is a place to put units, two on one server included (a
+    # box IS several workers on one server); a dead server's slot is Nomad's to reschedule onto a neighbour
+    # (Lesson 4's power pull), and the controller waits for it. `distinct` — one worker per server carries
+    # units; a second worker Nomad put on the same server idles by policy, and a server whose worker and
+    # resource both fall silent is gone (`gone_servers`) — its units move. The jobspec says `spread`, so
+    # both are possible without touching Nomad; the administrator chooses on the console.
+    POLICY_DEFAULTS = {"servers": "shared"}
+    POLICY_CHOICES = {"servers": ("distinct", "shared")}
+
+    def policy(self) -> dict:
+        items, _ = self.vars.get(self.sub.config("policy"))
+        out = dict(self.POLICY_DEFAULTS)
+        for k, v in (items or {}).items():
+            if k in self.POLICY_CHOICES and v in self.POLICY_CHOICES[k]:
+                out[k] = v
+        return out
+
+    def set_policy(self, changes: dict) -> dict:
+        for k, v in changes.items():
+            if k not in self.POLICY_CHOICES or v not in self.POLICY_CHOICES[k]:
+                raise Refused(f"policy {k} must be one of {', '.join(self.POLICY_CHOICES.get(k, ()))}")
+        self.write(self.sub.config("policy"), lambda it: {**(it or {}), **{k: str(v) for k, v in changes.items()}})
+        return self.policy()
+
+    # Under `servers: distinct`, the workers that a server's OTHER workers must yield to: for each server,
+    # the worker with units (the most, ties to the first name), else the first by name; the rest idle by
+    # policy. Under `shared`, nobody.
+    def idle_by_policy(self, workers) -> list[str]:
+        if self.policy()["servers"] != "distinct":
+            return []
+        by_server: dict[str, list[str]] = {}
+        for w in sorted(workers, key=slot_number):
+            by_server.setdefault(self.server_of(w), []).append(w)
+        idle = []
+        for server, ws in by_server.items():
+            if server == "?" or len(ws) < 2:
+                continue
+            keep = max(ws, key=lambda w: (self.load(w), -slot_number(w)))
+            idle += [w for w in ws if w != keep]
+        return idle
+
     # -- what the worker's server must have: a resource, when the spec says so ---------------------
     # The state of the resource on a server, from `platform/resources/<server>/heartbeat`: `"live"` (younger
     # than `lost_after`), `"silent"` (older), `"unknown"` (never heartbeaten — a box before its resource
@@ -485,8 +535,8 @@ class SpecController(Controller):
     # server are a fact about the server. Only when the spec requires a resource.
     def gone_servers(self, lost_after: float = 45.0) -> dict[str, str]:
         """Lapsed slots whose server's resource is silent too: {slot: server}."""
-        if self.spec.requires != "resource":
-            return {}
+        if self.spec.requires != "resource" or self.policy()["servers"] != "distinct":
+            return {}                                                    # shared: a dead server's slot is Nomad's to reschedule onto a neighbour
         now = self.wall(); out = {}
         for name, slot in self.slots().items():
             if slot.lapsed(now) and now > slot.until + lost_after and self.assignment(name).units:
@@ -499,7 +549,7 @@ class SpecController(Controller):
     # silent when the spec requires one; sorted.
     def _pool(self, workers):
         pool = sorted(workers if workers is not None else self.workers_seen())
-        gone = set(self.without_resource(pool))
+        gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool))
         return [w for w in pool if w not in gone]
 
     # `most-free-capacity`: the worker with the largest `capacity_of − load`, strictly positive; ties go to
