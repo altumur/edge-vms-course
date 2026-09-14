@@ -125,5 +125,7 @@ def test_the_console_over_http():
     with urllib.request.urlopen(req) as r:
         assert r.status == 206 and len(r.read()) == 10 and r.headers["Content-Range"] == "bytes 0-9/256"
     assert call("GET", f"/segment/{seg['path']}?server=srv-b")[0] == 404          # srv-b has never heartbeaten
+    assert call("PUT", "/cameras/1", {"enabled": False})[0] == 200 and ctl.camera(1)["enabled"] is False
+    assert call("DELETE", "/cameras/1")[0] == 200 and ctl.cameras() == [] and call("DELETE", "/cameras/1")[0] == 404
     rsrv.shutdown()
     srv.shutdown()

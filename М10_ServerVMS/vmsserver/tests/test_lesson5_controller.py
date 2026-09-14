@@ -192,5 +192,14 @@ def test_the_console_over_http():
             urllib.request.urlopen(f"http://127.0.0.1:{port}/segment/vms/1/e1/nope.mp4"); raise AssertionError()
         except urllib.error.HTTPError as e:
             assert e.code == 404
+        # the page's writes: disable, then delete — through the controller, refused where the controller refuses
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras/1", data=b'{"enabled": false}', method="PUT", headers={"Idempotency-Key": "k4"})
+        assert json.load(urllib.request.urlopen(req))["enabled"] is False and ctl.camera(1)["revision"] == 2
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras/1", method="DELETE")
+        assert json.load(urllib.request.urlopen(req)) == {"deleted": 1} and ctl.cameras() == [] and ctl.where(1) is None
+        try:
+            urllib.request.urlopen(req); raise AssertionError()
+        except urllib.error.HTTPError as e:
+            assert e.code == 404                                                                   # gone is gone
     finally:
         srv.shutdown(); srv.server_close()

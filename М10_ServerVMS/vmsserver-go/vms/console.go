@@ -11,6 +11,7 @@ package vms
 //	POST /cameras                 create (Idempotency-Key required)
 //	POST /marks                   an operator's observation {cam, note} — the CONSOLE's event, into console/<instance>/…
 //	PUT  /cameras/<id>            update — refuses placement and controller-owned fields
+//	DELETE /cameras/<id>          the row is marked deleted; its assignment goes; footage stays until retention
 //	GET  /metrics                 vms_epoch_conflicts, vms_workers_live, vms_worker_headroom, vms_worker_load, vms_cameras_recording
 
 import (
@@ -345,6 +346,18 @@ func NewHandler(ctl *VmsController, archive *ArchiveResource, wall p.Clock) http
 			r := UpdateReply(ctl, cid, ReadBody(req))
 			seen.Set(key, r)
 			SendJSON(w, r.Status, r.Body)
+		case "DELETE":
+			if !strings.HasPrefix(path, "/cameras/") {
+				SendJSON(w, 404, map[string]any{"detail": "no such route"})
+				return
+			}
+			cid, _ := LastSegmentInt(path)
+			if ctl.Camera(cid) == nil {
+				SendJSON(w, 404, map[string]any{"detail": "no such camera", "error": "no such camera"})
+				return
+			}
+			ctl.DeleteCamera(cid)
+			SendJSON(w, 200, map[string]any{"deleted": cid})
 		default:
 			SendJSON(w, 405, map[string]any{"detail": "method"})
 		}

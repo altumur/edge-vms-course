@@ -384,4 +384,14 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if st, _, _ := call(t, "GET", base+"/segment/vms/1/e1/nope.mp4", nil, nil); st != 404 {
 		t.Fatal(st)
 	}
+	// the page's writes: disable, then delete — through the controller
+	if st, r, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"enabled": false}, map[string]string{"Idempotency-Key": "k4"}); st != 200 || r["enabled"] != false || ctl.Camera(1).Revision != 2 {
+		t.Fatal(st, r)
+	}
+	if st, r, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || r["deleted"] != 1.0 || len(ctl.Cameras()) != 0 || ctl.Where(1) != "" {
+		t.Fatal(st, r)
+	}
+	if st, _, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 { // gone is gone
+		t.Fatal(st)
+	}
 }

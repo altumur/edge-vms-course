@@ -257,4 +257,13 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if st, _ := call(t, "GET", base+"/segment/"+seg["path"].(string)+"?server=srv-b", nil, nil); st != 404 { // srv-b has never heartbeaten
 		t.Fatal(st)
 	}
+	if st, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"enabled": false}, nil); st != 200 || ctl.Camera(1).Enabled {
+		t.Fatal(st)
+	}
+	if st, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || len(ctl.Cameras()) != 0 {
+		t.Fatal(st)
+	}
+	if st, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 {
+		t.Fatal(st)
+	}
 }

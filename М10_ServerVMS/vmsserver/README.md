@@ -20,7 +20,7 @@ vmsserver/
     vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
     console.py                 Lesson 5  the one-box console, standard library: the read model from heartbeats; writes to the controller; operator marks into its own bucket; /segment/<path>
-    console.html               Lesson 5  the page: the camera list, a camera's timeline (recorded / events-only / fenced), playback one segment at a time
+    console.html               Lesson 5  the page: the camera list, a camera's timeline (recorded / events-only / fenced), playback one segment at a time; add, edit, enable/disable, delete
     config.py                  the schema's Python view over the spec: row() and items()
     __main__.py                python3 -m vms worker | controller
   gstvms/                      Track 2 — needs GStreamer

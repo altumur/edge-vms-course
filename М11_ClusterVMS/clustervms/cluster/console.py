@@ -11,7 +11,7 @@ and no more writes:
     GET /events?from&to&cam&kind&subsystem&unit   from the eventindex — a cache over the resources; its state says if it is catching up
     GET /metrics           vms_workers_live, vms_worker_headroom, vms_worker_load, vms_epoch_conflicts,
                            vms_failover_seconds{kind="worst"}, vms_resources_live, vms_cameras_recording
-    POST /cameras, PUT /cameras/<id>     through the controller; Idempotency-Key
+    POST /cameras, PUT /cameras/<id>, DELETE /cameras/<id>     through the controller; Idempotency-Key on the POST
     POST /marks {cam, note}              an operator's observation: the console's own bucket, console/<instance>/…, on
                                          THIS server's resource — never a worker's bucket; the eventindex joins on `cam`
 """
@@ -162,6 +162,15 @@ def make_handler(ctl: ClusterController, reader=None, worst_failover: float = 0.
                 self._send(400, {"error": str(e)})
             except KeyError:
                 self._send(404, {"error": "no such camera"})
+
+        def do_DELETE(self):
+            if not self.path.startswith("/cameras/"):
+                return self._send(404, {})
+            cid = int(self.path.rsplit("/", 1)[1])
+            if ctl.camera(cid) is None:
+                return self._send(404, {"error": "no such camera"})
+            ctl.delete_camera(cid)
+            self._send(200, {"deleted": cid})
 
     return H
 

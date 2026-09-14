@@ -33,10 +33,29 @@
   #note { color:var(--stale); }
   button { font:inherit; padding:4px 10px; border:1px solid var(--line); background:transparent; color:var(--fg); border-radius:6px; cursor:pointer; }
   .legend span { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 12px; vertical-align:middle; }
+  form { display:grid; gap:6px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+  form label { display:grid; gap:2px; font-size:12px; color:var(--muted); }
+  input[type=text], input[type=number] { font:inherit; padding:4px 6px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--fg); }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .err { color:var(--stale); font-size:12px; white-space:pre-wrap; }
+  details summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  #edit { display:none; }
 </style>
 <aside>
   <h1>Cameras <small id="count"></small></h1>
   <ul id="cameras"></ul>
+  <details id="addbox"><summary>Add a camera</summary>
+    <form id="add">
+      <label>name <input type="text" name="name" placeholder="gate"></label>
+      <label>source <input type="text" name="source" placeholder="driverpack://file/gate.mp4" required></label>
+      <label>labels <input type="text" name="labels" placeholder="vlan:cctv-b, vlan:cctv-a"></label>
+      <label>retention, days <input type="number" name="retention_days" value="30" min="0"></label>
+      <label>events retention, days <input type="number" name="events_retention_days" value="365" min="0"></label>
+      <label>ref <input type="text" name="ref" placeholder="what the layer above calls it"></label>
+      <div class="row"><button type="submit">Add</button><small>the controller numbers it and places it on the next pass</small></div>
+      <div class="err" id="adderr"></div>
+    </form>
+  </details>
 </aside>
 <main>
   <h1 id="title">Pick a camera</h1>
@@ -47,6 +66,25 @@
   <div id="note"></div>
   <video id="player" controls></video>
   <div id="playing"><small></small></div>
+  <form id="edit">
+    <div class="row"><strong>Edit</strong><small>every save is a new revision; the worker restarts the pipeline</small></div>
+    <div class="row">
+      <label>name <input type="text" name="name"></label>
+      <label>source <input type="text" name="source"></label>
+      <label>labels <input type="text" name="labels"></label>
+      <label>retention <input type="number" name="retention_days" min="0" style="width:5em"></label>
+      <label>events retention <input type="number" name="events_retention_days" min="0" style="width:5em"></label>
+      <label>priority <input type="number" name="priority" min="0" style="width:5em"></label>
+      <label>ref <input type="text" name="ref"></label>
+    </div>
+    <div class="row">
+      <button type="submit">Save</button>
+      <button type="button" id="toggle"></button>
+      <button type="button" id="del">Delete</button>
+      <small>what you cannot set here — worker, epoch, revision, phase — is the controller's, and it refuses</small>
+    </div>
+    <div class="err" id="editerr"></div>
+  </form>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -62,7 +100,7 @@ async function loadCameras() {
   $('#count').textContent = cameras.length ? `(${cameras.length})` : '';
   const ul = $('#cameras'); ul.innerHTML = '';
   for (const c of cameras) {
-    const li = document.createElement('li');
+    const li = document.createElement('li'); li.dataset.id = String(c.id);
     li.className = `${c.phase || 'silent'} ${c.worker_state === 'stale' ? 'stale' : ''} ${current === c.id ? 'on' : ''}`;
     li.innerHTML = `<span><span class="dot"></span>${c.name || 'cam' + c.id} <small>#${c.id}</small></span>` +
                    `<small>${c.worker ? c.worker + (c.server ? ' · ' + c.server : '') : 'unplaced'}${c.age != null ? ' · ' + c.age + ' s' : ''}</small>`;
@@ -77,7 +115,8 @@ async function select(id) {
   $('#title').textContent = `${c.name || 'cam' + id}`;
   $('#meta').textContent = [c.phase, c.worker && `on ${c.worker}`, c.server, c.epoch ? `epoch ${c.epoch}` : null,
                             c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
-  for (const li of $('#cameras').children) li.classList.toggle('on', li.textContent.includes('#' + id + ' ') || li.textContent.endsWith('#' + id));
+  for (const li of $('#cameras').children) li.classList.toggle('on', li.dataset.id === String(id));
+  fillEdit(c);
   await loadTimeline();
 }
 
@@ -109,6 +148,54 @@ async function loadTimeline() {
     tl.appendChild(el);
   }
   $('#t0').textContent = fmt(lo); $('#t1').textContent = fmt(hi);
+}
+
+// -- writes: through the controller, with an Idempotency-Key per attempt, so a retried click is one camera
+const key = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+const fields = form => {
+  const f = Object.fromEntries(new FormData(form));
+  const out = {};
+  for (const [k, v] of Object.entries(f)) {
+    if (v === '' && k !== 'name') continue;
+    if (k === 'labels') out[k] = v.split(',').map(x => x.trim()).filter(Boolean);
+    else if (k.endsWith('_days') || k === 'priority') out[k] = Number(v);
+    else if (v !== '') out[k] = v;
+  }
+  return out;
+};
+async function send(method, path, body) {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key() }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await r.text();
+  let d = {}; try { d = JSON.parse(text); } catch (_) {}
+  if (!r.ok) throw new Error(d.detail || d.error || `${r.status}`);
+  return d;
+}
+$('#add').onsubmit = async e => {
+  e.preventDefault(); $('#adderr').textContent = '';
+  try { const c = await send('POST', '/cameras', fields(e.target)); e.target.reset(); await loadCameras(); select(c.id); }
+  catch (err) { $('#adderr').textContent = 'refused: ' + err.message; }
+};
+$('#edit').onsubmit = async e => {
+  e.preventDefault(); $('#editerr').textContent = '';
+  try { await send('PUT', `/cameras/${current}`, fields(e.target)); await loadCameras(); select(current); }
+  catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
+};
+$('#toggle').onclick = async () => {
+  const c = cameras.find(x => x.id === current); if (!c) return;
+  try { await send('PUT', `/cameras/${current}`, { enabled: !c.enabled }); await loadCameras(); select(current); }
+  catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
+};
+$('#del').onclick = async () => {
+  const c = cameras.find(x => x.id === current); if (!c) return;
+  if (!confirm(`Delete ${c.name || 'cam' + current}? Its footage stays on the resource until retention removes it.`)) return;
+  try { await send('DELETE', `/cameras/${current}`); current = null; $('#edit').style.display = 'none'; $('#title').textContent = 'Pick a camera'; $('#meta').textContent = ''; $('#timeline').innerHTML = ''; await loadCameras(); }
+  catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
+};
+function fillEdit(c) {
+  const f = $('#edit'); f.style.display = 'grid';
+  for (const k of ['name', 'source', 'retention_days', 'events_retention_days', 'priority', 'ref']) f.elements[k].value = c[k] ?? '';
+  f.elements.labels.value = (c.labels || []).join(', ');
+  $('#toggle').textContent = c.enabled === false ? 'Enable' : 'Disable';
 }
 
 function segmentURL(s) { return `/segment/${s.media}` + (s.server ? `?server=${encodeURIComponent(s.server)}` : ''); }

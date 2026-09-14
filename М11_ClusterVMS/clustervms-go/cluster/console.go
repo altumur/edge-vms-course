@@ -13,7 +13,7 @@ package cluster
 //	GET /events?from&to&cam&kind&subsystem&unit   from the eventindex — a cache over the resources
 //	GET /metrics           vms_workers_live, vms_worker_headroom, vms_worker_load, vms_epoch_conflicts,
 //	                       vms_failover_seconds{kind="worst"}, vms_resources_live, vms_cameras_recording
-//	POST /cameras, PUT /cameras/<id>     through the controller; Idempotency-Key
+//	POST /cameras, PUT /cameras/<id>, DELETE /cameras/<id>     through the controller; Idempotency-Key on the POST
 //	POST /marks {cam, note}              an operator's observation: the console's own bucket on THIS server's resource
 
 import (
@@ -255,6 +255,18 @@ func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {
 			cid, _ := vms.LastSegmentInt(path)
 			r := vms.UpdateReply(ctl, cid, vms.ReadBody(req))
 			vms.SendJSON(w, r.Status, r.Body)
+		case "DELETE":
+			if !strings.HasPrefix(path, "/cameras/") {
+				vms.SendJSON(w, 404, map[string]any{})
+				return
+			}
+			cid, _ := vms.LastSegmentInt(path)
+			if ctl.Camera(cid) == nil {
+				vms.SendJSON(w, 404, map[string]any{"error": "no such camera"})
+				return
+			}
+			ctl.DeleteCamera(cid)
+			vms.SendJSON(w, 200, map[string]any{"deleted": cid})
 		default:
 			vms.SendJSON(w, 405, map[string]any{"error": "method"})
 		}

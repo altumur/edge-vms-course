@@ -10,6 +10,7 @@ writes go through the controller, the only writer.
     POST /marks                   an operator's observation {cam, note} — the CONSOLE's event, into console/<instance>/…
                                   on this box's resource (never a worker's bucket; the index joins on `cam`)
     PUT  /cameras/<id>            update — refuses placement and controller-owned fields
+    DELETE /cameras/<id>          the row is marked deleted; its assignment goes; footage stays until retention
     GET  /metrics                 vms_epoch_conflicts, vms_workers_live, vms_worker_headroom (the autoscaler's), vms_cameras_recording
 """
 from __future__ import annotations
@@ -147,6 +148,15 @@ def make_handler(ctl: VmsController, archive: ArchiveResource | None, wall=None)
             except KeyError:
                 resp = (404, {"detail": "no such camera"})
             seen[key] = resp; self._send(*resp)
+
+        def do_DELETE(self):
+            if not self.path.startswith("/cameras/"):
+                return self._send(404, {"detail": "no such route"})
+            cid = int(self.path.rsplit("/", 1)[1])
+            if ctl.camera(cid) is None:
+                return self._send(404, {"detail": "no such camera"})
+            ctl.delete_camera(cid)
+            self._send(200, {"deleted": cid})
 
         def log_message(self, *a):
             pass
