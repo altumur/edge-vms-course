@@ -243,6 +243,7 @@ type Resource struct {
 	Peers             PeerClient
 	LostAfter         float64
 	Hooks             map[string]Hook
+	Database          *EventDatabase // the event database over this tree, if the job runs one: served as GET /events
 }
 
 func NewResource(root, server, url string, vars Variables, objects ObjectStore, bucketSeconds int, wall Clock, peers PeerClient) *Resource {
@@ -256,7 +257,7 @@ func NewResource(root, server, url string, vars Variables, objects ObjectStore, 
 		peers = NewHTTPPeerClient()
 	}
 	os.MkdirAll(root, 0o755)
-	return &Resource{root, server, url, vars, objects, bucketSeconds, wall, peers, 45, map[string]Hook{}}
+	return &Resource{root, server, url, vars, objects, bucketSeconds, wall, peers, 45, map[string]Hook{}, nil}
 }
 
 func (r *Resource) Register(subsystem string, h Hook) { r.Hooks[subsystem] = h }
@@ -314,7 +315,7 @@ func (r *Resource) LiveResources() map[string]ResourceHeartbeat {
 
 // Retain: each subsystem's buckets by its own days. Files only.
 func (r *Resource) Retain() int {
-	removed := 0
+	var removed []string
 	now := r.Wall()
 	for sub, units := range r.Units() {
 		for _, unit := range units {
@@ -322,13 +323,16 @@ func (r *Resource) Retain() int {
 			for _, b := range BucketsUnder(r.Root, sub, unit, r.BucketSeconds) {
 				if b.End < now-days*86400 {
 					if os.Remove(filepath.Join(r.Root, b.Path)) == nil {
-						removed++
+						removed = append(removed, b.Path)
 					}
 				}
 			}
 		}
 	}
-	return removed
+	if len(removed) > 0 && r.Database != nil {
+		r.Database.Forget(r.Server, removed) // the rows go with the file
+	}
+	return len(removed)
 }
 
 // MirrorReport is what one mirror pass did.
@@ -463,6 +467,12 @@ func Serve(r *Resource, addr string, extra Extra) (*http.Server, net.Listener, e
 			for _, b := range MirroredBuckets(root, strings.TrimPrefix(p, "/mirrored/"), r.BucketSeconds) {
 				io.WriteString(w, b.Line()+"\n")
 			}
+		case req.Method == "GET" && p == "/events":
+			if r.Database == nil {
+				SendJSON(w, 503, map[string]any{"error": "this resource runs no event database"})
+				return
+			}
+			SendJSON(w, 200, r.Database.Query(QueryFromValues(req.URL.Query())).ToMap())
 		case req.Method == "GET" && strings.HasPrefix(p, "/events/"):
 			rel := strings.TrimPrefix(p, "/events/")
 			if strings.Contains(rel, "..") || !strings.HasSuffix(rel, ".events.jsonl") {

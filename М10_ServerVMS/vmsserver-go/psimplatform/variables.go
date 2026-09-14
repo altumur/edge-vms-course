@@ -8,7 +8,7 @@
 //	contract.go    what a subsystem gives the platform: a controller and its workers
 //	events.go      the event log: buckets per unit per epoch, written by the epoch's holder
 //	resource.go    the resource job: one per server; heartbeat, retention, the peer mirror
-//	eventindex.go  the event "database", which is a cache over every resource's buckets
+//	eventdatabase.go  the event "database", which is a cache each resource keeps over its own tree; the console merges
 //
 // М11 replaces variables.go with Nomad Variables behind the same interface
 // and changes nothing above this line.

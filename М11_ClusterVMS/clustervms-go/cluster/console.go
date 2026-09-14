@@ -29,7 +29,7 @@ import (
 type ConsoleOptions struct {
 	Reader        ManifestReader
 	WorstFailover float64
-	Index         *p.EventIndex
+	Index         p.EventQuerier // nil = the platform's MergedIndex over the resources' /events
 	ArchiveRoot   string
 }
 
@@ -87,6 +87,9 @@ func ClusterRoutes(ctl *ClusterController, reader ManifestReader) p.Extra {
 }
 
 func NewConsole(ctl *ClusterController, o ConsoleOptions) *p.SpecConsole {
+	if o.Index == nil {
+		o.Index = p.NewMergedIndex(ctl.Objects, nil, ctl.Wall) // no database here: every live resource's /events, merged
+	}
 	return p.NewSpecConsole(ctl.SpecController, p.ConsoleOptions{MarksRoot: o.ArchiveRoot, Index: o.Index, WorstFailover: o.WorstFailover,
 		Extra: ClusterRoutes(ctl, o.Reader), Media: true})
 }

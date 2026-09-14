@@ -163,36 +163,24 @@ func (d dirReader) Read(url string, cam int) ([]vms.Segment, error) {
 	return vms.NewManifest(s.Archive, cam).Read(), nil
 }
 
-func (d dirReader) Buckets(url, sub, unit string) ([]p.Bucket, error) {
-	s, err := d.srv(url)
-	if err != nil {
-		return nil, err
-	}
-	return p.BucketsUnder(s.Archive, sub, unit, bucketSeconds), nil
+// merged: the console's side — no database; GET <resource>/events on every live resource, here a call instead of HTTP.
+func (c *Cluster) merged(rs map[string]*p.Resource) *p.MergedIndex {
+	return p.NewMergedIndex(c.Objects, func(url string, q p.Query) (p.QueryResult, error) {
+		s, err := dirReader{c}.srv(url)
+		if err != nil {
+			return p.QueryResult{}, err
+		}
+		return rs[s.Name].Database.Query(q), nil
+	}, c.Wall.Now)
 }
 
-func (d dirReader) Events(url string, b p.Bucket) ([]p.Event, error) {
-	s, err := d.srv(url)
-	if err != nil {
-		return nil, err
-	}
-	return p.ReadBucket(filepath.Join(s.Archive, b.Path)), nil
-}
-
+// the mirror, as a resource writes and restores it (PeerClient's three calls)
 func (d dirReader) Mirrored(url, server string) ([]p.Bucket, error) {
 	s, err := d.srv(url)
 	if err != nil {
 		return nil, err
 	}
 	return p.MirroredBuckets(s.Archive, server, bucketSeconds), nil
-}
-
-func (d dirReader) MirroredEvents(url, server string, b p.Bucket) ([]p.Event, error) {
-	s, err := d.srv(url)
-	if err != nil {
-		return nil, err
-	}
-	return p.ReadBucket(filepath.Join(s.Archive, p.MirrorDir, server, b.Path)), nil
 }
 
 func (d dirReader) Put(url, server, path string, data []byte) error {

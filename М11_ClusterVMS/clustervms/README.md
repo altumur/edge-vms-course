@@ -11,7 +11,7 @@ clustervms/
     controller.py    L5  the controller as a job — М10's VmsController by the name the lessons use: constraints, the server in the reason, the snapshot and the measured failover are the one-box behaviour with N = 1
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  М10's resource process (vms.resource) as the job: cluster_resource = vms_resource — ArchivePolicy registered, an EventDatabase attached; /manifest and /segment plugged in
-    eventindex.py    L3  a name for psimplatform.eventdatabase — EventDatabase, the one each resource job keeps over its own tree; MergedIndex, the console's merge
+    eventdatabase.py L3  a name for psimplatform.eventdatabase — EventDatabase, the one each resource job keeps over its own tree; MergedIndex, the console's merge
     console.py       L5  the cluster console — its own job, its own token: the platform's SpecConsole over the VMS spec plus two extras, the merged timeline and /segment/<path>?server= proxied from that server's resource
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console: SpecConsole (/spec /cameras /where /resources /unplaceable /events /metrics /marks, the writes) plus the cluster's /timeline and /segment?server=

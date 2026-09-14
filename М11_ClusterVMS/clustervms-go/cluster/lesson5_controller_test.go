@@ -214,24 +214,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if _, out := call(t, "GET", base+"/unplaceable", nil, nil); out != "[]" {
 		t.Fatal(out)
 	}
-	// an operator's mark: the console's own bucket on srv-a's resource, found by the index on its `cam` field
-	st, out = call(t, "POST", base+"/marks", map[string]any{"cam": 1, "note": "check the gate"}, map[string]string{"Idempotency-Key": "m1", "X-User": "murat"})
-	var m map[string]any
-	json.Unmarshal([]byte(out), &m)
-	if st != 201 || !strings.HasPrefix(m["bucket"].(string), "console/"+m["unit"].(string)+"/e1/") {
-		t.Fatal(out)
-	}
-	cluster.ClusterResource(c.Servers["srv-a"].Resource, "srv-a", "http://srv-a", c.Vars, c.Objects, c.Wall.Now, nil).Heartbeat()
-	idx := p.NewEventIndex(dirReader{c}, c.Wall.Now)
-	idx.Rebuild(p.ResourcesSeen(c.Objects))
-	ev := idx.Query(p.Query{T0: 0, T1: 1e12, Cam: p.IntPtr(1)}).Events
-	if len(ev) != 1 || ev[0].Subsystem != "console" || ev[0].Kind != "mark" || ev[0].Fields["user"] != "murat" {
-		t.Fatal(ev)
-	}
-	// the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
-	if _, page := call(t, "GET", base+"/", nil, nil); !strings.Contains(page, "<video") || !strings.Contains(page, "/segment/") {
-		t.Fatal("page")
-	}
+	// srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
 	segment(t, c.Servers["srv-a"], 1, 1, c.Wall.Now()-600, 600, 256)
 	res := cluster.ClusterResource(c.Servers["srv-a"].Resource, "srv-a", "", c.Vars, c.Objects, c.Wall.Now, nil)
 	rsrv, rln, err := p.Serve(res, "127.0.0.1:0", cluster.VmsRoutes(c.Servers["srv-a"].Resource))
@@ -241,6 +224,29 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	defer rsrv.Close()
 	res.URL = "http://" + rln.Addr().String()
 	res.Heartbeat()
+	res.Database.Rebuild()
+	// an operator's mark: the console's own bucket on srv-a's resource; the console has no database — it asks srv-a's, by HTTP, and finds the `cam` field
+	st, out = call(t, "POST", base+"/marks", map[string]any{"cam": 1, "note": "check the gate"}, map[string]string{"Idempotency-Key": "m1", "X-User": "murat"})
+	var m map[string]any
+	json.Unmarshal([]byte(out), &m)
+	if st != 201 || !strings.HasPrefix(m["bucket"].(string), "console/"+m["unit"].(string)+"/e1/") {
+		t.Fatal(out)
+	}
+	eq(t, res.Database.Tail().Added, 1)
+	st, out = call(t, "GET", base+"/events?cam=1", nil, nil)
+	var evr map[string]any
+	json.Unmarshal([]byte(out), &evr)
+	evl := evr["events"].([]any)
+	if st != 200 || evr["state"] != "live" || len(evl) != 1 {
+		t.Fatal(st, out)
+	}
+	if e := evl[0].(map[string]any); e["subsystem"] != "console" || e["kind"] != "mark" || e["user"] != "murat" || e["server"] != "srv-a" {
+		t.Fatal(out)
+	}
+	// the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
+	if _, page := call(t, "GET", base+"/", nil, nil); !strings.Contains(page, "<video") || !strings.Contains(page, "/segment/") {
+		t.Fatal("page")
+	}
 	_, out = call(t, "GET", base+"/timeline/1", nil, nil)
 	var tl map[string]any
 	json.Unmarshal([]byte(out), &tl)

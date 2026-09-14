@@ -1,6 +1,6 @@
 # clustervms-go — М11, whole, in Go, measured against the Python original
 
-М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror, the event index that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
+М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror and the event database that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
 
 ```
 clustervms-go/
@@ -16,7 +16,7 @@ clustervms-go/
     timeline.go                MergedTimeline across resources; unreachable named; "not lost"
     console.go                 the platform's SpecConsole over the VMS spec plus ClusterRoutes — /timeline/<id> merged across resources, /segment/<path>?server= proxied from that resource
     *_test.go                  29 tests; bench_test.go — five operations timed
-  cmd/clustervms/main.go       worker | controller | resource | eventindex — the four jobs, the same environment as the Python ones
+  cmd/clustervms/main.go       worker | controller | console | resource — the four jobs, the same environment as the Python ones (the resource job keeps the event database; the console merges)
   cmd/baseline/main.go         a server at idle: one worker and one controller with fifty cameras; prints its PSS
   cmd/pybaseline/baseline.py   the same shape in Python
   cmd/pybench/bench.py         the five operations in Python

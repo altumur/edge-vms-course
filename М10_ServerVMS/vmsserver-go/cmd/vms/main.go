@@ -84,8 +84,38 @@ func main() {
 		log.Printf("console on %s", ln.Addr())
 		<-stop
 		srv.Close()
+	case "resource": // the archive has no controller — it has a policy pass, a heartbeat, its HTTP, and the event database
+		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
+		ar := vms.NewArchiveResource(spool, archive, 600, nil)
+		host, port := env("RESOURCE_HOST", "127.0.0.1"), env("RESOURCE_PORT", "8090")
+		hostname, _ := os.Hostname()
+		r := vms.NewVmsResource(ar, hostname, env("RESOURCE_URL", "http://"+host+":"+port), vars, objects, nil, nil)
+		srv, ln, err := p.Serve(r, host+":"+port, vms.ResourceRoutes(ar))
+		if err != nil {
+			log.Fatal(err)
+		}
+		r.Heartbeat()
+		log.Printf("resource %s on %s: restore %v", hostname, ln.Addr(), r.Restore())
+		r.Database.Start() // a cache over THIS tree: rebuilt after restore, tailed every 3 s
+		last := time.Time{}
+		t := time.NewTicker(10 * time.Second)
+	loop:
+		for {
+			select {
+			case <-stop:
+				break loop
+			case <-t.C:
+				r.Heartbeat()
+				if time.Since(last) >= 600*time.Second {
+					log.Printf("policy: %v", r.Pass())
+					last = time.Now()
+				}
+			}
+		}
+		r.Database.Stop()
+		srv.Close()
 	default:
-		log.Fatal("usage: vms worker|controller|console")
+		log.Fatal("usage: vms worker|controller|console|resource")
 	}
 }
 

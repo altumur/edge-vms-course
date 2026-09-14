@@ -80,17 +80,15 @@ func main() {
 			ctl.Redistribute(nil)
 			ctl.PublishSnapshot()
 		})
-	case "console": // count ≥ 2, anywhere: the page, the API, the eventindex; a token for the operator's rows only
+	case "console": // a system job, one per server: the page and the API; no event database of its own — /events asks the resources
 		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
 		ctl := cluster.NewClusterController(vars, objects, capacity, nil, env("CLUSTER", "cluster-a"))
-		idx := p.NewEventIndex(p.NewHTTPResourceReader(), nil)
-		idx.Rebuild(p.ResourcesSeen(objects))
-		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive, Index: idx})
+		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive})
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("console on %s", ln.Addr())
-		every(5*time.Second, func() { idx.Tail(p.ResourcesSeen(objects)) })
+		<-stop
 		srv.Close()
 	case "resource":
 		ar := vms.NewArchiveResource(spool, archive, 600, nil)
@@ -100,10 +98,16 @@ func main() {
 		}
 		r.Heartbeat()
 		log.Printf("resource %s: restore %v", server, r.Restore())
+		r.Database.Start() // a cache over MY tree: rebuilt after restore, tailed every 3 s
+		last := time.Time{}
 		every(10*time.Second, func() {
 			r.Heartbeat()
-			r.Pass()
+			if time.Since(last) >= 600*time.Second {
+				log.Printf("policy: %v", r.Pass())
+				last = time.Now()
+			}
 		})
+		r.Database.Stop()
 	default:
 		log.Fatal("usage: clustervms worker|controller|console|resource")
 	}

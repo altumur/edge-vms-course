@@ -53,7 +53,8 @@ func VmsRoutes(archive *ArchiveResource) p.Extra {
 }
 
 func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock) *p.SpecConsole {
-	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive), Media: archive != nil}
+	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive), Media: archive != nil,
+		Index: p.NewMergedIndex(ctl.Objects, nil, wall)} // no database here: the resource process's, asked over HTTP
 	if archive != nil {
 		o.MarksRoot = archive.Root
 	}

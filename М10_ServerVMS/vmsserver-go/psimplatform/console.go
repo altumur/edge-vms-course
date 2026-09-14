@@ -12,7 +12,7 @@ package psimplatform
 //	GET  /where/<id>             the stored placement (why) and the assignments' answer (where, one scan)
 //	GET  /resources              the platform's resources: usage, units, live | silent
 //	GET  /unplaceable            units nothing live can serve, with the labels that say why
-//	GET  /events?from&to&unit&kind&subsystem   from the eventindex, if this console runs one
+//	GET  /events?from&to&unit&kind&subsystem   the resources' event databases, merged (MergedIndex), fenced by every subsystem's epochs
 //	GET  /metrics                <name>_workers_live · _worker_headroom{worker,server} · _worker_load · _epoch_conflicts ·
 //	                             _failover_seconds{kind="worst"} · _resources_live · <name>_<running> (the spec names the gauge)
 //	POST /<rows>  (Idempotency-Key)   the row only — the controller places it on its next pass; the key is a Variable
@@ -272,8 +272,8 @@ func WorkerLoad(hb Heartbeat, capacityFrom, headroomFrom string) float64 {
 
 // ConsoleOptions: the pieces a console may have beside its controller.
 type ConsoleOptions struct {
-	MarksRoot     string // this server's resource, for the console's own event log; "" = no marks
-	Index         *EventIndex
+	MarksRoot     string       // this server's resource, for the console's own event log; "" = no marks
+	Index         EventQuerier // the box's or the cluster's MergedIndex; nil = 503
 	WorstFailover float64
 	Wall          Clock
 	Extra         Extra // the subsystem's own routes; nil = none
@@ -465,14 +465,17 @@ func (c *SpecConsole) Mark(body map[string]any, user string) Reply {
 
 func (c *SpecConsole) events(req *http.Request) Reply {
 	if c.O.Index == nil {
-		return Reply{503, map[string]any{"error": "no eventindex behind this console"}}
+		return Reply{503, map[string]any{"error": "no event database behind this console"}}
 	}
 	q := req.URL.Query()
-	cur := map[[2]string]int{}
-	paths, _ := c.Ctl.Vars.List(c.Spec.Name + "/epoch/")
+	cur := map[[2]string]int{} // every subsystem's epochs: the timeline shows them all
+	paths, _ := c.Ctl.Vars.List("")
 	for _, pth := range paths {
+		if !strings.Contains(pth, "/epoch/") {
+			continue
+		}
 		e, _ := CurrentEpoch(c.Ctl.Vars, pth)
-		cur[[2]string{c.Spec.Name, LastSegment(pth)}] = e
+		cur[[2]string{pth[:strings.Index(pth, "/")], LastSegment(pth)}] = e
 	}
 	qq := Query{CurrentEpochs: cur}
 	qq.T0, qq.T1 = QueryRange(req)
