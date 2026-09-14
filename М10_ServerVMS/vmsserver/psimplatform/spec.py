@@ -6,7 +6,9 @@ file — and the platform runs the controller from it:
                   the operator's fields with types and defaults, and derived rows (a second row the
                   platform keeps beside the unit — the VMS's <name>/retention/<id> that the resource reads)
     placement     capacity and headroom as heartbeat fields; a constraint and a tie-break BY NAME from
-                  the catalogue below — never an expression; the rebalance dead band
+                  the catalogue below — never an expression; `requires: resource` when a worker must
+                  run where a resource answers (not placed on, moved off, while it is silent); the
+                  rebalance dead band
     snapshot      the fields that leave the cluster, as one object for the layer above
 
 The catalogue is deliberately short. `labels-subset`: a unit's `labels` must
@@ -30,7 +32,8 @@ and the worker is the subsystem.
 # `<name>/<rows>/<id>` — how an id is made — `numeric` or a field name — the operator's fields with types
 # and defaults, and derived rows kept beside the unit, such as the VMS's `vms/retention/<id>` that the
 # resource reads); `placement` (which heartbeat fields carry capacity and headroom, a constraint and a
-# tie-break chosen *by name* from a short catalogue — never an expression — and the rebalance dead band);
+# tie-break chosen *by name* from a short catalogue — never an expression — `requires: resource` when the
+# worker's server must have a resource that answers, and the rebalance dead band);
 # `snapshot` (the fields that leave the cluster); `console` (the name of the running gauge). What is not in
 # a spec: anything about what a unit does — that is the worker, and the worker is the subsystem.
 # `SpecController` extends `contract.Controller` and adds units, placement, redistribution, rebalance, the
@@ -43,6 +46,11 @@ and the worker is the subsystem.
 #   never the operator's. `SubsystemSpec.refuse` rejects any of them in a create/update body: placement is
 #   decided and stored by the controller with a reason; revision, epoch and phase are not the operator's.
 # - `CONSTRAINTS` — the catalogue: `"none"` (always eligible) and `"labels-subset"` (`_labels_subset`).
+#   `requires: resource` is not a constraint on the unit but on the worker's server: `resource_state` reads
+#   `platform/resources/<server>/heartbeat` — `live`, `silent`, or `unknown` (never seen) — and `_pool`
+#   drops workers whose resource is silent; `redistribute` moves their units off with the reason
+#   `resource on <server> silent`. Nomad's `meta.archive` puts a worker where disks are declared; this is
+#   whether the resource there still answers. `unknown` passes: silent is a fact, unknown is not one.
 #   Extended only by `register_constraint`.
 #
 # ## Notes
@@ -151,6 +159,7 @@ class SubsystemSpec:
     capacity_fallback: int = 50
     headroom_from: str = "headroom"
     constraint: str = "none"
+    requires: str = "none"        # "resource": a worker is eligible only while its server's resource is not silent
     tie_break: str = "most-free-capacity"
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
@@ -171,7 +180,7 @@ class SubsystemSpec:
         return cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
-                   constraint=pl.get("constraint", "none"), tie_break=pl.get("tie_break", "most-free-capacity"),
+                   constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), tie_break=pl.get("tie_break", "most-free-capacity"),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
@@ -449,9 +458,32 @@ class SpecController(Controller):
         rule = CONSTRAINTS[self.spec.constraint]
         return [w for w in workers if rule(row, self.labels_of(w))]
 
-    # The given list, or the workers seen heartbeating in the last 45 s; sorted.
+    # -- what the worker's server must have: a resource, when the spec says so ---------------------
+    # The state of the resource on a server, from `platform/resources/<server>/heartbeat`: `"live"` (younger
+    # than `lost_after`), `"silent"` (older), `"unknown"` (never heartbeaten — a box before its resource
+    # process starts, a bench). Nomad's `meta.archive` constraint puts a worker where disks are declared;
+    # this is the live fact: whether the resource there still answers.
+    def resource_state(self, server: str, lost_after: float = 45.0) -> str:
+        from .resource import resources_seen                       # the platform's own reader of the resource heartbeats
+        hb = resources_seen(self.objects).get(server)
+        if hb is None:
+            return "unknown"
+        return "live" if self.wall() - float(hb["ts"]) <= lost_after else "silent"
+
+    # Workers whose server's resource is silent, when the spec requires one: not placed on, and (in
+    # `redistribute`) moved off. A worker on a server whose resource was never seen passes — "silent" is
+    # a fact, "unknown" is not one.
+    def without_resource(self, workers) -> list[str]:
+        if self.spec.requires != "resource":
+            return []
+        return [w for w in workers if self.resource_state(self.server_of(w)) == "silent"]
+
+    # The given list, or the workers seen heartbeating in the last 45 s; minus those whose resource is
+    # silent when the spec requires one; sorted.
     def _pool(self, workers):
-        return sorted(workers if workers is not None else self.workers_seen())
+        pool = sorted(workers if workers is not None else self.workers_seen())
+        gone = set(self.without_resource(pool))
+        return [w for w in pool if w not in gone]
 
     # `most-free-capacity`: the worker with the largest `capacity_of − load`, strictly positive; ties go to
     # the first in sorted order.
@@ -489,6 +521,8 @@ class SpecController(Controller):
         if self.spec.constraint == "labels-subset" and row.get("labels"):
             reason += f" reaching {','.join(sorted(row['labels']))}"
         reason += f"; on {self.server_of(best)}"
+        if self.spec.requires == "resource":
+            reason += f", whose resource is {self.resource_state(self.server_of(best))}"
         pl = Placement(self.spec.parse_id(uid), best, reason, self.wall(), 0)
         # the row first (CAS decides who won), then the assignment
         def mutate(it):
@@ -554,14 +588,23 @@ class SpecController(Controller):
         touched: that is a crash, and its process returns under the same name."""
         self.unplace_deleted()
         moves = []
-        for gone in self.released_slots():
+        seen = sorted(workers if workers is not None else self.workers_seen())
+        # a released slot — and, when the spec requires a resource, a live worker whose server's resource
+        # went silent: it heartbeats, but it has nowhere to write; its units go to workers that do
+        gone_for = {g: f"slot {g} released" for g in self.released_slots()}
+        for w in self.without_resource(seen):
+            if self.assignment(w).units:
+                gone_for.setdefault(w, f"resource on {self.server_of(w)} silent")
+        for gone, why in gone_for.items():
             live = [w for w in self._pool(workers) if w != gone]
             for unit in sorted(self.assignment(gone).units, key=_unit_key):
                 uid = self.spec.parse_id(unit)
-                best = max(live, key=lambda w: self.capacity_of(w) - self.load(w), default=None)
+                row = self.unit(uid)
+                pool = self.eligible(row, live) if row else live
+                best = max(pool, key=lambda w: self.capacity_of(w) - self.load(w), default=None)
                 if best is None or self.load(best) >= self.capacity_of(best):
                     break                                   # the system is full; the unit waits, listed where it was
-                self.move(uid, best, f"slot {gone} released; most free capacity ({self.capacity_of(best) - self.load(best)})")
+                self.move(uid, best, f"{why}; most free capacity ({self.capacity_of(best) - self.load(best)}); on {self.server_of(best)}")
                 moves.append((uid, gone, best))
         return moves
 

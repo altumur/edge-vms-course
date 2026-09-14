@@ -179,6 +179,7 @@ type SubsystemSpec struct {
 	CapacityFallback int
 	HeadroomFrom     string
 	Constraint       string
+	Requires         string // "resource": a worker is eligible only while its server's resource is not silent
 	TieBreak         string
 	DeadBand         float64
 	Snapshot         []string
@@ -252,6 +253,9 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if c, ok := pl["constraint"].(string); ok {
 		s.Constraint = c
+	}
+	if rq, ok := pl["requires"].(string); ok {
+		s.Requires = rq
 	}
 	if tb, ok := pl["tie_break"].(string); ok {
 		s.TieBreak = tb
@@ -688,7 +692,41 @@ func (c *SpecController) Eligible(r Row, workers []string) []string {
 	return out
 }
 
-func (c *SpecController) pool(workers []string) []string {
+// ResourceState: the state of the resource on a server, from
+// platform/resources/<server>/heartbeat — "live" (younger than lostAfter),
+// "silent" (older), "unknown" (never heartbeaten: a box before its resource
+// process starts, a bench). Nomad's meta.archive constraint puts a worker
+// where disks are declared; this is the live fact: whether the resource
+// there still answers.
+func (c *SpecController) ResourceState(server string, lostAfter float64) string {
+	hb, ok := ResourcesSeen(c.Objects)[server]
+	if !ok {
+		return "unknown"
+	}
+	if c.Wall()-hb.Ts <= lostAfter {
+		return "live"
+	}
+	return "silent"
+}
+
+// WithoutResource: workers whose server's resource is silent, when the spec
+// requires one — not placed on, and (in Redistribute) moved off. A worker on
+// a server whose resource was never seen passes: "silent" is a fact,
+// "unknown" is not one.
+func (c *SpecController) WithoutResource(workers []string) []string {
+	out := []string{}
+	if c.Spec.Requires != "resource" {
+		return out
+	}
+	for _, w := range workers {
+		if c.ResourceState(c.ServerOf(w), 45) == "silent" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func (c *SpecController) seen(workers []string) []string {
 	if workers == nil {
 		for w := range c.WorkersSeen(45) {
 			workers = append(workers, w)
@@ -696,6 +734,23 @@ func (c *SpecController) pool(workers []string) []string {
 	}
 	out := append([]string{}, workers...)
 	sort.Strings(out)
+	return out
+}
+
+// pool: the given list, or the workers seen heartbeating in the last 45 s;
+// minus those whose resource is silent when the spec requires one; sorted.
+func (c *SpecController) pool(workers []string) []string {
+	all := c.seen(workers)
+	gone := map[string]bool{}
+	for _, w := range c.WithoutResource(all) {
+		gone[w] = true
+	}
+	out := []string{}
+	for _, w := range all {
+		if !gone[w] {
+			out = append(out, w)
+		}
+	}
 	return out
 }
 
@@ -733,6 +788,9 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 		reason += " reaching " + strings.Join(ls, ",")
 	}
 	reason += "; on " + c.ServerOf(best)
+	if c.Spec.Requires == "resource" {
+		reason += ", whose resource is " + c.ResourceState(c.ServerOf(best), 45)
+	}
 	pl := Placement{uid, best, reason, c.Wall(), 0}
 	// the row first (CAS decides who won), then the assignment
 	written, err := c.Write(c.Sub.Config("placement", uid), func(it Items) Items {
@@ -814,22 +872,38 @@ func (c *SpecController) MoveTo(uid, to, reason string) (Placement, error) {
 }
 
 // Redistribute is the controller's one unasked move: a slot that was
-// RELEASED still lists units. Move them to the workers that are here.
+// RELEASED still lists units — and, when the spec requires a resource, a live
+// worker whose server's resource went silent: it heartbeats, but it has
+// nowhere to write. Move their units to the workers that are here.
 func (c *SpecController) Redistribute(workers []string) []Move {
 	c.UnplaceDeleted()
 	moves := []Move{}
-	for _, gone := range c.ReleasedSlots() {
+	type gone struct{ worker, why string }
+	var gones []gone
+	for _, g := range c.ReleasedSlots() {
+		gones = append(gones, gone{g, "slot " + g + " released"})
+	}
+	for _, w := range c.WithoutResource(c.seen(workers)) {
+		if len(c.Assignment(w).Units) > 0 {
+			gones = append(gones, gone{w, "resource on " + c.ServerOf(w) + " silent"})
+		}
+	}
+	for _, g := range gones {
 		var live []string
 		for _, w := range c.pool(workers) {
-			if w != gone {
+			if w != g.worker {
 				live = append(live, w)
 			}
 		}
-		units := append([]string{}, c.Assignment(gone).Units...)
+		units := append([]string{}, c.Assignment(g.worker).Units...)
 		sort.SliceStable(units, func(i, j int) bool { return unitLess2(units[i], units[j]) })
 		for _, uid := range units {
+			pool := live
+			if r := c.Unit(uid); r != nil {
+				pool = c.Eligible(r, live)
+			}
 			best, bestFree := "", -1<<30
-			for _, w := range live {
+			for _, w := range pool {
 				if f := c.CapacityOf(w) - c.Load(w); f > bestFree {
 					best, bestFree = w, f
 				}
@@ -837,8 +911,8 @@ func (c *SpecController) Redistribute(workers []string) []Move {
 			if best == "" || c.Load(best) >= c.CapacityOf(best) {
 				break // the system is full; the unit waits, listed where it was
 			}
-			c.MoveTo(uid, best, fmt.Sprintf("slot %s released; most free capacity (%d)", gone, bestFree))
-			moves = append(moves, Move{uid, gone, best})
+			c.MoveTo(uid, best, fmt.Sprintf("%s; most free capacity (%d); on %s", g.why, bestFree, c.ServerOf(best)))
+			moves = append(moves, Move{uid, g.worker, best})
 		}
 	}
 	return moves

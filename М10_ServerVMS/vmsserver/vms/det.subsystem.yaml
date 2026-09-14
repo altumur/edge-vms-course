@@ -20,6 +20,7 @@ placement:
   capacity:   {from: capacity, fallback: 8}        # streams per worker — its own number, from its heartbeat
   headroom:   {from: headroom}
   constraint: labels-subset
+  requires:   resource                          # a detector writes its events into the resource on its own server
   tie_break:  most-free-capacity
   rebalance:  {dead_band: 0.10}
 snapshot: [name, cam, kind, enabled]

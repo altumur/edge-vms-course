@@ -21,6 +21,7 @@ placement:
   capacity:   {from: capacity, fallback: 50}    # the worker's word, from its heartbeat; the fallback for one that said nothing
   headroom:   {from: headroom}                  # what the autoscaler sums
   constraint: labels-subset                     # the camera's labels ⊆ the worker's server's labels
+  requires:   resource                          # the worker's server must have a resource that answers: not placed on while it is silent, moved off
   tie_break:  most-free-capacity
   rebalance:  {dead_band: 0.10}
 snapshot: [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]

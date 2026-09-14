@@ -130,6 +130,58 @@ func TestTwoControllersAgreeUnderConstraints(t *testing.T) {
 	eq(t, len(units), 40)
 }
 
+func TestAWorkerRunsWhereAResourceAnswersAndLeavesWhenItStops(t *testing.T) {
+	// Who guarantees a worker runs where the archive is: Nomad, by meta.archive
+	// on the job — a label. This is the live fact behind the label: the spec says
+	// `requires: resource`, so a worker whose server's resource has gone silent is
+	// not placed on, its cameras are moved to servers whose resource answers, and
+	// the reason says so. A resource never seen is not a fact and passes.
+	c := newCluster()
+	ctl := c.controller(10, "")
+	ws := threeWorkers(t, c)
+	rs := c.resources(nil)
+	a := c.create(t, ctl, map[string]any{"source": "driverpack://file/a.mp4", "labels": []any{"vlan:cctv-a"}}) // srv-a or srv-b
+	b := c.create(t, ctl, map[string]any{"source": "driverpack://file/b.mp4", "labels": []any{"vlan:cctv-a"}})
+	pls, _ := ctl.EnsurePlaced(nil)
+	for _, pl := range pls {
+		if !strings.HasSuffix(pl.Reason, ", whose resource is live") { // the label, and the fact behind it
+			t.Fatal(pl.Reason)
+		}
+	}
+	// srv-a's disks die: its resource job stops heartbeating; its worker does not — it has nowhere to write
+	c.Wall.Advance(60)
+	for _, w := range ws {
+		w.HeartbeatOnce()
+	}
+	rs["srv-b"].Heartbeat()
+	rs["srv-c"].Heartbeat()
+	eq(t, ctl.ResourceState("srv-a", 45), "silent")
+	eq(t, ctl.WithoutResource([]string{"w-0", "w-1", "w-2"}), []string{"w-0"})
+	onA := len(ctl.Assignment("w-0").Units)
+	moves := ctl.Redistribute(nil)
+	eq(t, len(moves), onA)
+	for _, m := range moves { // off srv-a, onto srv-b (cctv-a reaches it; srv-c cannot)
+		if m.From != "w-0" || m.To != "w-1" {
+			t.Fatal(m)
+		}
+	}
+	eq(t, len(ctl.Assignment("w-0").Units), 0)
+	if r := ctl.Placement(a.ID).Reason; !strings.HasPrefix(r, "resource on srv-a silent; ") || !strings.HasSuffix(r, "; on srv-b") {
+		t.Fatal(r)
+	}
+	x := c.create(t, ctl, map[string]any{"source": "driverpack://file/x.mp4", "labels": []any{"vlan:cctv-a"}})
+	pl, _ := ctl.Place(x.ID, nil)
+	eq(t, pl.Worker, "w-1") // never w-0 while srv-a's resource is silent
+	eq(t, len(ctl.Unplaceable()), 0)
+	// the resource comes back: srv-a is a place to record again; nothing moves back (adding a worker moves nothing)
+	rs["srv-a"].Heartbeat()
+	eq(t, ctl.ResourceState("srv-a", 45), "live")
+	eq(t, len(ctl.Redistribute(nil)), 0)
+	eq(t, ctl.Assignment("w-1").Units, []string{p.Str(a.ID), p.Str(b.ID), p.Str(x.ID)})
+	// the box has no resource heartbeat before its resource process starts: unknown is not silent
+	eq(t, ctl.ResourceState("srv-z", 45), "unknown")
+}
+
 func TestTheSnapshotIsTheOnlyThingThatLeavesTheCluster(t *testing.T) {
 	c := newCluster()
 	ctl := c.controller(0, "north")

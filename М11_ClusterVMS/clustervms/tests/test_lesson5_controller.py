@@ -70,6 +70,41 @@ def test_two_controllers_agree_under_constraints():
     assert all(where[i] != "w-0" for i in range(2, 41, 2))                 # cctv-b cameras never on srv-a
 
 
+def test_a_worker_runs_where_a_resource_answers_and_leaves_when_it_stops():
+    """Who guarantees a worker runs where the archive is: Nomad, by `meta.archive`
+    on the job — a label. This is the live fact behind the label: the spec says
+    `requires: resource`, so a worker whose server's resource has gone silent is
+    not placed on, its cameras are moved to servers whose resource answers, and
+    the reason says so. A resource never seen is not a fact and passes."""
+    from cluster.resource import cluster_resource
+    c = Cluster(); ctl = ClusterController(c.vars, c.objects, capacity=10, wall=c.wall)
+    ws = _three_workers(c, ctl)
+    rs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
+    for r in rs.values(): r.heartbeat()
+    a = ctl.create_camera({"source": "driverpack://file/a.mp4", "labels": ["vlan:cctv-a"]})["id"]   # srv-a or srv-b
+    b = ctl.create_camera({"source": "driverpack://file/b.mp4", "labels": ["vlan:cctv-a"]})["id"]
+    for pl in ctl.ensure_placed():
+        assert pl.reason.endswith(", whose resource is live")                                     # the label, and the fact behind it
+    # srv-a's disks die: its resource job stops heartbeating; its worker does not — it has nowhere to write
+    c.wall.advance(60)
+    for w in ws.values(): w.heartbeat_once()
+    rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    assert ctl.resource_state("srv-a") == "silent" and ctl.without_resource(["w-0", "w-1", "w-2"]) == ["w-0"]
+    on_a = [u for u in ctl.assignment("w-0").units]
+    moves = ctl.redistribute()
+    assert sorted(m[1] for m in moves) == ["w-0"] * len(on_a) and all(m[2] == "w-1" for m in moves)   # off srv-a, onto srv-b (cctv-a reaches it; srv-c cannot)
+    assert ctl.assignment("w-0").units == [] and ctl.placement(a).reason.startswith("resource on srv-a silent; ")
+    assert ctl.placement(a).reason.endswith("; on srv-b")
+    x = ctl.create_camera({"source": "driverpack://file/x.mp4", "labels": ["vlan:cctv-a"]})["id"]
+    assert ctl.place(x).worker == "w-1"                                                            # never w-0 while srv-a's resource is silent
+    assert ctl.unplaceable() == []                                                                 # srv-b reaches cctv-a too; nothing waits
+    # the resource comes back: srv-a is a place to record again; nothing moves back (adding a worker moves nothing)
+    rs["srv-a"].heartbeat()
+    assert ctl.resource_state("srv-a") == "live" and ctl.redistribute() == [] and ctl.assignment("w-1").units == sorted(map(str, [a, b, x]), key=int)
+    # the box has no resource heartbeat before its resource process starts: unknown is not silent
+    assert ctl.resource_state("srv-z") == "unknown"
+
+
 def test_the_snapshot_is_the_only_thing_that_leaves_the_cluster():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall, cluster="north")
     _three_workers(c, ctl)
