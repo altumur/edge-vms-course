@@ -34,6 +34,5 @@ GEN=/usr/lib/systemd/system-generators/podman-system-generator
 [ -x "$GEN" ] || { echo "no $GEN here (needs podman); run this on the bench or in CI" >&2; exit 2; }
 # Point the generator at this directory instead of the system ones and ask for a dry run: it prints the
 # generated units to stdout and exits non-zero if a file does not parse (an unknown key, a malformed
-# `Volume=`, a missing `Image=`). The `.timer` beside the units is a plain systemd unit and passes through
-# untouched.
+# `Volume=`, a missing `Image=`).
 QUADLET_UNIT_DIRS="$DIR" "$GEN" --dryrun

@@ -1,4 +1,4 @@
-"""python3 -m cluster worker | controller | console | resource — the jobs (each resource runs the index over its own tree).
+"""python3 -m cluster worker | controller | console | resource — the jobs (each resource keeps the event database over its own tree).
 
     NOMAD_ADDR, NOMAD_TOKEN            the task's own workload identity (Variables)
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
@@ -6,7 +6,7 @@
     NOMAD_ALLOC_INDEX                  worker: the slot to claim; NOMAD_NODE_NAME the server; NOMAD_META_labels
     SPOOL, ARCHIVE                     worker and resource: the same disks on the same server
     RESOURCE_URL                       resource: how the console reaches this server's manifests and events
-    EVENTINDEX_DB                      resource: where its index lives (default :memory: — it is a cache, rebuilt on start)
+    EVENTDB                            resource: where its event database lives (default :memory: — a cache, rebuilt on start)
     CAPACITY                           worker: cameras it can carry on this server
 """
 from __future__ import annotations
@@ -63,7 +63,7 @@ def controller() -> None:
 def console() -> None:
     """one per server, a system job: the page and the API. Its token writes the
     operator's rows and nothing else; a create is placed by the controller's next
-    pass. No index of its own: /events asks the live resources and merges."""
+    pass. No event database of its own: /events asks the live resources and merges."""
     from cluster.console import serve
     from cluster.controller import ClusterController
     ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
@@ -75,18 +75,17 @@ def console() -> None:
 
 
 def resource() -> None:
-    """The platform's resource job with the VMS registered on it, and the index over its own tree."""
+    """М10's resource process as a job: the platform's Resource with the VMS registered on it, and the event database over its own tree."""
     from vms.archive import ArchiveResource
     from cluster.resource import cluster_resource, vms_routes
-    from psimplatform.eventindex import ResourceIndex
     from psimplatform.resource import serve
     arch = ArchiveResource(spool, archive)
     server = os.environ.get("NOMAD_NODE_NAME") or os.uname().nodename
     url = os.environ.get("RESOURCE_URL", f"http://{server}:8090")
-    res = cluster_resource(arch, server, url, NomadVariables(), objects)
+    res = cluster_resource(arch, server, url, NomadVariables(), objects, database=os.environ.get("EVENTDB", ":memory:"))
     srv = serve(res, "0.0.0.0", int(os.environ.get("RESOURCE_PORT", "8090")), extra=vms_routes(arch))
     res.heartbeat(); logging.info("restore: %s", res.restore())    # back with an empty disk? pull my buckets from my peers first
-    res.index = ResourceIndex(res.root, server, path=os.environ.get("EVENTINDEX_DB", ":memory:")).start()   # a cache over MY tree: rebuilt after restore, tailed every 3 s
+    res.database.start()                                              # a cache over MY tree: rebuilt after restore, tailed every 3 s
     last_policy = 0.0
     while not stop.is_set():
         try:
@@ -96,7 +95,7 @@ def resource() -> None:
         except Exception:                         # noqa: BLE001
             logging.exception("resource pass failed")
         stop.wait(10)
-    res.index.stop(); srv.shutdown()
+    res.database.stop(); srv.shutdown()
 
 
 if __name__ == "__main__":

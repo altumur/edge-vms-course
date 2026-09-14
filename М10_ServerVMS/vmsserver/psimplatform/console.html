@@ -74,7 +74,7 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 - `POST /<rows>`, `PUT /<rows>/<id>`, `DELETE /<rows>/<id>` — the writes, always with an `Idempotency-Key`.
 - `GET /timeline/<id>?from&to`, `GET /segment/<path>[?server=]` — only when `spec.media`; registered by the
   subsystem.
-- `GET /events?from&to&cam=<id>` — the eventindex behind the console, tolerated when absent.
+- `GET /events?from&to&cam=<id>` — the resources' event databases, merged by the console, tolerated when absent.
 
 ## Notes
 - The page never sends `worker`, `epoch`, `revision`, `phase` or `id` — the inputs are generated only from

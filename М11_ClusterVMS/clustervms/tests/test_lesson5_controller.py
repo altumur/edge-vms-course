@@ -102,19 +102,18 @@ def test_the_console_over_http():
     assert 'vms_failover_seconds{kind="worst"} 48.0' in out and "vms_workers_live 3" in out and "vms_cameras_recording 1" in out
     st, out = call("GET", "/resources"); assert st == 200 and json.loads(out) == {}
     st, out = call("GET", "/unplaceable"); assert json.loads(out) == []
-    # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the index over ITS tree
-    from psimplatform.eventindex import ResourceIndex
+    # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
     from psimplatform.resource import serve as serve_resource
     from cluster.resource import cluster_resource, vms_routes
     from tests.test_lesson3_resources import _segment
     _segment(c.servers["srv-a"], 1, 1, c.wall() - 600, size=256)
     res = cluster_resource(c.servers["srv-a"].resource, "srv-a", "http://127.0.0.1:0", c.vars, c.objects, wall=c.wall)
     rsrv = serve_resource(res, "127.0.0.1", 0, extra=vms_routes(c.servers["srv-a"].resource)); res.url = f"http://127.0.0.1:{rsrv.server_address[1]}"; res.heartbeat()
-    res.index = ResourceIndex(res.root, "srv-a", wall=c.wall); res.index.rebuild()
-    # an operator's mark: the console's own bucket on srv-a's resource; the console has no index — it asks srv-a's, by HTTP, and finds the `cam` field
+    res.database.rebuild()
+    # an operator's mark: the console's own bucket on srv-a's resource; the console has no database — it asks srv-a's, by HTTP, and finds the `cam` field
     st, out = call("POST", "/marks", {"cam": 1, "note": "check the gate"}, {"Idempotency-Key": "m1", "X-User": "murat"})
     m = json.loads(out); assert st == 201 and m["bucket"].startswith(f"console/{m['unit']}/e1/")
-    assert res.index.tail()["added"] == 1
+    assert res.database.tail()["added"] == 1
     st, out = call("GET", "/events?cam=1"); ev = json.loads(out)
     assert st == 200 and [(e["subsystem"], e["kind"], e["user"], e["server"]) for e in ev["events"]] == [("console", "mark", "murat", "srv-a")] and ev["state"] == "live"
     # the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server

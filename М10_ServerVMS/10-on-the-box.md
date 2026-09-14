@@ -1,4 +1,4 @@
-# Lesson 9 — On М9's Box
+# Lesson 10 — On М9's Box
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
 **You will build:** the whole of М10 as Quadlet units on the box М9 built — one image, eight units, everything that must outlive an OS update under `/data`, the mounts saying what the ACL says, and М9's health check reading this worker's archive so that an update that records nothing is rolled back.
@@ -6,14 +6,14 @@
 
 ## Why this lesson exists
 
-Every lesson so far said "on М9's box" and shipped nothing that proves it. This one turns the sentence into units the tests read: the four processes of Lessons 4–6, the gateway and its controller of Lesson 7, the detector and its controller of Lesson 8, and the archive's policy pass — Quadlet files over one image, on the data partition, with the rollback decision reaching the new worker.
+Every lesson so far said "on М9's box" and shipped nothing that proves it. This one turns the sentence into units the tests read: the processes of Lessons 4–6, the gateway and its controller of Lesson 7, the detector and its controller of Lesson 8, and the resource process of Lesson 9 — Quadlet files over one image, on the data partition, with the rollback decision reaching the new worker.
 
 > **What you can verify without hardware.** `tests/test_deploy_units.py`: each unit's `Exec=` is an entrypoint `python3 -m vms` has; every volume is under `/data`; the controller has no archive and no spool, the console cannot write the spool, only the worker writes segments; the Containerfile carries the three packages and no database. `deploy/check-quadlet.sh` is the generator's dry-run, for a box with podman. RAUC, the health check and a real update are the bench's.
 
 ## Prerequisites
 
 - **М9 Lessons 1–5** — RAUC, the data partition, Quadlet, the health check ladder.
-- **Lessons 4–8** — the processes these units run.
+- **Lessons 4–9** — the processes these units run.
 
 ## Learning objectives
 
@@ -26,11 +26,11 @@ Every lesson so far said "on М9's box" and shipped nothing that proves it. This
 ## Step 1 — Eight units, one image
 
 
-Everything above runs on the box М9 built, and the module should say so as units rather than as a sentence. `deploy/` is eight Quadlet units over one image (`Containerfile` → `localhost/vmsserver:latest`, the same image М11's jobs start `FROM`): `vmsworker@.container` (the slot is the instance name — `systemctl start vmsworker@w-1`), `vmscontroller.container`, `vmsconsole.container`, `vms-archive-retain.container` run by a timer, and — from Lessons 7 and 8 — `vmsgateway@.container`, `vmslivecontroller.container`, `vmsdetworker@.container` and `vmsdetcontroller.container` — the archive resource's policy pass, `python3 -m vms retain`. М9's four units become these: `worker.container` is `vmsworker@`, `postgres.container` is gone (М10 Lesson 1 — the platform's stores on the data partition are the truth), `spool-uploader.container` is gone with it (the spool is the archive resource's staging, promoted locally), and `vms-agent.container` stays М9's business. What every unit has in common is М9 Lesson 5's rule: the image is in the rootfs slot, everything the box must not lose is under `/data` — `/data/platform` (the stores), `/data/spool`, `/data/archive`, `/data/media`, `/data/config/vms.env` — so an A/B update that boots the other slot finds the same cameras, the same assignment and the same footage.
+Everything above runs on the box М9 built, and the module should say so as units rather than as a sentence. `deploy/` is eight Quadlet units over one image (`Containerfile` → `localhost/vmsserver:latest`, the same image М11's jobs start `FROM`): `vmsworker@.container` (the slot is the instance name — `systemctl start vmsworker@w-1`), `vmscontroller.container`, `vmsconsole.container`, `vmsresource.container` — the resource process of Lesson 9: heartbeat, policy pass, `/events` from the event database, the unit М11 runs as the `resource` job — and, from Lessons 7 and 8, `vmsgateway@.container`, `vmslivecontroller.container`, `vmsdetworker@.container` and `vmsdetcontroller.container`. М9's four units become these: `worker.container` is `vmsworker@`, `postgres.container` is gone (М10 Lesson 1 — the platform's stores on the data partition are the truth), `spool-uploader.container` is gone with it (the spool is the archive resource's staging, promoted locally), and `vms-agent.container` stays М9's business. What every unit has in common is М9 Lesson 5's rule: the image is in the rootfs slot, everything the box must not lose is under `/data` — `/data/platform` (the stores), `/data/spool`, `/data/archive`, `/data/media`, `/data/config/vms.env` — so an A/B update that boots the other slot finds the same cameras, the same assignment and the same footage.
 
 ## Step 2 — The mounts say what the ACL says
 
-The mounts say the same thing the ACL says, in bytes: the controller mounts no archive and no spool (it has nothing to do with footage); the console mounts the spool read-only and the archive to serve from; the worker is the only unit with the archive writable and the media read-only; the policy pass reads the platform's rows and writes the archive. `tests/test_deploy_units.py` reads the units and checks exactly that, and that each `Exec=` is an entrypoint `python3 -m vms` actually has. `deploy/check-quadlet.sh` is М9 Lesson 4's generator dry-run for these files, for the bench.
+The mounts say the same thing the ACL says, in bytes: the controller mounts no archive and no spool (it has nothing to do with footage); the console mounts the spool read-only and the archive to serve from; the worker is the only unit with the archive writable and the media read-only; the resource process writes its heartbeat into the platform and its policy into the archive, and cannot touch the spool. `tests/test_deploy_units.py` reads the units and checks exactly that, and that each `Exec=` is an entrypoint `python3 -m vms` actually has. `deploy/check-quadlet.sh` is М9 Lesson 4's generator dry-run for these files, for the bench.
 
 ## Step 3 — The health check reaches the new worker
 
@@ -58,7 +58,7 @@ And the health check reaches the new worker. М9's `rauc-health-check` — the s
 ## Exercises
 
 1. Move the archive volume to a second disk. Which units change, and which rows in the store?
-2. Write the `vms-archive-retain.timer` interval as a product decision: what is lost if it runs hourly, and what if it runs every minute?
+2. The resource process runs its policy pass every 600 s. Write the interval as a product decision: what is lost if it runs hourly, and what if it runs every minute — for media, for buckets, and for the event database's `forget`?
 3. The health check reads `/metrics` on `127.0.0.1:8080`. The console is now a system job on every server in М11 — which server's console should a box's health check ask, and why only that one?
 
 ## Where this is going

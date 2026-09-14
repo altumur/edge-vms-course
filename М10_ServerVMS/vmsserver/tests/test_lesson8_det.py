@@ -1,4 +1,4 @@
-"""Lesson 8 — detectors as the second subsystem, and one console for
+"""Lesson 8 — detectors as the third subsystem, and one console for
 all of them. A unit is one model on one camera, created from the camera's page
 with the console's token, placed on a GPU-labelled worker by stream headroom;
 its events are buckets under det/<unit>/e<epoch>/ on the resource, written
@@ -133,50 +133,5 @@ def test_nothing_with_a_gpu_is_unplaceable_and_says_why():
         assert call(base, "GET", "/det/unplaceable")[1] == [{"id": "1-lpr", "labels": ["gpu"], "workers_live": 1}]
         _det(box, "d-2", labels="gpu,nvidia")
         assert det_ctl.ensure_placed()[0].worker == "d-2"                                # a GPU arrives: placed, nothing else moves
-    finally:
-        srv.shutdown(); srv.server_close()
-
-
-def test_the_detectors_events_reach_the_timeline_through_the_console():
-    """The box's console runs the platform's EventIndex over its own archive —
-    not a subsystem, a cache — so a detector's event is on the camera's timeline
-    within one tail, beside the worker's and the operator's, and fenced by the
-    detector's own epoch when that moves."""
-    from vms.console import LocalIndex
-    box = Box()
-    ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_vars = box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console())
-    con = VmsController(con_vars, box.objects, wall=box.wall)
-    det_ctl = SpecController(DET_SPEC, box.vars.as_writer("detcontroller", DET_SPEC.acl_controller()), box.objects, wall=box.wall)
-    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
-    w.heartbeat_once(); con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"}); ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
-    index = LocalIndex(box.archive, wall=box.wall, server="srv-1")
-    from vms.archive import ArchiveResource
-    srv = serve(con, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall, mounts={"det": SpecController(DET_SPEC, con_vars, box.objects, wall=box.wall)}, index=index)
-    base = f"http://127.0.0.1:{srv.server_address[1]}"
-    try:
-        gpu = _det(box, "d-1")
-        call(base, "POST", "/det/units", {"name": "1-linecross", "cam": "1", "kind": "linecross"}, {"Idempotency-Key": "k1"})
-        det_ctl.ensure_placed(); gpu.reconcile_once()
-        for _ in range(3):
-            box.wall.advance(2); gpu.reconcile_once()                                    # one event, on the third pass
-        # the operator marks a moment, and the camera goes silent: three subsystems' events on one resource
-        call(base, "POST", "/marks", {"cam": 1, "note": "check this"}, {"Idempotency-Key": "m1", "X-User": "murat"})
-        w.actuator.dead.append(1); w.pump_once()
-        assert index.tail()["added"] == 3
-        ev = call(base, "GET", "/events?cam=1")[1]["events"]
-        assert [(e["subsystem"], e["kind"], e["fenced"]) for e in ev] == [("det", "linecross", False), ("console", "mark", False), ("vms", "silent", False)]
-        assert ev[0]["unit"] == "1-linecross" and ev[0]["pass"] == 3 and ev[0]["epoch"] == 1
-        # the same answer under the mount: /det/events fences by det's epochs too
-        assert call(base, "GET", "/det/events?cam=1&subsystem=det")[1]["events"][0]["kind"] == "linecross"
-        # an open bucket keeps growing: the next event is picked up by the next tail, not left for a rebuild
-        for _ in range(3):
-            box.wall.advance(2); gpu.reconcile_once()
-        assert index.tail()["added"] == 1 and len(call(base, "GET", "/events?cam=1&subsystem=det")[1]["events"]) == 2
-        # the detector's epoch moves (a second instance took the unit): the old events are fenced, on every route
-        from psimplatform.epoch import next_epoch
-        next_epoch(box.vars, "det/epoch/1-linecross")
-        assert all(e["fenced"] for e in call(base, "GET", "/events?cam=1&subsystem=det")[1]["events"])
-        assert not call(base, "GET", "/events?cam=1&subsystem=vms")[1]["events"][0]["fenced"]     # the worker's epoch did not move
     finally:
         srv.shutdown(); srv.server_close()

@@ -7,7 +7,7 @@ stateless shards writing bulk data; nothing here knows what a camera is.
     contract.py    what a subsystem gives the platform: a controller and its workers
     spec.py        the controller as data: SubsystemSpec from <sub>.subsystem.yaml, SpecController
     console.py     the console as data: SpecConsole over the same spec; console.html, the one page
-    events.py, eventindex.py, resource.py   buckets, the index each resource keeps over its own, the resource job
+    events.py, eventdatabase.py, resource.py   buckets, the event database each resource keeps over its own, the resource job
 
 М11 replaces variables.py with Nomad Variables and objects.py with MinIO,
 behind the same interfaces, and changes nothing above this line.
@@ -23,7 +23,7 @@ behind the same interfaces, and changes nothing above this line.
 # here would host any fleet of stateless shards writing bulk data — and gives a one-line map of the modules:
 # `variables.py` (config store with ModifyIndex and check-and-set), `objects.py` (object store), `epoch.py`
 # (fencing token and lease), `contract.py` (Controller and Worker bases), `spec.py` (the controller as
-# data), `console.py` and `console.html` (the console as data), and `events.py` / `eventindex.py` /
+# data), `console.py` and `console.html` (the console as data), and `events.py` / `eventdatabase.py` /
 # `resource.py` (buckets, the index over them, the resource job).
 #
 # The docstring also fixes the boundary the next module (М11) will use: М11 replaces `variables.py` with

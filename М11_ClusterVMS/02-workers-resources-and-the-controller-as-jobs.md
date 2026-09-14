@@ -17,7 +17,7 @@ The other thing this lesson settles is a question М10 left open and answered la
 - **М10 Lesson 1, Step 5a** — identity by claim: `vms/slots/<name>`, `claim_slot(prefer)`, `released` versus lapsed.
 - **М10 Lesson 5, Step 4a** — the controller's one unasked move.
 - **Lesson 1** — the cluster, `meta.labels`, `meta.archive`, ACLs on.
-- **М9 Lesson 4** — Quadlet; **М10 Lesson 9** — the Quadlet units these jobs translate, over the image these jobs build `FROM`.
+- **М9 Lesson 4** — Quadlet; **М10 Lesson 10** — the Quadlet units these jobs translate, over the image these jobs build `FROM`.
 
 ## Learning objectives
 
@@ -35,7 +35,7 @@ The other thing this lesson settles is a question М10 left open and answered la
 | Program | Quadlet unit on М9's box (М10) | Under Nomad | Why that shape |
 |---|---|---|---|
 | **`vmsworker`** | `vmsworker@.container`, `vmsworker@w-N` started by hand | `service`, `count = N`, `scaling {}`, `disconnect {}`, `kill_timeout = 20s` | movable; placed by constraint; N is the scheduler's |
-| **`resource`** — the platform's, with the VMS registered on it | the directory; `vms-archive-retain.container` + timer for the policy | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the VMS's manifests and footage as *its* part |
+| **`resource`** — the platform's, with the VMS registered on it | `vmsresource.container` — the same process (М10 Lesson 9) | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the VMS's manifests and footage as *its* part |
 | **`vmscontroller`** | `vmscontroller.container` | `service`, `count = 1`, no port | one is economy, not correctness — CAS is the correctness, and a second would repeat the same pass; its token writes placement only (`vmscontroller-policy.hcl`) |
 | **`console`** | `vmsconsole.container` | `system`, port 8080 on every server, `constraint meta.archive is_set` (for marks) | a person is waiting on it, and any server's address is the console — no load balancer, nothing in front; stateless; a retry is answered the same by any instance (`vms/idem/*`); its token writes the operator's rows only (`console-policy.hcl`) — a console that could place would be a second controller with a browser in front |
 | **the Nomad Autoscaler** | the operator's hand | `service`, `count = 1`, reads Prometheus, talks to Nomad | the only thing that changes `count`; MPL-2.0; not ours |

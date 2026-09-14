@@ -10,12 +10,12 @@ clustervms/
     worker.py        L2  the worker as an allocation — М10's VmsWorker by the name the lessons use: the slot from NOMAD_ALLOC_INDEX, the server and its labels from the environment
     controller.py    L5  the controller as a job — М10's VmsController by the name the lessons use: constraints, the server in the reason, the snapshot and the measured failover are the one-box behaviour with N = 1
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
-    resource.py      L3  the VMS's part of the platform's resource job: ArchivePolicy (repair, close, media retention) registered as the `vms` hook; /manifest and /segment plugged in
-    eventindex.py    L3  a name for psimplatform.eventindex — the index each resource job keeps over its own tree; the console merges them (MergedIndex)
+    resource.py      L3  М10's resource process (vms.resource) as the job: cluster_resource = vms_resource — ArchivePolicy registered, an EventDatabase attached; /manifest and /segment plugged in
+    eventindex.py    L3  a name for psimplatform.eventdatabase — EventDatabase, the one each resource job keeps over its own tree; MergedIndex, the console's merge
     console.py       L5  the cluster console — its own job, its own token: the platform's SpecConsole over the VMS spec plus two extras, the merged timeline and /segment/<path>?server= proxied from that server's resource
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console: SpecConsole (/spec /cameras /where /resources /unplaceable /events /metrics /marks, the writes) plus the cluster's /timeline and /segment?server=
-    __main__.py      python3 -m cluster worker | controller | resource   (the resource job runs the index over its own tree; the console holds none)
+    __main__.py      python3 -m cluster worker | controller | resource   (the resource job keeps the event database over its own tree; the console holds none)
   deploy/
     server.hcl, client.hcl     L1  three servers, ACLs on, meta.labels and meta.archive, the Podman plugin
     vmsworker.nomad.hcl        L2  service, count = N, the `scaling` block on avg(vms_worker_load), the disconnect numbers, kill_timeout for the slot release
@@ -42,7 +42,7 @@ clustervms/
 | The resource | a directory on the box | the platform's `resource` job on *each* server: every subsystem's buckets served and mirrored, retention by each subsystem's row; the VMS registers its manifests and media on it | `psimplatform/resource.py`, `resource.py` |
 | A timeline | one manifest | merged across the resources that hold the camera; a silent one is named as unreachable | `timeline.py` |
 | What leaves the cluster | the same snapshot, of a cluster of one | one snapshot object for М12's read model — a copy with an age | `psimplatform/spec.py` |
-| Events | buckets per unit on the resource, written by the worker holding the epoch, any subsystem | the same, on each server's resource; indexed by each resource's own `ResourceIndex`, a cache, and merged by the console's `/events`; mirrored to the next resource with `platform/mirror` on | `psimplatform/eventindex.py`, `psimplatform/resource.py` |
+| Events | buckets per unit on the resource, written by the worker holding the epoch, any subsystem | the same, on each server's resource; held by each resource's own `EventDatabase`, a cache, and merged by the console's `/events`; mirrored to the next resource with `platform/mirror` on | `psimplatform/eventdatabase.py`, `psimplatform/resource.py` |
 | The contract, **the controller**, **the worker**, the epoch, the lease, the manifest | | **unchanged**: imported from `vmsserver/` — `controller.py` and `worker.py` here are one import each | |
 
 ## The three lines the tests hold

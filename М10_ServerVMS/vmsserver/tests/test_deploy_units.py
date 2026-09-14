@@ -27,9 +27,9 @@ def unit(name):
 def test_the_units_run_the_entrypoints_the_package_has():
     from vms import __main__ as m  # noqa: F401  (imports the module without running it: no __name__ == "__main__")
     entrypoints = set(re.findall(r'"(\w+)": \w+', open(os.path.join(HERE, "vms", "__main__.py")).read().split("__main__")[-1]))
-    assert entrypoints == {"worker", "controller", "console", "retain", "gateway", "livecontroller", "detworker", "detcontroller"}
+    assert entrypoints == {"worker", "controller", "console", "resource", "gateway", "livecontroller", "detworker", "detcontroller"}
     for name, entry in [("vmsworker@.container", "worker"), ("vmscontroller.container", "controller"),
-                        ("vmsconsole.container", "console"), ("vms-archive-retain.container", "retain"),
+                        ("vmsconsole.container", "console"), ("vmsresource.container", "resource"),
                         ("vmsgateway@.container", "gateway"), ("vmslivecontroller.container", "livecontroller"),
                         ("vmsdetworker@.container", "detworker"), ("vmsdetcontroller.container", "detcontroller")]:
         u = unit(name)
@@ -48,10 +48,10 @@ def test_who_may_write_where_is_in_the_mounts_too():
     assert vols("vmsconsole.container")["/data/spool"].endswith(":ro,z")                # reads, never records
     assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # the only writer of segments
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
-    assert vols("vms-archive-retain.container")["/data/platform"].endswith(":ro,z")     # the policy reads rows, never writes them
+    assert vols("vmsresource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
+    assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
     assert unit("vmsworker@.container")["Container"]["StopTimeout"] == "20"            # SIGTERM finalizes the open segment
-    assert unit("vms-archive-retain.container")["Service"]["Type"] == "oneshot"
-    assert unit("vms-archive-retain.timer")["Timer"]["Unit"] == "vms-archive-retain.service"
+    assert unit("vmsresource.container")["Service"]["Restart"] == "always"             # a process, not a timer: the database lives in it
 
 
 def test_the_image_carries_the_three_packages_and_nothing_else():

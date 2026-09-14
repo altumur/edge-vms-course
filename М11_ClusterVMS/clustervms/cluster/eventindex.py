@@ -1,5 +1,4 @@
-"""The event index is the platform's, one per resource: psimplatform.eventindex.ResourceIndex, run inside
-the resource job (`python3 -m cluster resource`). The console holds none — see `cluster.console.MergedIndex`.
+"""The event database is the platform's, one per resource: psimplatform.eventdatabase.EventDatabase, run
+inside the resource job (`python3 -m cluster resource`). The console holds none — MergedIndex asks and merges.
 Kept here as the name М11 used."""
-from psimplatform.eventindex import EventIndex, ResourceIndex  # noqa: F401
-from .console import MergedIndex  # noqa: F401
+from psimplatform.eventdatabase import EventDatabase, MergedIndex  # noqa: F401

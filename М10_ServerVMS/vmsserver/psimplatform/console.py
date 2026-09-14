@@ -10,7 +10,7 @@ show them. So the console is one class, run from the same spec:
     GET  /where/<id>             the stored placement (why) and the assignments' answer (where, one scan)
     GET  /resources              the platform's resources: usage, units, live | silent
     GET  /unplaceable            units nothing live can serve, with the labels that say why
-    GET  /events?from&to&unit&kind&subsystem   from the index behind this console (the box's own; on a cluster, a merge over the resources'), fenced by every subsystem's epochs
+    GET  /events?from&to&unit&kind&subsystem   the resources' event databases, merged (MergedIndex), fenced by every subsystem's epochs
     GET  /metrics                <name>_workers_live · <name>_worker_headroom{worker,server} · <name>_worker_load ·
                                  <name>_epoch_conflicts · <name>_failover_seconds{kind="worst"} · <name>_resources_live ·
                                  <name>_<running> (units in phase "running"; the spec names the gauge)
@@ -40,7 +40,7 @@ rule in this file.
 # units are, which fields the operator owns and what leaves the cluster; that is everything a console needs
 # to list, edit and show them, so the console is one class run from the same spec. It serves `console.html`,
 # `/spec` (what the page reads first), the rows with the read model, `/where`, `/resources`, `/unplaceable`,
-# `/events` (if an index is behind it — anything with `query(t0, t1, cam, kind, subsystem, unit, current_epochs)`), `/metrics`, and the writes — POST/PUT/DELETE on the rows and
+# `/events` (if a `MergedIndex` — anything with `query(t0, t1, cam, kind, subsystem, unit, current_epochs)` — is behind it), `/metrics`, and the writes — POST/PUT/DELETE on the rows and
 # POST `/marks` — with idempotency keys stored in Variables so a retry answered by another console instance
 # is the same request. What a subsystem adds is registered, not subclassed: `extra(handler, method, path,
 # query)` gets every request the built-in routes do not claim (the VMS: `/timeline` and `/segment`). The
@@ -56,7 +56,7 @@ rule in this file.
 # media=False, lost_after=45.0)` `ctl` is the subsystem's `SpecController` holding the console's token;
 # `marks_root` is this server's resource root — if given, `self.marks` is an `EventLog(marks_root,
 # "console", <hostname:pid>, epoch 1)` (the console's own log; one writer, so epoch 1 forever); `index` is
-# an optional index (`query(...)` — the box's `LocalIndex`, a cluster's `MergedIndex`); `worst_failover` is a number exported on `/metrics`; `extra` is the subsystem's
+# an optional `MergedIndex` (anything with `query(...)`); `worst_failover` is a number exported on `/metrics`; `extra` is the subsystem's
 # route function; `media` tells the page it may draw a timeline and play. `seen` is the `IdempotencyKeys`
 # over `<sub>/idem/`. `_scan` caches the assignment directory; `scans` counts cache refreshes.
 #
@@ -70,7 +70,7 @@ rule in this file.
 #   revision to 2; DELETE marks the row and the placement waits for `unplace_deleted`.
 # - Idempotency covers POST always, PUT optionally, DELETE never; the page sends a fresh key with every
 #   request (including DELETE, where it is ignored).
-# - `/events` relies on an index behind the console — the box's `LocalIndex`, a cluster's merge over each resource's own; without one it is an honest 503,
+# - `/events` relies on a `MergedIndex` behind the console — every live resource's own event database, merged; without one it is an honest 503,
 #   and the page tolerates that.
 # ================================================================================================
 from __future__ import annotations
@@ -419,7 +419,7 @@ class SpecConsole:
                 return h._send(200, ctl.unplaceable())
             if path == "/events":
                 if con.index is None:
-                    return h._send(503, {"error": "no event index behind this console"})
+                    return h._send(503, {"error": "no event database behind this console"})
                 cur = {(p.split("/")[0], p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list("") if "/epoch/" in p}   # every subsystem's epochs: the timeline shows them all
                 cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
                 return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),

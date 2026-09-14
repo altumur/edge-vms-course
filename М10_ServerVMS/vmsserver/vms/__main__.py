@@ -1,4 +1,4 @@
-"""python3 -m vms worker|controller|console|retain|gateway|livecontroller|detworker|detcontroller — the box's processes.
+"""python3 -m vms worker|controller|console|resource|gateway|livecontroller|detworker|detcontroller — the box's processes.
 
     PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
     SPOOL=/data/spool  ARCHIVE=/data/archive  MEDIA_DIR=/data/media
@@ -6,6 +6,8 @@
                                      neither: the first free slot, a lapsed one first
     CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
+    RESOURCE_PORT=8090  RESOURCE_URL the resource process: heartbeat, the policy pass, the event database served as /events
+    EVENTDB=:memory:                 where the resource keeps its event database — a cache, rebuilt on every start
     GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the second subsystem's worker): WHEP on this port; the URL the console proxies to
     GATEWAY_NAME=g-1                 its slot (systemd: %i); CAPACITY here is viewers
     DET_NAME=d-1                     a detector worker's slot; CAPACITY here is streams; NOMAD_META_labels=gpu says where it is
@@ -13,17 +15,15 @@
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # __main__.py — `python3 -m vms worker | controller | console | retain`: the three processes on one box,
-# and
-# the archive policy pass
+# # __main__.py — `python3 -m vms worker | controller | console | resource | …`: the box's processes
 #
 # **Role in the module.** The entrypoint every deploy unit runs (`deploy/*.container` all say `Exec=python3
 # -m vms <verb>`; the Containerfile's default `CMD` is `worker`). It reads the environment, opens the two
 # file-backed stores under `$PLATFORM_DIR` with the *right token for the verb*, builds the process's object
-# from `worker.py` / `controller.py` / `console.py` / `archive.py`, and runs it until SIGTERM/SIGINT. It is
+# from `worker.py` / `controller.py` / `console.py` / `resource.py` / …, and runs it until SIGTERM/SIGINT. It is
 # glue and nothing else: no logic of its own beyond wiring, and each verb's token is deliberately narrower
 # than the whole `vms/*` prefix. `tests/test_deploy_units.py` imports this module (without running it) and
-# checks that the four verbs in the dispatch table are exactly the four the units invoke.
+# checks that the verbs in the dispatch table are exactly the ones the units invoke.
 #
 # Environment (from the docstring and the code):
 # - `PLATFORM_DIR` (default `/data/platform`) — the platform's stores: `<dir>/config` is `FileVariables`,
@@ -37,6 +37,8 @@
 # - `SEGMENT_SECONDS` (default `600`) — segment length handed to `GstActuator`.
 # - `CONSOLE_HOST` (`127.0.0.1`), `CONSOLE_PORT` (`8080`) — where the console listens
 #   (`vmsconsole.container` sets `0.0.0.0`).
+# - `RESOURCE_HOST` (`127.0.0.1`), `RESOURCE_PORT` (`8090`), `RESOURCE_URL` — the resource process's HTTP and the URL
+#   its heartbeat advertises (the console asks `/events` there); `EVENTDB` (`:memory:`) — its database file.
 # - `LOG_LEVEL` (`INFO`) — `logging.basicConfig` level.
 #
 # ## Module-level names
@@ -46,9 +48,9 @@
 #   also installs the handlers in the importing process.
 #
 # ### `if __name__ == "__main__"`
-# Dispatch table `{"worker", "controller", "console", "retain"}` on `sys.argv[1]`.
-# `test_the_units_run_the_entrypoints_the_package_has` regex-extracts these four names and matches them
-# against the `Exec=` lines of the four Quadlet units.
+# Dispatch table on `sys.argv[1]`: worker, controller, console, resource, gateway, livecontroller, detworker,
+# detcontroller. `test_the_units_run_the_entrypoints_the_package_has` regex-extracts the names and matches
+# them against the `Exec=` lines of the Quadlet units.
 #
 # ## Notes
 # - Three tokens, three processes: `vmsworker` (epochs, slots), `vmscontroller` (placement), `vmsconsole`
@@ -57,10 +59,10 @@
 # - `CAPACITY` means two different things depending on the verb: the worker's own number (what it heartbeats
 #   and places by) versus the controller's fallback for a worker that has not spoken yet
 #   (`test_capacity_is_the_workers_word_not_the_controllers`).
-# - No verb runs the platform's `Resource` as a *job* on one box (no heartbeat, no HTTP, no mirror);
-#   `retain` instantiates one only to run its bucket-retention policy in the same timer pass as the VMS's
-#   media policy. The README calls the bucket half "the platform's" and the test proves it with a `Resource`
-#   object directly.
+# - `resource` runs the platform's `Resource` as a process on the box exactly as М11 runs it as a job:
+#   heartbeat, HTTP, the policy pass (the VMS's hook first, then bucket retention, then the mirror — off on
+#   one box), and the `EventDatabase` over the tree. The old `retain` verb and its timer are gone: a pass
+#   every 600 s from the process's loop is the same pass, and a oneshot could not hold a database.
 # ================================================================================================
 from __future__ import annotations
 
@@ -215,7 +217,7 @@ def console() -> None:
     """The screen and the API: its own process, count as many as you like, a
     token for the operator's rows and nothing else."""
     from .config import SPEC
-    from .console import LocalIndex, serve
+    from .console import serve
     from psimplatform.spec import SpecController
     from .config import DET_SPEC, LIVE_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
@@ -223,54 +225,54 @@ def console() -> None:
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
-    index = LocalIndex(archive.root).start()                              # the eventindex on one box: every subsystem's buckets, tailed
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
-                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)}, index=index)
-    logging.info("console on %s", srv.server_address)
+                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)})
+    logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
     stop.wait()
-    index.stop(); srv.shutdown()
+    srv.shutdown()
 
 
-# The archive policy pass, run by `vms-archive-retain.timer` as a oneshot (`vms-archive-retain.container`):
-# "the archive resource has no controller — it has a policy, run by a timer".
-# - `ArchiveResource($SPOOL, $ARCHIVE)`; Variables opened with *no* writer and no ACL — the pass only reads
-#   rows (the unit mounts `/data/platform` read-only for the same reason).
-# - Logs `res.repair()` (manifests made to agree with the files) and the number of `res.close_buckets(now)`
-#   (event buckets whose span is over and quiet get their manifest line).
-# - Media — the VMS's own policy, per camera, on its manifest: for every path under `vms/cameras/`, reads
-#   the row through `config.row` and calls `res.retain(c["id"], c["retention_days"], now)`, logging what was
-#   removed.
-# - Events — the platform's, by the derived row `vms/retention/<cam>`: builds
-#   `psimplatform.resource.Resource(archive, hostname, "", vars_, objects)` (url `""` — nothing is served
-#   here, the object is used only for its policy) and calls `platform.retain()`, which deletes every bucket
-#   file on this resource older than its unit's days (`retention_days(vars, sub, unit)`: the derived row,
-#   else `vms/retention`, else a year) and logs the count. Files only: the manifest lines for those buckets
-#   are dropped by `res.repair()` on the *next* pass — the split `archive.py`'s docstring describes.
-#
-# Two halves, two owners, one pass — the division `test_events_are_buckets_on_the_resource_recording_or_not`
-# exercises by hand (`res.retain(...) == 1`, then `Resource(...).retain() == 3`, then `res.repair() ==
-# {dropped: 3}`). Note that `vars_.list("vms/cameras/")` includes rows marked `deleted: "true"`; `row()`
-# parses them like any other, so a deleted camera's media is still retained by its last `retention_days`,
-# while its buckets go at once because `delete_camera` set `vms/retention/<id>` to `{days: 0}`.
-def retain() -> None:
-    """The archive resource has no controller — it has a policy, run by a timer:
-    repair, close event buckets, retain media and events by each camera's days."""
+# The resource process — the platform's resource job on one box, the same as М11's `resource` job:
+# - `ArchiveResource($SPOOL, $ARCHIVE)`; Variables opened with *no* writer and no ACL — the resource only
+#   reads rows (the camera rows for media retention, `<sub>/retention/*` for buckets, `platform/mirror`).
+# - `vms_resource(archive, hostname, $RESOURCE_URL, vars_, objects)` — the platform's `Resource` with
+#   `ArchivePolicy` registered as the `vms` hook and an `EventDatabase($EVENTDB)` over the tree.
+# - `serve(res, $RESOURCE_HOST, $RESOURCE_PORT, extra=vms_routes(archive))` — `/buckets`, `/events`,
+#   `/mirrored`, `PUT /mirror`, plus the VMS's `/manifest/<cam>` and `/segment/<path>`.
+# - one heartbeat (`platform/resources/<server>/heartbeat` — how the console finds this process), then
+#   `restore()` (nothing to pull on one box: no peers), then `database.start()` — rebuilt from the tree,
+#   tailed every 3 s — and the loop: a heartbeat every 10 s, the policy pass every 600 s (`pass_`: repair,
+#   close buckets, media retention per camera row; then bucket retention by `vms/retention/<cam>`, which
+#   tells the database what it removed; then the mirror, off).
+def resource() -> None:
+    """The resource process: the archive has no controller — it has a policy pass, a
+    heartbeat, its HTTP, and the event database over its own tree."""
     import socket
     import time
-    from psimplatform.resource import Resource
-    from .config import row
-    archive = os.environ.get("ARCHIVE", "/data/archive")
-    res = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), archive)
+    from psimplatform.resource import serve
+    from .resource import vms_resource, vms_routes
+    archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     vars_ = FileVariables(os.path.join(root, "config"))
-    now = time.time()
-    logging.info("repair %s; closed %d buckets", res.repair(), len(res.close_buckets(now)))
-    for p in vars_.list("vms/cameras/"):                                  # media: the VMS's own policy, per camera, on its manifest
-        c = row(vars_.get(p)[0])
-        logging.info("camera %s: media removed %s", c["id"], res.retain(c["id"], c["retention_days"], now))
-    platform = Resource(archive, socket.gethostname(), "", vars_, FsObjectStore(os.path.join(root, "objects")))
-    logging.info("buckets removed %s", platform.retain())                 # events: the platform's, by vms/retention/<cam> (the derived row)
+    objects = FsObjectStore(os.path.join(root, "objects"))
+    host, port = os.environ.get("RESOURCE_HOST", "127.0.0.1"), int(os.environ.get("RESOURCE_PORT", "8090"))
+    res = vms_resource(archive, socket.gethostname(), os.environ.get("RESOURCE_URL", f"http://{host}:{port}"), vars_, objects,
+                       database=os.environ.get("EVENTDB", ":memory:"))
+    srv = serve(res, host, port, extra=vms_routes(archive))
+    res.heartbeat(); logging.info("restore: %s", res.restore())
+    res.database.start()                                                  # a cache over THIS tree: rebuilt after restore, tailed every 3 s
+    logging.info("resource %s on %s", res.server, srv.server_address)
+    last_policy = 0.0
+    while not stop.is_set():
+        try:
+            res.heartbeat()
+            if time.time() - last_policy >= 600:
+                logging.info("policy: %s", res.pass_()); last_policy = time.time()
+        except Exception:                                                 # noqa: BLE001
+            logging.exception("resource pass failed")
+        stop.wait(10)
+    res.database.stop(); srv.shutdown()
 
 
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "console": console, "retain": retain,
+    {"worker": worker, "controller": controller, "console": console, "resource": resource,
      "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller}[sys.argv[1]]()

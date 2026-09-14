@@ -145,7 +145,7 @@ There is no controller for the archive, and there should not be: the only decisi
 three segments on 1, 10 and 19 October; retain(days=8, now=20 October) -> 2 removed; usage 1000 bytes
 ```
 
-`deploy/vms-archive-retain.timer` runs `repair()` and then `retain()` per camera every ten minutes, reading each camera's `retention_days` from the config store — the policy is the operator's, the enforcement is the resource's own, and the worker is not involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
+The resource process (`python3 -m vms resource`, Lesson 9; `deploy/vmsresource.container`) runs `repair()` and then `retain()` per camera every ten minutes in its policy pass, reading each camera's `retention_days` from the config store — the policy is the operator's, the enforcement is the resource's own, and the worker is not involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
 
 **Deliverable:** record a file-camera for ten minutes with `archivesink`; kill the worker at minute seven; show six promoted, one closed-but-unpromoted picked up on restart, the open one lost; delete the manifest and rebuild it from the archive alone; then show a timeline with a fenced epoch on it.
 
@@ -156,7 +156,7 @@ three segments on 1, 10 and 19 October; retain(days=8, now=20 October) -> 2 remo
 | Symptom | Likely cause |
 |---|---|
 | `promote()` raises *not a segment path* | The element's `format-location` did not produce `<cam>/e<epoch>/<start>Z.mp4` — the `epoch` property was not set before the first fragment. The worker sets it (Lesson 4). |
-| Segments appear in the archive without manifest lines | A crash between rename and append. `repair()` is for exactly this; the timer runs it. |
+| Segments appear in the archive without manifest lines | A crash between rename and append. `repair()` is for exactly this; the resource process's policy pass runs it. |
 | The manifest has lines for files that are gone | Retention crashed between file and line, or somebody deleted files by hand. `repair()` drops them. |
 | `closed_in_spool` promotes the open segment | The grace is shorter than a segment's write interval. Two segment lengths, as М11 chose; thirty seconds only in tests with a fake clock. |
 | Playback finds a gap where the timeline shows a fenced segment | The player filtered `fenced: true` out. Fenced footage is real footage; show it, marked. |
@@ -169,7 +169,7 @@ three segments on 1, 10 and 19 October; retain(days=8, now=20 October) -> 2 remo
 - A kill loses the open segment and nothing else; a closed segment in the spool is picked up on restart.
 - The manifest is the index, beside the footage: it returns with the disks and is rebuildable from them.
 - The epoch is in every path; the timeline marks fenced footage and never deletes it; two resources merge.
-- Retention deletes the file first and the line second, on a timer, from the operator's per-camera policy.
+- Retention deletes the file first and the line second, on the resource process's pass, from the operator's per-camera policy.
 - Events are buckets on the resource, written by the worker holding the unit's epoch — recording or not, `silent` included — under the subsystem's prefix; counted onto media, fenced, rebuilt, retained by their own days; a platform piece any subsystem uses; indexed by a cache, never by a controller.
 
 ## Exercises

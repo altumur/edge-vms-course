@@ -24,10 +24,10 @@
 - `env.CONSOLE_PORT = "8080"` — must match the `port` block; `__main__` reads it (host defaults to `0.0.0.0`).
 - `env.CLUSTER = "room-a"` — the cluster name the console's `ClusterController` carries (the snapshot's `cluster` field, though the console does not publish it).
 - `service { name = "vms-console"  port = "console"  tags = ["metrics"] }` — registers each instance so that, as the comment says, the autoscaler's Prometheus scrapes it (the `metrics` tag is what a Prometheus service-discovery job would select), М12's read model finds it, and a browser resolves it.
-- `resources { cpu = 300  memory = 128 }` — 300 MHz, 128 MB: the page and the API; the index moved into the resource job.
+- `resources { cpu = 300  memory = 128 }` — 300 MHz, 128 MB: the page and the API; the event database moved into the resource job.
 
 ## Notes
-- No `EVENTINDEX_DB` here any more: the console holds no index. `/events` asks every live resource's `GET /events` (each resource's own `ResourceIndex`) and merges — see `resource.nomad.hcl.md`.
+- No `EVENTDB` here any more: the console holds no index. `/events` asks every live resource's `GET /events` (each resource's own `EventDatabase`) and merges — see `resource.nomad.hcl.md`.
 - `CAPACITY` is not set; the console's controller uses the fallback 50 only for a worker whose heartbeat carries no capacity.
 - The `service` block has no `provider`; Nomad's default provider is Consul, and nothing in `server.hcl`/`client.hcl` configures Consul. Without `provider = "nomad"` the job will not register (and `nomad job run` reports a missing Consul), which also affects `verify-bench.sh` item 5a's `nomad service info` for the `resource` service.
 - The two-attributes-on-one-line `resources` block is discussed in `autoscaler.nomad.hcl.md`.

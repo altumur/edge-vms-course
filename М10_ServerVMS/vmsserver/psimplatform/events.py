@@ -23,7 +23,7 @@ observed at a time, about a unit it holds.
 # of `bucket_seconds` starting at `<start>`; its writer is the worker holding that unit's epoch (one writer
 # per file by construction); its fence is the epoch in the path (a stale instance writes into its own
 # bucket, which is marked afterwards); its index is the manifest beside the unit's buckets (the VMS's, in
-# `vms/archive.py`) and, in М11, `eventindex.py` cluster-wide. `resource.py` walks these paths for retention
+# `vms/archive.py`) and `eventdatabase.py` on each resource. `resource.py` walks these paths for retention
 # and mirroring; `console.py` uses `EventLog` for operator marks under `console/<instance>/`; the VMS worker
 # uses it per camera. Nothing here knows what a unit is.
 #

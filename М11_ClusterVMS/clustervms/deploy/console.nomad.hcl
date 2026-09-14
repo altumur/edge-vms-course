@@ -2,9 +2,9 @@
 # A system job: one instance on every server that runs a resource, so that
 # any server's :8080 is the console and nothing sits in front of it — no
 # load balancer, no ingress; a person types any server's name, or a DNS
-# name that resolves to all of them. It is stateless and holds no index:
+# name that resolves to all of them. It is stateless and holds no database:
 # every instance reads the same raft and the same heartbeats, /events asks
-# every live resource's own index and merges, and a retried POST is answered
+# every live resource's event database and merges, and a retried POST is answered
 # the same by whichever instance gets it because the Idempotency-Key is a
 # Variable (vms/idem/*).
 # Placed on servers that run a resource so that an operator's marks have a
@@ -42,7 +42,7 @@ job "console" {
         port = "console"
         tags = ["metrics"]
       }
-      resources { cpu = 300  memory = 128 }             # the page and the API; no index here
+      resources { cpu = 300  memory = 128 }             # the page and the API; no event database here
     }
   }
 }

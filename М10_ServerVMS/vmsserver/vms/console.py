@@ -54,24 +54,11 @@ import urllib.error
 import urllib.request
 
 from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
-from psimplatform.eventindex import ResourceIndex
+from psimplatform.eventdatabase import MergedIndex
 from psimplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
 from .controller import VmsController
-
-
-# The box's one index: the platform's `ResourceIndex` over the local archive — the same class М11 runs
-# inside every resource job — started by the console process because a box has no resource job of its own.
-class LocalIndex(ResourceIndex):
-    """The eventindex on one box: the platform's ResourceIndex over the local archive,
-    run by the console process (a box has no resource job). Not a subsystem — a
-    cache with nothing to place — rebuilt on start and tailed every few seconds,
-    so a detector's event is on the timeline within one tail. М11 runs the same
-    class inside each resource job and the console merges their answers."""
-
-    def __init__(self, archive_root: str, wall=time.time, server: str | None = None, interval: float = 3.0):
-        super().__init__(archive_root, server, wall=wall, interval=interval)
 
 
 class LiveFront:
@@ -203,12 +190,13 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
     that subsystem's spec with the console's token. `live_ctl` opens the WHEP door and is mounted at /live;
     `mounts` adds the rest by name."""
     live = LiveFront(ctl, live_ctl) if live_ctl is not None else None
+    index = index or MergedIndex(ctl.objects, wall=wall or time.time)   # no database here: the resource process's, asked over HTTP
     root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None, index=index)
     m = Mount(root)
     if live_ctl is not None:
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))
     for name, c in (mounts or {}).items():
-        m.mount(name, SpecConsole(c, wall=wall, index=index))            # every mount answers /events from the one index
+        m.mount(name, SpecConsole(c, wall=wall, index=index))            # every mount answers /events from the same merge
     return m
 
 

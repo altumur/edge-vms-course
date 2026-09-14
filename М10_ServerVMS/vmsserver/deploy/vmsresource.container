@@ -1,0 +1,72 @@
+# /etc/containers/systemd/vmsresource.container — the resource process: the
+# archive has no controller; it has a policy pass, a heartbeat, its HTTP and
+# the event database over its own tree. The same process М11 runs as the
+# `resource` system job on every server, so the box and the cluster have one
+# architecture. It replaced vms-archive-retain.timer: the policy pass now runs
+# every 600 s from the process's loop, and a oneshot could not hold a database.
+# ================================================================================================
+# NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
+# ================================================================================================
+# # vmsresource.container — the resource process: the policy pass, the heartbeat, /events from the event
+# database
+#
+# **Role.** The Quadlet unit at `/etc/containers/systemd/vmsresource.container`, from which Quadlet
+# generates `vmsresource.service`. `python3 -m vms resource` builds the platform's `Resource` over
+# `/data/archive` with the VMS's `ArchivePolicy` registered (repair, close buckets, media retention per
+# camera row), serves the platform's HTTP on `127.0.0.1:8090` (`/buckets`, `/events`, `/mirrored`, `PUT
+# /mirror`; the VMS's `/manifest`, `/segment`), heartbeats `platform/resources/<server>/heartbeat` every
+# ten seconds (how the console finds it), runs the policy pass every 600 s, and keeps an `EventDatabase`
+# over the tree — rebuilt on every start, tailed every three seconds — which is what the console's
+# `/events` asks. Checked by `tests/test_deploy_units.py` (`/data/spool` mounted `:ro,z`; `/data/platform`
+# read-write, for the heartbeat).
+#
+# - `Description=VMS resource — the policy pass, the heartbeat, the event database`
+#
+# - `Image=localhost/vmsserver:latest`
+#
+# - `RestartSec=2`.
+#
+# - `WantedBy=multi-user.target`.
+#
+# ## Notes
+# - The database is a cache: `EVENTDB` is not set, so it is `:memory:` and disappears with the container;
+#   the next start rebuilds it from the buckets in seconds. Set `EVENTDB=/data/archive/.eventdb` to keep it
+#   across restarts; nothing depends on that.
+# - `RESOURCE_HOST=127.0.0.1`: on one box nobody but the console asks it. In М11 the job listens on the
+#   node's IP and its peers PUT mirrors to it.
+# - Idempotent by construction, like the old timer pass: `repair` returns `{0, 0}` on a clean tree,
+#   `close_buckets` `[]`, `retain` `0` when nothing is past its cutoff.
+# ================================================================================================
+[Unit]
+Description=VMS resource — the policy pass, the heartbeat, the event database
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+# the `resource` verb of `vms/__main__.py`: the platform's Resource with the VMS registered on it, served,
+# heartbeating, its database tailed.
+Exec=python3 -m vms resource
+Environment=RESOURCE_HOST=127.0.0.1
+Environment=RESOURCE_PORT=8090
+# `PLATFORM_DIR` (to read the camera rows and write the heartbeat), `SPOOL`, `ARCHIVE`.
+EnvironmentFile=/data/config/vms.env
+# read-write: the heartbeat is an object under `platform/resources/<server>/`. Rows are only read (the
+# camera rows, `vms/retention/<cam>`, `platform/mirror`): the Variables are opened with no writer.
+Volume=/data/platform:/data/platform:z
+# read-only: the resource never records; the worker promotes from the spool, the resource only constructs
+# the `ArchiveResource` (which `makedirs` the root, already present on the box).
+Volume=/data/spool:/data/spool:ro,z
+# read-write: `repair` rewrites manifests, `close_buckets` appends bucket lines, `retain` deletes expired
+# media and bucket files, and a peer's mirror copies would land under `.mirror/` (none on one box).
+Volume=/data/archive:/data/archive:z
+# 127.0.0.1:8090 is the box's own; no mapping.
+Network=host
+
+[Service]
+# the resource holds nothing a restart cannot rebuild: the database from the buckets, the heartbeat from
+# the tree.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
 # deploy/Containerfile — localhost/vmsserver:latest
-# One image, four entrypoints: python3 -m vms worker | controller | console | retain.
+# One image, every entrypoint: python3 -m vms worker | controller | console | resource | gateway | livecontroller | detworker | detcontroller.
 # The same image М11's jobs run (its Containerfile starts FROM this one), so a
 # Quadlet unit on the М9 box and a Nomad job on a cluster differ only in who
 # starts the process. Build from the module directory:
@@ -20,7 +20,7 @@
 #
 # - `python3-yaml` — PyYAML, which `psimplatform.spec.SubsystemSpec.load` imports lazily to parse
 #   `vms.subsystem.yaml`; `vms/config.py` loads the spec at import and every verb reaches it (the
-#   controller, console and `retain` directly; the worker through `vms.worker`'s `from .config import row`).
+#   controller, console and resource directly; the worker through `vms.worker`'s `from .config import row`).
 #   The one Python dependency beyond the standard library.
 #
 # - `python3-gi`, `gir1.2-gst-plugins-base-1.0` — PyGObject and the introspection data that
@@ -63,6 +63,6 @@ COPY vms vms
 COPY gstvms gstvms
 # So `python3 -m vms …` resolves the packages from any working directory; the units do not set it.
 ENV PYTHONPATH=/app
-# The default verb is the worker; every unit overrides it with `Exec=` (`controller`, `console`, `retain`,
+# The default verb is the worker; every unit overrides it with `Exec=` (`controller`, `console`, `resource`,
 # and the worker unit repeats `worker` explicitly).
 CMD ["python3", "-m", "vms", "worker"]

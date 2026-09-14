@@ -25,7 +25,7 @@ The lesson's second half is the claim that made the controller a YAML in Lesson 
 3. Build the page from `/spec` so that it names no camera.
 4. Keep the idempotency key in the store so a retry landing on another instance is the same request.
 5. Mount several subsystems' consoles in one process, under their names.
-6. Run the platform's event index inside the console and say why it is not a subsystem.
+6. Say who answers `/events` — and that it is not the console.
 
 ---
 
@@ -75,11 +75,11 @@ GET /live/spec       -> the live subsystem's spec; /live/streams, /live/where/7,
 GET /det/units       -> the det subsystem's rows with the read model; POST /det/units, PUT and DELETE /det/units/<name>
 ```
 
-## Step 6 — The events on the timeline: an index, not a subsystem
+## Step 6 — The ticks on the timeline come from somewhere else
 
-The page has drawn ticks from `/events?cam=7` since Step 1, and on one box the answer was 503: nothing indexed the buckets. The thing that does is the platform's `ResourceIndex` — an SQLite cache over one resource's buckets, rebuilt from the files in seconds — which М11 runs inside every resource job, one per resource, and merges in the console. Ask the three questions of it (the design record's *What is a subsystem* row): it moves, yes; but it has no unit to place — it indexes what is on the resource it runs beside — and no capacity anyone counts. A stateless job with no units needs no controller, like the console itself. So on the box, which has no resource job, it is `LocalIndex` inside the console process: the same class over the local archive, `rebuild()` on start, `tail()` every three seconds in a thread, standing in for the resource heartbeat the box does not publish (this server, this archive, every unit under it). Every mount answers `/events` from the one index, and fencing is per unit by *every* subsystem's epoch, not the console's own: `det/7-linecross`'s events are fenced when `det/epoch/7-linecross` moves, `vms/7`'s when the worker's does. One fix came with it: the index tails *open* buckets — a bucket is append-only, so it re-reads the lines past what it holds — where before it read a bucket once and left its later lines for a rebuild. `test_the_detectors_events_reach_the_timeline_through_the_console` puts three subsystems' events on one camera — the detector's `linecross`, the operator's `mark`, the worker's `silent` — and reads them back in order through `/events?cam=1`, then moves the detector's epoch and sees only its events fenced. The rule for when this *would* become a subsystem is written down: when "the buckets of resource srv-a" is a unit worth placing somewhere other than srv-a — and until then it is not placed at all; it is where the buckets are.
+The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, and why none of that is a subsystem is [Lesson 9](09-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
 
-**Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 9) serving the page; a camera added from the page, edited, disabled and deleted; a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts; a detector's event, an operator's mark and a worker's `silent` on one camera's timeline, from `/events?cam=`.
+**Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 10) serving the page; a camera added from the page, edited, disabled and deleted; a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
 
 ---
 
@@ -101,7 +101,7 @@ The page has drawn ticks from `/events?cam=7` since Step 1, and on one box the a
 - `SpecConsole` runs from the same YAML as `SpecController`; the live and det subsystems get a console with no console code.
 - The idempotency key is a Variable, so any instance answers a retry the same way; the console runs on every server with nothing in front.
 - One process mounts every subsystem it fronts: the VMS at `/`, the others under their names.
-- The event index is a cache, not a subsystem: it moves but has nothing to place; on the box it runs inside the console over the local archive, and every subsystem's events land on the timeline, fenced by their own epochs.
+- The console holds no event database: `/events` asks the resources and merges, fenced by every subsystem's epochs (Lesson 9).
 
 ## Exercises
 
