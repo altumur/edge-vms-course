@@ -1,4 +1,4 @@
-# console.nomad.hcl — the console job: the page, the API and the eventindex, one instance on every server that runs a resource
+# console.nomad.hcl — the console job: the page and the API, one instance on every server that runs a resource; no index of its own
 
 **Role.** Lesson 2/5. The jobspec for `python3 -m cluster console` (see `../cluster/__main__.py.md` and `../cluster/console.py.md`). A `system` job: one allocation on every eligible server, so any server's `:8080` *is* the console and nothing sits in front of it — no load balancer, no ingress; a person types any server's name or a DNS name resolving to all of them. The header comment explains why that is safe: the console is stateless — every instance reads the same raft and the same heartbeats, rebuilds its event index from the resources on start, and a retried POST is answered the same by whichever instance gets it because the Idempotency-Key lives in `vms/idem/*`. It is placed on servers with a resource so an operator's marks have a bucket to go into; drop the constraint and `/marks` answers 503 there. Its token is `console-policy.hcl`.
 
@@ -24,10 +24,10 @@
 - `env.CONSOLE_PORT = "8080"` — must match the `port` block; `__main__` reads it (host defaults to `0.0.0.0`).
 - `env.CLUSTER = "room-a"` — the cluster name the console's `ClusterController` carries (the snapshot's `cluster` field, though the console does not publish it).
 - `service { name = "vms-console"  port = "console"  tags = ["metrics"] }` — registers each instance so that, as the comment says, the autoscaler's Prometheus scrapes it (the `metrics` tag is what a Prometheus service-discovery job would select), М12's read model finds it, and a browser resolves it.
-- `resources { cpu = 300  memory = 256 }` — 300 MHz, 256 MB: the page, the API, and a SQLite index in memory.
+- `resources { cpu = 300  memory = 128 }` — 300 MHz, 128 MB: the page and the API; the index moved into the resource job.
 
 ## Notes
-- `EVENTINDEX_DB` is not set, so the index is `:memory:` and disappears with the allocation — consistent with "a cache, rebuilt on every start".
+- No `EVENTINDEX_DB` here any more: the console holds no index. `/events` asks every live resource's `GET /events` (each resource's own `ResourceIndex`) and merges — see `resource.nomad.hcl.md`.
 - `CAPACITY` is not set; the console's controller uses the fallback 50 only for a worker whose heartbeat carries no capacity.
 - The `service` block has no `provider`; Nomad's default provider is Consul, and nothing in `server.hcl`/`client.hcl` configures Consul. Without `provider = "nomad"` the job will not register (and `nomad job run` reports a missing Consul), which also affects `verify-bench.sh` item 5a's `nomad service info` for the `resource` service.
 - The two-attributes-on-one-line `resources` block is discussed in `autoscaler.nomad.hcl.md`.

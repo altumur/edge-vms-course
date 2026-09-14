@@ -1,10 +1,10 @@
-# eventindex.py — a name for `psimplatform.eventindex`: the platform's index over every subsystem's buckets on every resource
+# eventindex.py — a name for `psimplatform.eventindex`: the index each resource keeps over its own tree, and the console's merge
 
-**Role in the module.** Lesson 3 (events). Two lines: the event index is a platform job, not a VMS one, so this module only re-exports `EventIndex` and `ResourceReader` from `psimplatform.eventindex` (`noqa: F401`) under the name М11's lessons used. See `../../../М10_ServerVMS/vmsserver/psimplatform/eventindex.py.md` for what they do: `EventIndex(reader, path=":memory:", wall, lost_after=45)` is a SQLite cache rebuilt from the resources' heartbeats (`rebuild(resources_seen)`), tailed on a timer (`tail(...)`) and queried by time, camera and kind (`query(t0, t1, cam=, kind=)`); `ResourceReader` is its HTTP client against a resource job's `/buckets/<sub>/<unit>`, `/events/<path>`, `/mirrored/<server>` and `/events/.mirror/<server>/<path>`.
+**Role in the module.** Lesson 3 (events). Three lines: the event index is the platform's and lives with the resource, so this module only re-exports `EventIndex` and `ResourceIndex` from `psimplatform.eventindex` and `MergedIndex` from `cluster.console` (`noqa: F401`) under the name М11's lessons used. `ResourceIndex(root, server, wall, path=":memory:", bucket_seconds, interval)` is a SQLite cache over ONE resource's tree — its own buckets and the `.mirror/<server>/` copies it holds — rebuilt on start (`rebuild()`), tailed every few seconds (`tail()`, open buckets by the lines past what is held) and queried by time, camera, kind, subsystem and unit (`query(...)`); the resource job serves it as `GET /events`. `MergedIndex(objects, fetch, wall)` is what the console has instead of an index: `query(...)` asks every live resource's `/events`, merges by time, fences by the cluster's epochs, drops a peer's copy when the owner answered, and names the servers nobody answered for.
 
 ## Module-level names
-- `EventIndex`, `ResourceReader` — re-exports; no code of М11's own.
+- `EventIndex`, `ResourceIndex`, `MergedIndex` — re-exports; no code of М11's own.
 
 ## Notes
-- `__main__.console` imports them from `psimplatform.eventindex` directly and runs the index beside the console (`deploy/console.nomad.hcl`: "the page, the API, the eventindex"); it is rebuilt on every start, which is what makes it a cache and not a store.
-- The tests (`tests/test_lesson3_events.py`, `test_the_console_over_http`) also import from `psimplatform.eventindex`, so nothing in the package depends on this alias.
+- `__main__.resource` imports `ResourceIndex` from `psimplatform.eventindex` directly and starts it after `restore()` (`deploy/resource.nomad.hcl`); it is rebuilt on every start, which is what makes it a cache and not a store. `__main__.console` builds no index: `cluster.console.make_console` defaults `index` to a `MergedIndex`.
+- The tests (`tests/test_lesson3_events.py`, `test_the_console_over_http`) import from `psimplatform.eventindex` and `cluster.console`, so nothing in the package depends on this alias.

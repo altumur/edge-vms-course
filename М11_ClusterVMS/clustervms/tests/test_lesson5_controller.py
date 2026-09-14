@@ -102,24 +102,23 @@ def test_the_console_over_http():
     assert 'vms_failover_seconds{kind="worst"} 48.0' in out and "vms_workers_live 3" in out and "vms_cameras_recording 1" in out
     st, out = call("GET", "/resources"); assert st == 200 and json.loads(out) == {}
     st, out = call("GET", "/unplaceable"); assert json.loads(out) == []
-    # an operator's mark: the console's own bucket on srv-a's resource, found by the index on its `cam` field
-    st, out = call("POST", "/marks", {"cam": 1, "note": "check the gate"}, {"Idempotency-Key": "m1", "X-User": "murat"})
-    m = json.loads(out); assert st == 201 and m["bucket"].startswith(f"console/{m['unit']}/e1/")
-    from cluster.resource import cluster_resource, resources_seen
-    from psimplatform.eventindex import EventIndex
-    from tests.test_lesson3_events import DirReader
-    cluster_resource(c.servers["srv-a"].resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall).heartbeat()
-    idx = EventIndex(DirReader(c), wall=c.wall); idx.rebuild(resources_seen(c.objects))
-    ev = idx.query(0, 1e12, cam=1)["events"]
-    assert [(e["subsystem"], e["kind"], e["user"]) for e in ev] == [("console", "mark", "murat")]
-    # the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
-    assert "<video" in call("GET", "/")[1] and "/segment/" in call("GET", "/")[1]
+    # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the index over ITS tree
+    from psimplatform.eventindex import ResourceIndex
     from psimplatform.resource import serve as serve_resource
-    from cluster.resource import vms_routes
+    from cluster.resource import cluster_resource, vms_routes
     from tests.test_lesson3_resources import _segment
     _segment(c.servers["srv-a"], 1, 1, c.wall() - 600, size=256)
     res = cluster_resource(c.servers["srv-a"].resource, "srv-a", "http://127.0.0.1:0", c.vars, c.objects, wall=c.wall)
     rsrv = serve_resource(res, "127.0.0.1", 0, extra=vms_routes(c.servers["srv-a"].resource)); res.url = f"http://127.0.0.1:{rsrv.server_address[1]}"; res.heartbeat()
+    res.index = ResourceIndex(res.root, "srv-a", wall=c.wall); res.index.rebuild()
+    # an operator's mark: the console's own bucket on srv-a's resource; the console has no index — it asks srv-a's, by HTTP, and finds the `cam` field
+    st, out = call("POST", "/marks", {"cam": 1, "note": "check the gate"}, {"Idempotency-Key": "m1", "X-User": "murat"})
+    m = json.loads(out); assert st == 201 and m["bucket"].startswith(f"console/{m['unit']}/e1/")
+    assert res.index.tail()["added"] == 1
+    st, out = call("GET", "/events?cam=1"); ev = json.loads(out)
+    assert st == 200 and [(e["subsystem"], e["kind"], e["user"], e["server"]) for e in ev["events"]] == [("console", "mark", "murat", "srv-a")] and ev["state"] == "live"
+    # the page, and playback across the cluster: a segment on srv-a's resource, served through the console by server
+    assert "<video" in call("GET", "/")[1] and "/segment/" in call("GET", "/")[1]
     st, out = call("GET", "/timeline/1"); seg = json.loads(out)["segments"][0]
     assert st == 200 and seg["server"] == "srv-a"
     req = urllib.request.Request(f"{base}/segment/{seg['path']}?server=srv-a", headers={"Range": "bytes=0-9"})

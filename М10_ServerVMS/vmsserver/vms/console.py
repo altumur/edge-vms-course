@@ -49,97 +49,29 @@ import os
 from http.server import ThreadingHTTPServer
 
 import json
-import logging
-import socket
-import threading
 import time
 import urllib.error
 import urllib.request
 
 from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
-from psimplatform.eventindex import EventIndex
-from psimplatform.events import buckets_under, read_bucket, subsystems_under
+from psimplatform.eventindex import ResourceIndex
 from psimplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
 from .controller import VmsController
 
 
-# Builds the `extra(handler, method, path, q)` function `SpecConsole` calls for every request its built-in
-# routes do not claim. Returns `None` ("not ours") for anything but `GET`, or for any request when `archive`
-# is `None` (a console without a resource on its server — the second console in
-# `test_a_retry_that_lands_on_another_console_is_one_camera` is built that way). Otherwise:
-#
-# - `GET /segment/<rel>` — `rel` is joined under `archive.root`. If it contains `..` or is not a regular
-#   file the reply is `404 {detail, error: "no such segment"}`. Otherwise `send_file(handler, path,
-#   "video/mp4")` writes the reply itself (whole, or `206` with `Content-Range` when the request carried
-#   `Range`) and `extra` returns `()` — the console's signal that the reply was already served. The test
-#   asks `bytes=10-19` of a 256-byte segment and gets exactly those bytes with `Content-Range: bytes
-#   10-19/256`; a path that does not exist is 404.
-# - `GET /timeline/<id>?from&to` — `int` of the last path segment; `200` with `Manifest(archive.root,
-#   cid).timeline(from, to)` — `from` defaults to 0, `to` to `1e12`. Note `current_epoch` is not passed
-#   here, so on one box no span is marked `fenced` by this route; the `Manifest.timeline` fencing is
-#   exercised directly in `test_lesson3_archive.py`.
-# - anything else — `None`, so the console answers 404.
-class LocalArchiveReader:
-    """The platform's `EventIndex` reads resources through a reader — HTTP in М11, a
-    directory here: the one resource a box has is its own archive."""
-
-    def __init__(self, root: str, bucket_seconds: int = 600):
-        self.root, self.bucket_seconds = root, bucket_seconds
-
-    def buckets(self, url, sub, unit):
-        return buckets_under(self.root, sub, unit, self.bucket_seconds)
-
-    def events(self, url, b):
-        return read_bucket(os.path.join(self.root, b.path))
-
-    def mirrored(self, url, server):
-        return []                                                         # one box has no peer to mirror to
-
-    def mirrored_events(self, url, server, b):
-        return []
-
-
-class LocalIndex:
-    """The eventindex on one box: the same class М11 runs as a job beside the
-    console, over the local archive instead of the resources' HTTP. Not a
-    subsystem — a stateless cache with nothing to place — rebuilt on start and
-    tailed every few seconds, so a detector's event is on the timeline within
-    one tail. `resources()` stands in for the resource heartbeat the box does
-    not publish: this server, this archive, every unit under it."""
+# The box's one index: the platform's `ResourceIndex` over the local archive — the same class М11 runs
+# inside every resource job — started by the console process because a box has no resource job of its own.
+class LocalIndex(ResourceIndex):
+    """The eventindex on one box: the platform's ResourceIndex over the local archive,
+    run by the console process (a box has no resource job). Not a subsystem — a
+    cache with nothing to place — rebuilt on start and tailed every few seconds,
+    so a detector's event is on the timeline within one tail. М11 runs the same
+    class inside each resource job and the console merges their answers."""
 
     def __init__(self, archive_root: str, wall=time.time, server: str | None = None, interval: float = 3.0):
-        self.root, self.wall, self.interval = archive_root, wall, interval
-        self.server = server or socket.gethostname()
-        self.index = EventIndex(LocalArchiveReader(archive_root), wall=wall)
-        self._stop = threading.Event()
-
-    def resources(self) -> dict:
-        return {self.server: {"server": self.server, "ts": self.wall(), "url": f"file://{self.root}", "units": subsystems_under(self.root)}}
-
-    def tail(self) -> dict:
-        return self.index.tail(self.resources())
-
-    def rebuild(self) -> dict:
-        return self.index.rebuild(self.resources())
-
-    def start(self) -> "LocalIndex":
-        self.rebuild()
-        def loop():
-            while not self._stop.wait(self.interval):
-                try:
-                    self.tail()
-                except Exception:                                         # noqa: BLE001
-                    logging.getLogger("vms.console").exception("index tail failed")
-        threading.Thread(target=loop, daemon=True).start()
-        return self
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def query(self, *a, **kw):
-        return self.index.query(*a, **kw)
+        super().__init__(archive_root, server, wall=wall, interval=interval)
 
 
 class LiveFront:
@@ -215,6 +147,22 @@ class LiveFront:
         return {"cam": cam, "stream": self.live.unit(cam), "gateway": g, "url": url, "status": st}
 
 
+# Builds the `extra(handler, method, path, q)` function `SpecConsole` calls for every request its built-in
+# routes do not claim. Returns `None` ("not ours") for anything but `GET`, or for any request when `archive`
+# is `None` (a console without a resource on its server — the second console in
+# `test_a_retry_that_lands_on_another_console_is_one_camera` is built that way). Otherwise:
+#
+# - `GET /segment/<rel>` — `rel` is joined under `archive.root`. If it contains `..` or is not a regular
+#   file the reply is `404 {detail, error: "no such segment"}`. Otherwise `send_file(handler, path,
+#   "video/mp4")` writes the reply itself (whole, or `206` with `Content-Range` when the request carried
+#   `Range`) and `extra` returns `()` — the console's signal that the reply was already served. The test
+#   asks `bytes=10-19` of a 256-byte segment and gets exactly those bytes with `Content-Range: bytes
+#   10-19/256`; a path that does not exist is 404.
+# - `GET /timeline/<id>?from&to` — `int` of the last path segment; `200` with `Manifest(archive.root,
+#   cid).timeline(from, to)` — `from` defaults to 0, `to` to `1e12`. Note `current_epoch` is not passed
+#   here, so on one box no span is marked `fenced` by this route; the `Manifest.timeline` fencing is
+#   exercised directly in `test_lesson3_archive.py`.
+# - anything else — `None`, so the console answers 404.
 def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
     """What the VMS adds to the generic console: the media — playback from
     the archive, and the WHEP door to the live gateways. Returns None when a

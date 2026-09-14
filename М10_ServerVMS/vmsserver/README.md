@@ -11,7 +11,7 @@ vmsserver/
     contract.py                Lesson 1  Subsystem, Assignment, Heartbeat, Slot; the Controller and Worker bases; identity by claim
     events.py                  Lesson 3  the event log: buckets per unit per epoch on the resource, for any subsystem — generic
     resource.py                Lesson 3  the resource as a platform job: heartbeat, buckets over HTTP, retention by each subsystem's row, the mirror to a peer, restore
-    eventindex.py              Lesson 3  the index over every subsystem's buckets on every resource — a cache
+    eventindex.py              Lesson 3  the index a resource keeps over its own buckets (ResourceIndex) — a cache; М11's console merges them
     spec.py                    Lesson 5  the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name, snapshot, the two ACLs) and SpecController, the one controller every subsystem runs
     console.py                 Lesson 6  the console as data: SpecConsole over the same spec — the page, /spec, /<rows>, /where, /metrics with the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers extra routes;
                                Mount — one process fronting several subsystems, the root at / and the others under their names (/live/…, /det/…)
@@ -23,7 +23,7 @@ vmsserver/
     vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
     console.py                 Lesson 6  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes,
-                               LocalIndex — the platform's EventIndex over this box's archive, rebuilt on start and tailed, so every subsystem's events reach the timeline —
+                               LocalIndex — the platform's ResourceIndex over this box's archive, rebuilt on start and tailed, so every subsystem's events reach the timeline —
                                /timeline/<id>, /segment/<path>, and the WHEP door /whep/<cam> that creates a fan-out on the first viewer and proxies to its gateway
     live.subsystem.yaml        Lesson 7  the SECOND subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
     det.subsystem.yaml         Lesson 8  the THIRD subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom

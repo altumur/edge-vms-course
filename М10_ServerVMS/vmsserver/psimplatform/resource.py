@@ -13,6 +13,7 @@ a server's disks and nothing about what it means:
     GET  <url>/buckets/<sub>/<unit>    closed buckets, from the files
     GET  <url>/events/<path>           one bucket (also .mirror/<server>/<path>)
     GET  <url>/mirrored/<server>       which of <server>'s buckets this server holds copies of
+    GET  <url>/events?from&to&cam&kind&subsystem&unit   what this resource's index holds: its buckets and its copies
     PUT  <url>/mirror/<server>/<path>  another resource leaves a copy of one of ITS closed buckets here
 
 The policy pass runs on a timer: retain each subsystem's buckets by its
@@ -39,7 +40,8 @@ home. No controller is involved in any of it.
 # `Resource.register`), then bucket retention by each subsystem's own `<sub>/retention[/<unit>]` row, then
 # the mirror. Mirroring is a knob (`platform/mirror`), and peers are chosen by a rule — the next `copies`
 # live resources after mine in sorted order — so nobody assigns them. `restore` is the reverse, run by the
-# owner at start. No controller is involved in any of it. `eventindex.py` reads the same HTTP routes;
+# owner at start. No controller is involved in any of it. `eventindex.ResourceIndex` is the index the job
+# runs over this tree (`Resource.index`), served as `GET /events` and told by `retain` what it removed;
 # `console.py` reads `resources_seen`.
 #
 # ## Module-level names
@@ -68,6 +70,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -78,8 +81,7 @@ MIRROR_KEY = "platform/mirror"
 RESOURCES = "platform/resources"
 
 
-# Parses the JSON line `Bucket.line()` produced (types coerced back). Used by `PeerClient` and
-# `eventindex.ResourceReader`.
+# Parses the JSON line `Bucket.line()` produced (types coerced back). Used by `PeerClient`.
 def bucket_from_line(line: str) -> Bucket:
     d = json.loads(line)
     return Bucket(d["subsystem"], str(d["unit"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["events"]))
@@ -188,6 +190,7 @@ class Resource:
         self.root, self.server, self.url, self.vars, self.objects = root, server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
         self.hooks: dict[str, object] = {}         # subsystem -> object with .pass_(now) -> dict: its own policy on ITS part of the tree
+        self.index = None                          # an eventindex.ResourceIndex over this tree, if the job runs one: served as GET /events
         os.makedirs(root, exist_ok=True)
 
     # A subsystem installs an object with `pass_(now) -> dict` for its own part of the tree — the same "code
@@ -232,20 +235,22 @@ class Resource:
 
     # -- the policy pass ------------------------------------------------------------------
     # For each subsystem and unit, delete bucket files whose `end` is older than `retention_days` — files
-    # only; a subsystem that indexes its buckets (the VMS's manifest) drops the lines in its own hook.
-    # Returns the count. The test sets `other/retention {days: 1}`, advances three days and sees exactly the
+    # only; a subsystem that indexes its buckets (the VMS's manifest) drops the lines in its own hook. The
+    # resource's own index forgets each removed path. Returns the count. The test sets `other/retention {days: 1}`, advances three days and sees exactly the
     # `other` bucket go.
     def retain(self) -> int:
         """Each subsystem's buckets by its own days. Files only: a subsystem that
         indexes its buckets (the VMS's manifest) drops the lines in its own pass."""
-        removed = 0
+        removed = []
         for sub, units in self.units().items():
             for unit in units:
                 days = retention_days(self.vars, sub, unit)
                 for b in buckets_under(self.root, sub, unit, self.bucket_seconds):
                     if b.end < self.wall() - days * 86400:
-                        os.remove(os.path.join(self.root, b.path)); removed += 1
-        return removed
+                        os.remove(os.path.join(self.root, b.path)); removed.append(b.path)
+        if removed and self.index is not None:
+            self.index.forget(self.server, removed)                     # the rows go with the file
+        return len(removed)
 
     # The knob. If disabled, `{enabled: False, mirrored: 0, peers: []}`. Otherwise, for each peer from
     # `peers_of`, ask what it already holds and `put` every closed bucket it lacks — any subsystem's,
@@ -313,6 +318,8 @@ class Resource:
 # - `do_GET`:
 #   - `GET /buckets/<sub>/<unit>` — `buckets_under` for that unit, one `Bucket.line()` per line, 200.
 #   - `GET /mirrored/<server>` — `mirrored_buckets` for that server, same format.
+#   - `GET /events?from&to&cam&kind&subsystem&unit&limit` — `resource.index.query(...)` as JSON
+#     (`{events, state}`, unfenced: the console fences); 503 if the job runs no index.
 #         - `GET /events/<path>` — the raw bytes of one bucket; `path` may begin with `.mirror/<server>/`.
 #       404 if it contains `..`, does not end in `.events.jsonl`, or is not a file.
 #   - anything else — `extra(path, headers)` if given and it answers; otherwise 404.
@@ -339,6 +346,14 @@ def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=Non
                 return self._raw(200, "".join(b.line() + "\n" for b in buckets_under(root, sub, unit, resource.bucket_seconds)).encode())
             if self.path.startswith("/mirrored/"):
                 return self._raw(200, "".join(b.line() + "\n" for b in mirrored_buckets(root, self.path[len("/mirrored/"):], resource.bucket_seconds)).encode())
+            if self.path == "/events" or self.path.startswith("/events?"):
+                if resource.index is None:
+                    return self._raw(503, b'{"error": "this resource runs no index"}', [("Content-Type", "application/json")])
+                q = {k: v[0] for k, v in urllib.parse.parse_qs(self.path.partition("?")[2]).items()}
+                rep = resource.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
+                                           int(q["cam"]) if q.get("cam") else None, q.get("kind"), q.get("subsystem"), q.get("unit"),
+                                           limit=int(q.get("limit", 1000)))
+                return self._raw(200, json.dumps(rep).encode(), [("Content-Type", "application/json")])
             if self.path.startswith("/events/"):
                 rel = self.path[len("/events/"):]; p = os.path.join(root, rel)
                 if ".." in rel or not rel.endswith(".events.jsonl") or not os.path.isfile(p):

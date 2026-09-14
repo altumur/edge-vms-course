@@ -1,11 +1,12 @@
-"""python3 -m cluster worker | controller | console | resource — the jobs (the eventindex runs beside the console).
+"""python3 -m cluster worker | controller | console | resource — the jobs (each resource runs the index over its own tree).
 
     NOMAD_ADDR, NOMAD_TOKEN            the task's own workload identity (Variables)
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
                                        s3+http://… when a cluster is large enough to want MinIO; file:///path on a bench
     NOMAD_ALLOC_INDEX                  worker: the slot to claim; NOMAD_NODE_NAME the server; NOMAD_META_labels
     SPOOL, ARCHIVE                     worker and resource: the same disks on the same server
-    RESOURCE_URL                       resource: how the console reaches this server's manifests
+    RESOURCE_URL                       resource: how the console reaches this server's manifests and events
+    EVENTINDEX_DB                      resource: where its index lives (default :memory: — it is a cache, rebuilt on start)
     CAPACITY                           worker: cameras it can carry on this server
 """
 from __future__ import annotations
@@ -60,32 +61,24 @@ def controller() -> None:
 
 
 def console() -> None:
-    """one per server, a system job: the page, the API, the eventindex. Its token writes
-    the operator's rows and nothing else; a create is placed by the controller's
-    next pass."""
+    """one per server, a system job: the page and the API. Its token writes the
+    operator's rows and nothing else; a create is placed by the controller's next
+    pass. No index of its own: /events asks the live resources and merges."""
     from cluster.console import serve
     from cluster.controller import ClusterController
-    from psimplatform.eventindex import EventIndex, ResourceReader
-    from psimplatform.resource import resources_seen
     ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
-    index = EventIndex(ResourceReader(), os.environ.get("EVENTINDEX_DB", ":memory:"))     # a cache: rebuilt on every start
-    index.rebuild(resources_seen(objects))
-    srv = serve(ctl, os.environ.get("CONSOLE_HOST", "0.0.0.0"), int(os.environ.get("CONSOLE_PORT", "8080")), index=index,
+    srv = serve(ctl, os.environ.get("CONSOLE_HOST", "0.0.0.0"), int(os.environ.get("CONSOLE_PORT", "8080")),
                 archive_root=archive if os.path.isdir(archive) else None)     # marks go into this server's resource, if it has one
-    while not stop.is_set():
-        try:
-            index.tail(resources_seen(objects))
-        except Exception:                         # noqa: BLE001
-            logging.exception("index pass failed")
-        stop.wait(5)
+    stop.wait()
     srv.shutdown()
 
 
 def resource() -> None:
-    """The platform's resource job with the VMS registered on it."""
+    """The platform's resource job with the VMS registered on it, and the index over its own tree."""
     from vms.archive import ArchiveResource
     from cluster.resource import cluster_resource, vms_routes
+    from psimplatform.eventindex import ResourceIndex
     from psimplatform.resource import serve
     arch = ArchiveResource(spool, archive)
     server = os.environ.get("NOMAD_NODE_NAME") or os.uname().nodename
@@ -93,6 +86,7 @@ def resource() -> None:
     res = cluster_resource(arch, server, url, NomadVariables(), objects)
     srv = serve(res, "0.0.0.0", int(os.environ.get("RESOURCE_PORT", "8090")), extra=vms_routes(arch))
     res.heartbeat(); logging.info("restore: %s", res.restore())    # back with an empty disk? pull my buckets from my peers first
+    res.index = ResourceIndex(res.root, server, path=os.environ.get("EVENTINDEX_DB", ":memory:")).start()   # a cache over MY tree: rebuilt after restore, tailed every 3 s
     last_policy = 0.0
     while not stop.is_set():
         try:
@@ -102,7 +96,7 @@ def resource() -> None:
         except Exception:                         # noqa: BLE001
             logging.exception("resource pass failed")
         stop.wait(10)
-    srv.shutdown()
+    res.index.stop(); srv.shutdown()
 
 
 if __name__ == "__main__":
