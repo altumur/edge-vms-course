@@ -1,0 +1,16 @@
+# vms.env.example — `/data/config/vms.env`: what every VMS unit on this box reads
+
+**Role.** The one environment file all four Quadlet units load (`EnvironmentFile=/data/config/vms.env` in `vmsworker@`, `vmscontroller`, `vmsconsole`, `vms-archive-retain`); this is the example to copy onto the box. It lives on the data partition, never in a rootfs slot (М9 Lesson 5): an OS update must not change which archive this box records into. `vms/__main__.py` reads every variable here; `test_the_image_carries_the_three_packages_and_nothing_else` checks that `PLATFORM_DIR=/data/platform`, `SPOOL=/data/spool`, `ARCHIVE=/data/archive` and `CAPACITY=` are present.
+
+## Key by key
+
+- `PLATFORM_DIR=/data/platform` — the platform's two stores: `<dir>/config` (FileVariables — rows, assignments, placement, epochs, slots, idempotency keys) and `<dir>/objects` (FsObjectStore — heartbeats, the snapshot). Every unit mounts `/data/platform` at the same path, the policy unit read-only. In М11 this becomes Nomad Variables and MinIO behind the same interfaces.
+- `SPOOL=/data/spool` — where `archivesink` writes open segments; `closed_in_spool` on worker start promotes what the last instance left. The console mounts it read-only; the controller not at all.
+- `ARCHIVE=/data/archive` — the archive resource's root: promoted media, event buckets and manifests under `vms/<cam>/`, and the console's own `console/<instance>/` marks. Also `VmsWorker.archive_root` when not passed explicitly.
+- `MEDIA_DIR=/data/media` — where `driverpack://file/<name>` resolves (`gstvms/uri.py`). Mounted read-only into the worker only.
+- `CAPACITY=50` — for the worker, the number of cameras it can carry (heartbeated as `capacity`, `headroom = capacity − assigned`); for the controller and console, the fallback used for a worker whose heartbeat has not said its own number. Change it per box after М9 Lesson 7's probe.
+- `SEGMENT_SECONDS=600` — segment length handed to `GstActuator` → `archivesink segment-seconds`; ten minutes is the number every "kill at minute seven" statement in the course assumes.
+- `LOG_LEVEL=INFO` — `logging.basicConfig` level in `__main__`.
+
+## Notes
+- Not here, and set per unit instead: `WORKER_NAME=%i` (the slot, in `vmsworker@.container`), `CONSOLE_HOST`/`CONSOLE_PORT` (in `vmsconsole.container`). Not here and not needed on one box: `NOMAD_*` (M11's job gives them), `CLUSTER` (the snapshot's cluster name; defaults inside the platform).

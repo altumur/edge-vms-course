@@ -1,0 +1,43 @@
+# vms.subsystem.yaml — the VMS's controller, as a spec: what `SpecController` and `SpecConsole` run from
+
+**Role.** Lesson 5. The one file a subsystem gives the platform. `vms/config.py` loads it into `SubsystemSpec` at import (`SPEC`); `VmsController` is `SpecController(SPEC, …)` and the console is `SpecConsole` over the same controller (see `vmsplatform/spec.py.md` and `console.py.md` for what each class does with each section). Its header comment draws the line: "Everything the controller does for this subsystem is here; the worker (vmsworker) is the part that knows what a camera is." Nothing in the file says how a camera records. `tests/test_second_subsystem.py` proves the same classes run a counter from a different dict.
+
+## Stanza by stanza
+
+### top level
+- `name: vms` — the prefix. `SubsystemSpec.sub` becomes `Subsystem("vms")`, so every key is `vms/…`: rows under `vms/cameras/`, `vms/next_id`, `vms/workers/<w>`, `vms/placement/<id>`, `vms/slots/<w>`, `vms/epoch/<id>`, `vms/idem/<key>`, `vms/retention/<id>`, and the object-store keys `vms/<w>/heartbeat` and `vms/snapshot`. It also prefixes every `/metrics` line (`vms_…`) and is the `<subsystem>` directory on the resource (`<archive>/vms/<cam>/…`). The two ACLs are cut from it: the console's token gets `vms/cameras/*`, `vms/next_id`, `vms/idem/*`, `vms/retention/*`; the controller's gets `vms/workers/*`, `vms/placement/*`, `vms/slots/*`.
+
+### `unit:`
+- `rows: cameras` — the row directory `vms/cameras/<id>` and the console's URL path: `GET/POST /cameras`, `PUT/DELETE /cameras/<id>`; `/spec` reports `rows: "cameras"` and the page builds its list from it. `SpecController._row_key` and `units()` list this prefix.
+- `id: numeric` — ids are integers issued by `SpecController._next_id`, a CAS bump on `vms/next_id {n}`. A `POST` body carrying `id` is refused (it is a platform field). `parse_id` turns the URL's last segment into an `int`; sort order is numeric.
+- `fields:` — the operator's eight fields. `SubsystemSpec.refuse` rejects any key not in this list and any of `PLATFORM_FIELDS`; `new_row` applies the defaults; `row()`/`items()` convert by type; `/spec` sends `{name, type, default, required}` for each so the page builds its forms without knowing the VMS.
+  - `name: {type: string, default: "cam{id}"}` — `{id}` is substituted with the issued id in `new_row` (the default is kept as a string in `from_dict` for exactly this). The worker's heartbeat status echoes it.
+  - `source: {type: string, required: true}` — the only required field: a create without it is `Refused("a vms unit needs a source")`. The worker passes it verbatim as `driverpacksrc uri=…`; `gstvms/uri.py` accepts `driverpack://file/<name>` and refuses `driverpack://<vendor>/…` as the real DriverPack's.
+  - `enabled: {type: bool, default: true}` — the reconciler only starts enabled rows and stops what is disabled; the worker reports `phase: pending` for a disabled camera. `PUT {"enabled": false}` bumps `revision` and the worker stops the pipeline.
+  - `retention_days: {type: int, default: 30}` — media retention: the VMS's own policy, applied by `ArchiveResource.retain` (`ArchivePolicy.pass_` reads it straight from `vms/cameras/<cam>`; `__main__.retain` reads it through `config.row`). The controller only stores it.
+  - `events_retention_days: {type: int, default: 365}` — bucket retention: the platform's, via the derived row below. Events are small and kept a year where footage is kept a month.
+  - `priority: {type: int, default: 100}` — stored and carried in the snapshot; nothing in М10 reads it (no placement rule uses it).
+  - `labels: {type: list}` — where the camera is reachable from (`"vlan:cctv-a"`); the placement constraint below compares it against the worker's server labels. Accepts a JSON list or a comma-separated string; stored comma-joined.
+  - `ref: {type: string}` — the name a layer above (М12) knows the camera by; the worker copies it into each status entry, and it leaves the cluster in the snapshot.
+- `derived:` — rows the platform keeps beside the unit (`SpecController._derived`).
+  - `row: retention/{id}` — `vms/retention/<id>`, written on create and refreshed on update only when a source field changed. This is the row the platform's resource job reads for bucket retention (`vmsplatform.resource.retention_days`: the unit's row, else the subsystem's `vms/retention`, else a year). Its first path segment, `vms/retention/*`, is in the console's ACL because the console's token creates cameras.
+  - `items: {days: events_retention_days}` — the row is `{days: "<events_retention_days>"}`.
+  - `on_delete: {days: 0}` — on `delete_camera` the row becomes `{days: 0}`, so a deleted camera's buckets go at the resource's next pass without anyone deleting files by hand.
+
+### `placement:`
+- `capacity: {from: capacity, fallback: 50}` — `SpecController.capacity_of(worker)` reads `extra["capacity"]` from the worker's latest heartbeat (any age); a worker that never said anything counts as 50 (the constructor's `capacity` argument overrides the fallback). `test_capacity_is_the_workers_word_not_the_controllers`: workers saying 2 and 6 are filled to 2 and 6; unknown `w-9` is 50.
+- `headroom: {from: headroom}` — `SpecController.headroom()` sums `extra["headroom"]` over workers seen in the last 45 s; the console exports it as `vms_headroom` and `vms_worker_headroom{worker,server}` — what the autoscaler sums. The worker computes it as `capacity − len(rows)`.
+- `constraint: labels-subset` — chosen by name from `CONSTRAINTS`: a worker is eligible for a camera only if the camera's `labels` ⊆ the labels in the worker's heartbeat (from `NOMAD_META_labels`). The placement reason names the labels reached; `unplaceable()` lists cameras no live worker's labels can serve.
+- `tie_break: most-free-capacity` — `_best`: among eligible workers the one with the largest `capacity − load`, strictly positive; ties to the first in sorted order. The only tie-break the catalogue has.
+- `rebalance: {dead_band: 0.10}` — `rebalance(budget)` stops when the spread in `load/capacity` between the most and least loaded workers is under 10 %. Rebalance runs only when asked, never in the controller's pass.
+
+### `snapshot: [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]`
+The fields `SpecController.snapshot()` copies out of each row into `vms/snapshot` (object store), with `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller pass.
+
+### `console:`
+- `running: cameras_recording` — the name of the running gauge: `metrics_text()` emits `vms_cameras_recording <n>` for status entries in phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_recording 1`); `/spec` sends it as `metrics.running` so the page's status line knows which metric to read. Default would have been `units_running`.
+
+## Notes
+- Key layout summary from `config.py`'s docstring: `vms/cameras/<id>` (row), `vms/workers/<w>` (assignment), `vms/placement/<id>`, `vms/retention/<id>`, `vms/epoch/<id>` (a worker takes by CAS), `vms/next_id`.
+- Fields the operator may never send, whatever the YAML says: `worker, placement, epoch, revision, observed_revision, phase, id` (`PLATFORM_FIELDS`). Those are the controller's (placement, with a reason) or the worker's (phase, epoch, observed_revision in its heartbeat).
+- Editing this file changes the controller and the console together and requires no Python change; `config.OPERATOR_FIELDS` follows it.

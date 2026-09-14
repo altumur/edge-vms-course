@@ -6,7 +6,7 @@
 #   podman build -f deploy/Containerfile -t localhost/vmsserver:latest .
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-gi \
+        python3 python3-gi python3-yaml \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gir1.2-gst-plugins-base-1.0 curl \
     && rm -rf /var/lib/apt/lists/*

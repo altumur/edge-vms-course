@@ -1,0 +1,13 @@
+# runtime.py — the jobspecs' environment turned into a `Federation` of `Cluster`s over `NomadVariables` and a real object store
+
+**Role in the module.** Wiring, not behaviour. The three processes that need the whole federation (`console.main`, and whatever else reads `CLUSTERS`) call `federation_from_env()` to build the same `Federation` the tests build with `conftest.make_domain`, but over М11's production adapters: `cluster.variables.NomadVariables` for each region's raft and `cluster.objectstore.open_store` for its object store (see `../../../М11_ClusterVMS/clustervms/cluster/variables.py.md` and `objectstore.py.md`). The docstring says it plainly: not exercised by the tests (no Nomad here); everything it wires is. `deploy/console.nomad.hcl` is where the `CLUSTERS` string is written.
+
+## Functions
+
+### `federation_from_env(var="CLUSTERS") -> Federation`
+Parses `CLUSTERS=<name>=<nomad addr>|<object store url>,<name>=…`: each comma-separated entry splits once on `=` into the cluster name and the rest, and the rest splits once on `|` into the Nomad address and the object-store URL (so a URL may itself contain `=`, e.g. `?region=eu-1`). For each entry it adds `Cluster(name, NomadVariables(addr=nomad), open_store(objects), is_domain_cluster=…)`. Which cluster is the domain cluster: the one named by `DOMAIN_CLUSTER` if that variable is set, otherwise the first entry (`i == 0`) — the "stated decision" `Federation.domain_cluster` insists on. Empty entries are dropped (`filter(None, …)`); an empty list is `SystemExit("CLUSTERS is empty: name at least one cluster")` — a misconfigured job dies at start rather than serving an empty domain. `reaches` is not set from the environment (it stays the empty frozenset), so a `ClusterPlacer` built over this federation could place nothing; only the read side is wired here.
+
+## Notes
+- The `NomadVariables` for every cluster uses the process's own `NOMAD_TOKEN` (see the М11 note): a domain console reading a remote region's Variables through federation forwarding does so with the local job's workload identity, which `deploy/verify-bench.sh` item 2 is there to check.
+- `open_store("variables://…")` builds `NomadVariables()` from the process's `NOMAD_ADDR`, not from the address given in the same `CLUSTERS` entry — so `north=http://nomad.north:4646|variables://objects` (the example in `console.main`'s docstring) reads the *local* agent's `objects/*`, not north's. Only `s3+http(s)://`, `http(s)://` and `file://` stores are actually per-cluster. See the report.
+- `http://` stores have no `list()`, and `Cluster.heartbeats()` needs one; `s3+http://` does. `deploy/console.nomad.hcl` uses plain `http://` — see that note.

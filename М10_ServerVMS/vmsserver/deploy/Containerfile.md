@@ -1,0 +1,32 @@
+# Containerfile — `localhost/vmsserver:latest`: one image, four entrypoints
+
+**Role.** Builds the single image every Quadlet unit in this directory runs (`Image=localhost/vmsserver:latest`) and the image М11's Containerfile starts `FROM`, so "a Quadlet unit on the М9 box and a Nomad job on a cluster differ only in who starts the process". Built from the module directory: `podman build -f deploy/Containerfile -t localhost/vmsserver:latest .` — the build context is `vmsserver/`, which is why the `COPY` sources are bare package names. `tests/test_deploy_units.py::test_the_image_carries_the_three_packages_and_nothing_else` checks the `COPY` list, the default `CMD`, and that the word "postgres" is absent (М10 Lesson 1: the per-box database is gone; the worker's truth is the platform's stores).
+
+## Instruction by instruction
+
+### `FROM docker.io/library/debian:bookworm-slim`
+A slim Debian base: the GStreamer stack comes from Debian's packages, so no compiling and one apt line.
+
+### `RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-gi python3-yaml gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gir1.2-gst-plugins-base-1.0 curl && rm -rf /var/lib/apt/lists/*`
+- `python3` — the runtime for all four verbs.
+- `python3-yaml` — PyYAML, which `vmsplatform.spec.SubsystemSpec.load` imports lazily to parse `vms.subsystem.yaml`; `vms/config.py` loads the spec at import and every verb reaches it (the controller, console and `retain` directly; the worker through `vms.worker`'s `from .config import row`). The one Python dependency beyond the standard library.
+- `python3-gi`, `gir1.2-gst-plugins-base-1.0` — PyGObject and the introspection data that `gi.require_version("Gst", "1.0")` needs; without them `gstvms` fails to import and the worker runs the fake actuator.
+- `gstreamer1.0-plugins-base/good/bad` — `filesrc`, `qtdemux`, `h264parse`, `identity`, `tee`, `queue`, `fakesink` (base/good), `watchdog`, `splitmuxsink`, `mp4mux` (good/bad): every element the launch string in `gstvms/actuator.py` names.
+- `curl` — for a `podman healthcheck` or a hand check of `/metrics` on the box; nothing in the package calls it.
+- `--no-install-recommends` and the `rm -rf /var/lib/apt/lists/*` keep the image small.
+
+### `WORKDIR /app`
+Where the packages land and the default working directory of every container.
+
+### `COPY vmsplatform vmsplatform` / `COPY vms vms` / `COPY gstvms gstvms`
+The three packages, in dependency order, and nothing else: no tests, no deploy files, no README. The test asserts the list is exactly `["vmsplatform", "vms", "gstvms"]`.
+
+### `ENV PYTHONPATH=/app`
+So `python3 -m vms …` resolves the packages from any working directory; the units do not set it.
+
+### `CMD ["python3", "-m", "vms", "worker"]`
+The default verb is the worker; every unit overrides it with `Exec=` (`controller`, `console`, `retain`, and the worker unit repeats `worker` explicitly).
+
+## Notes
+- Everything the four verbs import is in the apt line: the standard library, PyYAML for the spec, and the GStreamer stack for `gstvms`. Without the last, `__main__.worker` still runs, with the fake actuator.
+- Nothing is configured in the image: stores, roots and capacity all come from `/data/config/vms.env` through the units — an OS or image update changes no data path (М9 Lesson 5).

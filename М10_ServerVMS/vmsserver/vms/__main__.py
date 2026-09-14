@@ -81,15 +81,20 @@ def console() -> None:
 def retain() -> None:
     """The archive resource has no controller — it has a policy, run by a timer:
     repair, close event buckets, retain media and events by each camera's days."""
+    import socket
     import time
+    from vmsplatform.resource import Resource
     from .config import row
-    res = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
+    archive = os.environ.get("ARCHIVE", "/data/archive")
+    res = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), archive)
     vars_ = FileVariables(os.path.join(root, "config"))
     now = time.time()
     logging.info("repair %s; closed %d buckets", res.repair(), len(res.close_buckets(now)))
-    for p in vars_.list("vms/cameras/"):
+    for p in vars_.list("vms/cameras/"):                                  # media: the VMS's own policy, per camera, on its manifest
         c = row(vars_.get(p)[0])
-        logging.info("camera %s: removed %s", c["id"], res.retain(c["id"], c["retention_days"], now, c["events_retention_days"]))
+        logging.info("camera %s: media removed %s", c["id"], res.retain(c["id"], c["retention_days"], now))
+    platform = Resource(archive, socket.gethostname(), "", vars_, FsObjectStore(os.path.join(root, "objects")))
+    logging.info("buckets removed %s", platform.retain())                 # events: the platform's, by vms/retention/<cam> (the derived row)
 
 
 if __name__ == "__main__":

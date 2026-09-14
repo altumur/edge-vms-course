@@ -1,0 +1,30 @@
+# __main__.py — `python3 -m cluster worker | controller | console | resource`: the four Nomad jobs' entry points
+
+**Role in the module.** The one process image the cluster runs (`deploy/Containerfile`), dispatched by `sys.argv[1]` into one of four long-running functions — one per jobspec in `deploy/`. It is М10's `vms/__main__.py` (see `../../../М10_ServerVMS/vmsserver/vms/__main__.py.md`) with the stores replaced: `NomadVariables` (raft, the task's own `NOMAD_TOKEN`) instead of file Variables, and `open_store(OBJECTS)` — by default Variables under `objects/…` — instead of a directory. Everything each job *does* is М10's class; what this file adds is which environment variable feeds which constructor, and the loop cadence. The module docstring is the environment contract for the jobspecs: `NOMAD_ADDR`/`NOMAD_TOKEN` (workload identity), `OBJECTS`, `NOMAD_ALLOC_INDEX`/`NOMAD_NODE_NAME`/`NOMAD_META_labels`, `SPOOL`/`ARCHIVE`, `RESOURCE_URL`, `CAPACITY`.
+
+## Module-level names
+- `logging.basicConfig(...)` — level from `LOG_LEVEL` (default `INFO`); one format for all four jobs so Nomad's `alloc logs` read alike.
+- `stop` — a `threading.Event` set by `SIGTERM` or `SIGINT`. Nomad stops a task with SIGTERM and waits `kill_timeout` (20 s for the worker, see `deploy/vmsworker.nomad.hcl.md`); every loop below polls `stop` so that a stop is orderly — for the worker that means `release_slot()`, which is what turns a scale-in into "redistribute" rather than "a crash".
+- `objects` — the object store, opened once from `OBJECTS` (default `variables://objects`, i.e. heartbeats and the snapshot as Nomad Variables; `s3+http://…` for MinIO/S3; `file:///path` on a bench). Shared by all four functions.
+- `spool`, `archive` — `SPOOL` (default `/data/spool`) and `ARCHIVE` (default `/data/archive`): the worker's and the resource's disks on the same server, mounted by the jobspecs' `volumes`.
+
+## Functions
+
+### `worker()`
+The `vmsworker` job. Builds a `GstActuator(spool, archive, SEGMENT_SECONDS=600)` if GStreamer imports, otherwise logs a warning and passes `None` (→ `FakeActuator`, records nothing). Creates М10's `ArchiveResource(spool, archive)` and promotes every segment closed in the spool with a 30-second grace — what a previous instance left behind at the moment of its death — before claiming anything. Then `ClusterWorker(NomadVariables(), objects, act)`: the slot is claimed from `NOMAD_ALLOC_INDEX` by CAS, the server and labels come from the environment (see `worker.py.md`). Logs name/server/alloc/labels and calls `w.run(stop=stop)` — М10's poll loop (reconcile, lease pass, heartbeat) — which on `stop` releases the slot. `CAPACITY` is read inside `VmsWorker` from the environment.
+
+### `controller()`
+The `vmscontroller` job, `count = 1`, no HTTP (the docstring: "nothing asks it anything"). `ClusterController(NomadVariables(), objects, capacity=CAPACITY|50, cluster=CLUSTER|"cluster-a")` — М10's `VmsController`. Every 5 seconds: `ensure_placed()` (which also runs `unplace_deleted()` inside the platform's `SpecController`), `redistribute()` (released slots' cameras moved), `publish_snapshot()` (the one object that leaves the cluster, `objects/vms/snapshot`). Exceptions are logged and the pass repeats; nothing else is retried because every write is a CAS and the next pass re-reads. The controller's token (`deploy/vmscontroller-policy.hcl`) is what limits it to placement.
+
+### `console()`
+The `console` job, `type = system`: one per server that has a resource. Builds a `ClusterController` with the *console's* token (the same class as the controller — what it may write is decided by `deploy/console-policy.hcl`, not by the class), an `EventIndex(ResourceReader(), EVENTINDEX_DB|":memory:")` rebuilt from `resources_seen(objects)` on every start (it is a cache, and this proves it), then `cluster.console.serve(ctl, CONSOLE_HOST|0.0.0.0, CONSOLE_PORT|8080, index=index, archive_root=archive if it exists)`. `archive_root` is where the console's own marks bucket goes — this server's resource — which is why the jobspec constrains the console to `meta.archive` servers. The loop tails the index every 5 seconds from the resources' heartbeats until `stop`, then shuts the HTTP server down. `worst_failover` is not passed, so `/metrics` reports `vms_failover_seconds{kind="worst"} 0.0` plus each worker's own measurement.
+
+### `resource()`
+The platform's `resource` job with the VMS registered on it. `ArchiveResource(spool, archive)`; `server` from `NOMAD_NODE_NAME` (the jobspec sets it from `${node.unique.name}`) or the hostname; `url` from `RESOURCE_URL` (default `http://<server>:8090`) — what peers and the console dial. `cluster_resource(...)` builds `vmsplatform.resource.Resource` and registers `ArchivePolicy` as the `vms` hook (see `resource.py.md`); `vmsplatform.resource.serve(res, 0.0.0.0, RESOURCE_PORT|8090, extra=vms_routes(arch))` adds `/manifest/<cam>` and `/segment/<path>` to the platform's `/buckets`, `/events`, `/mirror`, `/mirrored`. Before the loop: one heartbeat, then `res.restore()` — "back with an empty disk? pull my buckets from my peers first" (the reverse of mirror). Loop every 10 seconds: heartbeat (`objects/platform/resources/<server>/heartbeat`), and every 600 seconds `res.pass_()` — the platform's retention/mirror pass plus every registered hook (the VMS: manifest repair, bucket close, media retention).
+
+### `if __name__ == "__main__"`
+A dict dispatch on `sys.argv[1]`; an unknown verb is a `KeyError` traceback, which is fine for a job that Nomad would restart anyway.
+
+## Notes
+- `console` builds its `ClusterController` with the same constructor as `controller`; the difference between the two processes is entirely in the token Nomad injects (`identity { env = true }`) and the policy bound to the job.
+- `OBJECTS`, `SPOOL`, `ARCHIVE` and `objects` are evaluated at import, so `python3 -m cluster` with `OBJECTS=variables://…` and no `NOMAD_ADDR` still constructs a `NomadVariables` pointed at `http://127.0.0.1:4646` — the first `put` is what fails, not the import.

@@ -2,8 +2,9 @@
 # the API, its own process on this box (a system job on every server in М11,
 # nothing in front). Its token writes the operator's rows only — vms/cameras/*,
 # vms/next_id, vms/retention/*, vms/idem/* — and never placement; a camera
-# created here is placed by the controller's next pass. The archive is
-# mounted read-only: the console serves segments, it never writes them.
+# created here is placed by the controller's next pass. The spool is mounted
+# read-only (the console never records); the archive is writable because an
+# operator's marks are the console's own buckets, console/<instance>/…, on it.
 [Unit]
 Description=VMS console — the operator's rows, the read model, the page
 After=network.target
