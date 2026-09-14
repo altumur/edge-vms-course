@@ -78,7 +78,7 @@ ctl.publish_snapshot()   -> vms/snapshot  {cluster: "north", ts, cameras: [{…r
 
 ## Step 6 — The console
 
-`cluster/console.py`, standard library — its own job now (`count = 2`, `console.nomad.hcl`, a token for the operator's rows and nothing else; М10 Lesson 5, Step 6 has the argument), the reads a cluster needs and no new writes:
+`cluster/console.py` — its own job now (`count = 2`, `console.nomad.hcl`, a token for the operator's rows and nothing else; М10 Lesson 5, Step 6 has the argument) — is the platform's `SpecConsole` over the VMS spec, exactly as М10 runs it, plus the two routes a *cluster* answers differently: the timeline merged across resources and the segment proxied from the server that has it. Registered as extras; nothing subclassed, no new writes:
 
 ```
 GET /cameras            rows from every heartbeat: phase, server, age, worker_state
@@ -93,7 +93,7 @@ GET /                   М10's page, unchanged: the list, the merged timeline (e
 GET /segment/<path>?server=srv-a     the bytes, fetched from THAT server's resource job — Range passed through, 503 "unavailable, not lost" when it is silent
 ```
 
-`test_the_console_over_http` runs it on a real port: the same POST twice makes one camera; the PUT that tries to set `worker` is refused; `/where/1` agrees with the directory; `/metrics` carries the autoscaler's number and the RTO; and the page plays a segment that lives on srv-a's resource through the console, by server. The page is М10's file: the only thing a cluster changed is that a span carries a `server`, and the console proxies the bytes from the resource job that has them rather than reading a disk of its own — the console has no archive, and must not.
+`test_the_console_over_http` runs it on a real port: the same POST twice makes one camera; the PUT that tries to set `worker` is refused; `/where/1` agrees with the directory; `/metrics` carries the autoscaler's number and the RTO; and the page plays a segment that lives on srv-a's resource through the console, by server. The page is the platform's file, built from `/spec`: the only thing a cluster changed is that a span carries a `server`, and the console proxies the bytes from the resource job that has them rather than reading a disk of its own — the console has no archive, and must not. The detector subsystem's console is the same class over `det.subsystem.yaml` with no extras at all.
 
 ## Step 7 — What the controller does not decide
 

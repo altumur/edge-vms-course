@@ -247,7 +247,7 @@ That leaves two processes, and they are separate because they fail differently.
 
 **What this does to the lessons:** Lesson 3 is the console's lesson already and grows a section for the gateway; its deliverable gains *and a browser watching one of them live through the gateway, with the worker's viewer count still zero*.
 
-**What the course actually ships as a screen** is М10's `console.html`, served unchanged by М11's console: the camera list from the read model, the timeline from the manifest (merged across resources on a cluster, each span naming its server), and playback of promoted segments one at a time through `/segment/<path>` — the console fetching the bytes from the resource job that has them. That is the single-cluster console of the table above with no gateway: no live view, no fMP4, no TURN, and no viewer ever reaching a worker. The gateway is what turns that page's *play this segment* into *watch this camera*, and it is described here rather than built.
+**What the course actually ships as a screen** is the platform's `console.html` — one page for every subsystem, built from `/spec` — served by М10's and М11's `SpecConsole`: the camera list from the read model, the timeline from the manifest (merged across resources on a cluster, each span naming its server), and playback of promoted segments one at a time through `/segment/<path>` — the console fetching the bytes from the resource job that has them. That is the single-cluster console of the table above with no gateway: no live view, no fMP4, no TURN, and no viewer ever reaching a worker. The gateway is what turns that page's *play this segment* into *watch this camera*, and it is described here rather than built.
 
 ---
 

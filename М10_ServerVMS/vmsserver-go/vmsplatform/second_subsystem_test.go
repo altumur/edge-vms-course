@@ -5,7 +5,11 @@ package vmsplatform_test
 // works, the VMS is a subsystem and not the platform.
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -156,5 +160,84 @@ func TestASecondSubsystemThroughTheSamePlatform(t *testing.T) {
 	}
 	if len(v) != 0 || !reflect.DeepEqual(c, []string{"counter/epoch/a", "counter/epoch/b", "counter/units/a", "counter/units/b", "counter/workers/c-1"}) {
 		t.Fatal(v, c)
+	}
+}
+
+func httpCall(t *testing.T, method, url string, body map[string]any, headers map[string]string) (int, map[string]any, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		rd = bytes.NewReader(raw)
+	}
+	req, _ := http.NewRequest(method, url, rd)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	return resp.StatusCode, m, string(raw)
+}
+
+func TestTheSecondSubsystemGetsAConsoleForFree(t *testing.T) {
+	// No console code for the counter either: SpecConsole over the same spec
+	// serves the page, /spec, /units, /where and the writes — with the
+	// counter's names, and no media because the counter registered none.
+	box := testbox.NewBox()
+	ctl := counterController(box)
+	w := &counterWorker{p.NewWorker(counter, box.Vars, box.Objects, p.WorkerOptions{Name: "c-1", Clock: box.Clock.Now, Wall: box.Wall.Now}), map[string]int{}, box.Archive}
+	srv, ln, err := p.NewSpecConsole(ctl, p.ConsoleOptions{}).Serve("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	base := "http://" + ln.Addr().String()
+	_, spec, _ := httpCall(t, "GET", base+"/spec", nil, nil)
+	if spec["name"] != "counter" || spec["rows"] != "units" || spec["id"] != "name" || spec["media"] != false {
+		t.Fatal(spec)
+	}
+	if fs := spec["fields"].([]any); len(fs) != 2 || fs[0].(map[string]any)["name"] != "name" || spec["metrics"].(map[string]any)["running"] != "units_running" {
+		t.Fatal(spec)
+	}
+	if st, _, _ := httpCall(t, "POST", base+"/units", map[string]any{"name": "a", "step": 2}, map[string]string{"Idempotency-Key": "k1"}); st != 201 {
+		t.Fatal(st)
+	}
+	if st, _, _ := httpCall(t, "POST", base+"/units", map[string]any{"step": 2}, map[string]string{"Idempotency-Key": "k2"}); st != 400 { // the spec's refusal, over HTTP
+		t.Fatal(st)
+	}
+	if st, _, _ := httpCall(t, "POST", base+"/cameras", map[string]any{"name": "x"}, map[string]string{"Idempotency-Key": "k3"}); st != 404 { // not this subsystem's rows
+		t.Fatal(st)
+	}
+	w.HeartbeatWith(nil, map[string]any{"capacity": 10})
+	ctl.EnsurePlaced(nil)
+	w.reconcileOnce()
+	_, d, _ := httpCall(t, "GET", base+"/units", nil, nil)
+	rows := d["rows"].([]any)
+	if d["configured"].([]any)[0].(map[string]any)["id"] != "a" || rows[0].(map[string]any)["worker"] != "c-1" || rows[0].(map[string]any)["phase"] != "counting" {
+		t.Fatal(d)
+	}
+	if _, wh, _ := httpCall(t, "GET", base+"/where/a", nil, nil); wh["worker"] != "c-1" {
+		t.Fatal(wh)
+	}
+	if st, _, _ := httpCall(t, "GET", base+"/timeline/a", nil, nil); st != 404 { // no media was registered
+		t.Fatal(st)
+	}
+	if _, _, m := httpCall(t, "GET", base+"/metrics", nil, nil); !strings.Contains(m, "counter_workers_live 1") || !strings.Contains(m, "counter_units_running 0") {
+		t.Fatal(m)
+	}
+	if st, _, _ := httpCall(t, "PUT", base+"/units/a", map[string]any{"step": 3}, nil); st != 200 || ctl.Unit("a").Int("step") != 3 {
+		t.Fatal(st)
+	}
+	if st, _, _ := httpCall(t, "DELETE", base+"/units/a", nil, nil); st != 200 || len(ctl.Units()) != 0 {
+		t.Fatal(st)
+	}
+	if _, _, page := httpCall(t, "GET", base+"/", nil, nil); !strings.Contains(page, "<video") { // one page; the spec hides it
+		t.Fatal("page")
 	}
 }

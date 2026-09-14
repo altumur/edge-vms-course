@@ -12,9 +12,9 @@ clustervms/
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  the VMS's part of the platform's resource job: ArchivePolicy (repair, close, media retention) registered as the `vms` hook; /manifest and /segment plugged in
     eventindex.py    L3  a name for vmsplatform.eventindex — the platform's index over every subsystem's buckets on every resource
-    console.py       L5  the cluster console — its own job, its own token: М10's page at /, the merged timeline, /segment/<path>?server= proxied from that server's resource, /events, /metrics
+    console.py       L5  the cluster console — its own job, its own token: the platform's SpecConsole over the VMS spec plus two extras, the merged timeline and /segment/<path>?server= proxied from that server's resource
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
-    console.py       L5  the cluster console, standard library: /cameras /where /timeline /resources /unplaceable /events /metrics; /marks into the console's own bucket
+    console.py       L5  the cluster console: SpecConsole (/spec /cameras /where /resources /unplaceable /events /metrics /marks, the writes) plus the cluster's /timeline and /segment?server=
     __main__.py      python3 -m cluster worker | controller | resource   (the controller job also runs the eventindex beside the console)
   deploy/
     server.hcl, client.hcl     L1  three servers, ACLs on, meta.labels and meta.archive, the Podman plugin

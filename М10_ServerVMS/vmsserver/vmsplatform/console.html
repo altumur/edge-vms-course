@@ -1,12 +1,15 @@
 <!doctype html>
-<!-- The console's one page: pick a camera, see its timeline, play a span.
-     No framework, no build step: three fetches against the console's own
-     routes — /cameras, /timeline/<id>, /events?cam= — and /segment/<path>
-     for the bytes. Served at GET / by М10's console (one box) and М11's
-     (a cluster) unchanged; the page tells the two apart by the shape of
-     /timeline (a list on one box, {segments, unreachable} on a cluster). -->
+<!-- The console's one page, for ANY subsystem. No framework, no build step.
+     It reads /spec first — the subsystem's name, what its rows are called,
+     how a unit is identified, which fields the operator owns and whether
+     there is media — and builds the list, the add form and the edit form
+     from that. Nothing on this page names a camera: the VMS is the spec that
+     says `rows: cameras`, `media: true`; a counter is another spec and the
+     same page. With media the page adds the timeline and the player:
+     /timeline/<id>, /events?cam=, /segment/<path> (one box: a list; a
+     cluster: {segments, unreachable, note}, each span naming its server). -->
 <meta charset="utf-8">
-<title>VMS console</title>
+<title>console</title>
 <style>
   :root { --bg:#fff; --fg:#1b1b1b; --muted:#6b6b6b; --line:#d8d8d8; --media:#3b7dd8; --events:#c58a1a; --fenced:#b0b0b0; --live:#2a9d5c; --stale:#c0392b; }
   @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#e8e8e8; --muted:#9a9a9a; --line:#333; --fenced:#555; } }
@@ -39,47 +42,38 @@
   .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
   .err { color:var(--stale); font-size:12px; white-space:pre-wrap; }
   details summary { cursor:pointer; color:var(--muted); font-size:13px; }
-  #edit { display:none; }
+  #edit, #media { display:none; }
+  #status { color:var(--muted); font-size:12px; margin-top:12px; }
 </style>
 <aside>
-  <h1>Cameras <small id="count"></small></h1>
-  <ul id="cameras"></ul>
-  <details id="addbox"><summary>Add a camera</summary>
+  <h1 id="rows">…</h1>
+  <ul id="units"></ul>
+  <details id="addbox"><summary id="addlabel">Add</summary>
     <form id="add">
-      <label>name <input type="text" name="name" placeholder="gate"></label>
-      <label>source <input type="text" name="source" placeholder="driverpack://file/gate.mp4" required></label>
-      <label>labels <input type="text" name="labels" placeholder="vlan:cctv-b, vlan:cctv-a"></label>
-      <label>retention, days <input type="number" name="retention_days" value="30" min="0"></label>
-      <label>events retention, days <input type="number" name="events_retention_days" value="365" min="0"></label>
-      <label>ref <input type="text" name="ref" placeholder="what the layer above calls it"></label>
-      <div class="row"><button type="submit">Add</button><small>the controller numbers it and places it on the next pass</small></div>
+      <div id="addfields"></div>
+      <div class="row"><button type="submit">Add</button><small id="addnote">the controller numbers it and places it on the next pass</small></div>
       <div class="err" id="adderr"></div>
     </form>
   </details>
+  <div id="status"></div>
 </aside>
 <main>
-  <h1 id="title">Pick a camera</h1>
+  <h1 id="title">Pick one</h1>
   <div id="meta"></div>
-  <div class="legend"><small><span style="background:var(--media)"></span>recorded <span style="background:var(--events)"></span>events only (watched, not recorded) <span style="background:var(--fenced)"></span>fenced — an older epoch</small></div>
-  <div id="timeline"></div>
-  <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><span id="t1"></span></div>
-  <div id="note"></div>
-  <video id="player" controls></video>
-  <div id="playing"><small></small></div>
+  <div id="media">
+    <div class="legend"><small><span style="background:var(--media)"></span>recorded <span style="background:var(--events)"></span>events only (watched, not recorded) <span style="background:var(--fenced)"></span>fenced — an older epoch</small></div>
+    <div id="timeline"></div>
+    <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><span id="t1"></span></div>
+    <div id="note"></div>
+    <video id="player" controls></video>
+    <div id="playing"><small></small></div>
+  </div>
   <form id="edit">
-    <div class="row"><strong>Edit</strong><small>every save is a new revision; the worker restarts the pipeline</small></div>
-    <div class="row">
-      <label>name <input type="text" name="name"></label>
-      <label>source <input type="text" name="source"></label>
-      <label>labels <input type="text" name="labels"></label>
-      <label>retention <input type="number" name="retention_days" min="0" style="width:5em"></label>
-      <label>events retention <input type="number" name="events_retention_days" min="0" style="width:5em"></label>
-      <label>priority <input type="number" name="priority" min="0" style="width:5em"></label>
-      <label>ref <input type="text" name="ref"></label>
-    </div>
+    <div class="row"><strong>Edit</strong><small>every save is a new revision; the worker restarts what it runs for this unit</small></div>
+    <div class="row" id="editfields"></div>
     <div class="row">
       <button type="submit">Save</button>
-      <button type="button" id="toggle"></button>
+      <button type="button" id="toggle" style="display:none"></button>
       <button type="button" id="del">Delete</button>
       <small>what you cannot set here — worker, epoch, revision, phase — is the controller's, and it refuses</small>
     </div>
@@ -89,37 +83,67 @@
 <script>
 const $ = s => document.querySelector(s);
 const fmt = t => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
-let cameras = [], current = null, window_ = null, spans = [], queue = [];
+let spec = null, units = [], current = null, window_ = null, spans = [], queue = [];
+const ROWS = () => '/' + spec.rows;
+const label = u => u.name || (spec.id === 'numeric' ? spec.rows.replace(/s$/, '') + ' ' + u.id : String(u.id));
+const hasEnabled = () => spec.fields.some(f => f.name === 'enabled' && f.type === 'bool');
 
-async function loadCameras() {
-  const d = await (await fetch('/cameras')).json();
+// -- the spec: the page's only knowledge of the subsystem ------------------------------------
+async function loadSpec() {
+  spec = await (await fetch('/spec')).json();
+  document.title = spec.name + ' console';
+  $('#rows').textContent = spec.rows; $('#addlabel').textContent = 'Add';
+  $('#title').textContent = 'Pick one';
+  $('#addnote').textContent = spec.id === 'numeric' ? 'the controller numbers it and places it on the next pass'
+                                                    : `named by its ${spec.id}; placed on the controller's next pass`;
+  $('#media').style.display = spec.media ? 'block' : 'none';
+  $('#addfields').innerHTML = spec.fields.filter(f => f.name !== 'enabled').map(f => input(f, true)).join('');
+  $('#editfields').innerHTML = spec.fields.filter(f => f.name !== 'enabled' && f.name !== spec.id).map(f => input(f, false)).join('');
+  $('#toggle').style.display = hasEnabled() ? '' : 'none';
+}
+function input(f, adding) {
+  const attrs = `name="${f.name}"${f.required && adding ? ' required' : ''}`;
+  if (f.type === 'bool') return `<label>${f.name} <input type="checkbox" ${attrs} ${f.default ? 'checked' : ''}></label>`;
+  if (f.type === 'int' || f.type === 'float') return `<label>${f.name} <input type="number" ${attrs} ${f.type === 'float' ? 'step="any"' : ''} ${adding && f.default != null ? `value="${f.default}"` : ''} style="width:6em"></label>`;
+  const ph = f.type === 'list' ? 'a, b' : (adding && f.default ? String(f.default) : '');
+  return `<label>${f.name}${f.type === 'list' ? ' (comma-separated)' : ''} <input type="text" ${attrs} placeholder="${ph}"></label>`;
+}
+
+// -- the list: the read model (every worker's heartbeat) over the configured rows ----------------
+async function loadUnits() {
+  const d = await (await fetch(ROWS())).json();
   const byId = {};
   for (const c of d.configured || []) byId[c.id] = { ...c, phase: 'silent', worker_state: 'stale' };
   for (const r of d.rows || []) byId[r.id] = { ...byId[r.id], ...r };   // the heartbeat's word wins over the row's
-  cameras = Object.values(byId).sort((a, b) => a.id - b.id);
-  $('#count').textContent = cameras.length ? `(${cameras.length})` : '';
-  const ul = $('#cameras'); ul.innerHTML = '';
-  for (const c of cameras) {
+  units = Object.values(byId).sort((a, b) => (typeof a.id === 'number' ? a.id - b.id : String(a.id).localeCompare(String(b.id))));
+  $('#rows').textContent = `${spec.rows}${units.length ? ' (' + units.length + ')' : ''}`;
+  const ul = $('#units'); ul.innerHTML = '';
+  for (const c of units) {
     const li = document.createElement('li'); li.dataset.id = String(c.id);
     li.className = `${c.phase || 'silent'} ${c.worker_state === 'stale' ? 'stale' : ''} ${current === c.id ? 'on' : ''}`;
-    li.innerHTML = `<span><span class="dot"></span>${c.name || 'cam' + c.id} <small>#${c.id}</small></span>` +
+    li.innerHTML = `<span><span class="dot"></span>${label(c)} <small>#${c.id}</small></span>` +
                    `<small>${c.worker ? c.worker + (c.server ? ' · ' + c.server : '') : 'unplaced'}${c.age != null ? ' · ' + c.age + ' s' : ''}</small>`;
     li.onclick = () => select(c.id);
     ul.appendChild(li);
   }
+  try { const m = await (await fetch('/metrics')).text(); const live = /_workers_live (\d+)/.exec(m); const run = new RegExp(`_${spec.metrics.running} (\\d+)`).exec(m);
+        $('#status').textContent = `${live ? live[1] : '?'} workers live · ${run ? run[1] : '?'} ${spec.metrics.running.replace(/_/g, ' ')}`; } catch (_) {}
 }
 
 async function select(id) {
   current = id; queue = [];
-  const c = cameras.find(x => x.id === id) || {};
-  $('#title').textContent = `${c.name || 'cam' + id}`;
-  $('#meta').textContent = [c.phase, c.worker && `on ${c.worker}`, c.server, c.epoch ? `epoch ${c.epoch}` : null,
+  const c = units.find(x => x.id === id) || {};
+  $('#title').textContent = label(c);
+  let why = '';
+  try { const w = await (await fetch(`/where/${encodeURIComponent(id)}`)).json(); why = w.reason || ''; } catch (_) {}
+  $('#meta').textContent = [c.phase, c.worker && `on ${c.worker}`, c.server, c.epoch ? `epoch ${c.epoch}` : null, why,
                             c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
-  for (const li of $('#cameras').children) li.classList.toggle('on', li.dataset.id === String(id));
+  for (const li of $('#units').children) li.classList.toggle('on', li.dataset.id === String(id));
   fillEdit(c);
-  await loadTimeline();
+  if (spec.media) await loadTimeline();
 }
 
+// -- media: only when the spec says so (the subsystem registered /timeline and /segment) ----------
 async function loadTimeline() {
   const now = Date.now() / 1000;
   const [from, to] = window_ || [0, 1e12];
@@ -150,16 +174,17 @@ async function loadTimeline() {
   $('#t0').textContent = fmt(lo); $('#t1').textContent = fmt(hi);
 }
 
-// -- writes: through the controller, with an Idempotency-Key per attempt, so a retried click is one camera
+// -- writes: through the controller, with an Idempotency-Key per attempt, so a retried click is one unit
 const key = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
 const fields = form => {
-  const f = Object.fromEntries(new FormData(form));
   const out = {};
-  for (const [k, v] of Object.entries(f)) {
-    if (v === '' && k !== 'name') continue;
-    if (k === 'labels') out[k] = v.split(',').map(x => x.trim()).filter(Boolean);
-    else if (k.endsWith('_days') || k === 'priority') out[k] = Number(v);
-    else if (v !== '') out[k] = v;
+  for (const f of spec.fields) {
+    const el = form.elements[f.name]; if (!el) continue;
+    if (f.type === 'bool') { out[f.name] = el.checked; continue; }
+    const v = el.value;
+    if (v === '') continue;                                              // unset: the spec's default on create, unchanged on edit
+    out[f.name] = f.type === 'list' ? v.split(',').map(x => x.trim()).filter(Boolean)
+                : f.type === 'int' ? parseInt(v, 10) : f.type === 'float' ? Number(v) : v;
   }
   return out;
 };
@@ -172,30 +197,34 @@ async function send(method, path, body) {
 }
 $('#add').onsubmit = async e => {
   e.preventDefault(); $('#adderr').textContent = '';
-  try { const c = await send('POST', '/cameras', fields(e.target)); e.target.reset(); await loadCameras(); select(c.id); }
+  try { const c = await send('POST', ROWS(), fields(e.target)); e.target.reset(); await loadUnits(); select(c.id); }
   catch (err) { $('#adderr').textContent = 'refused: ' + err.message; }
 };
 $('#edit').onsubmit = async e => {
   e.preventDefault(); $('#editerr').textContent = '';
-  try { await send('PUT', `/cameras/${current}`, fields(e.target)); await loadCameras(); select(current); }
+  try { await send('PUT', `${ROWS()}/${encodeURIComponent(current)}`, fields(e.target)); await loadUnits(); select(current); }
   catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
 };
 $('#toggle').onclick = async () => {
-  const c = cameras.find(x => x.id === current); if (!c) return;
-  try { await send('PUT', `/cameras/${current}`, { enabled: !c.enabled }); await loadCameras(); select(current); }
+  const c = units.find(x => x.id === current); if (!c) return;
+  try { await send('PUT', `${ROWS()}/${encodeURIComponent(current)}`, { enabled: !c.enabled }); await loadUnits(); select(current); }
   catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
 };
 $('#del').onclick = async () => {
-  const c = cameras.find(x => x.id === current); if (!c) return;
-  if (!confirm(`Delete ${c.name || 'cam' + current}? Its footage stays on the resource until retention removes it.`)) return;
-  try { await send('DELETE', `/cameras/${current}`); current = null; $('#edit').style.display = 'none'; $('#title').textContent = 'Pick a camera'; $('#meta').textContent = ''; $('#timeline').innerHTML = ''; await loadCameras(); }
+  const c = units.find(x => x.id === current); if (!c) return;
+  if (!confirm(`Delete ${label(c)}?${spec.media ? ' Its footage stays on the resource until retention removes it.' : ''}`)) return;
+  try { await send('DELETE', `${ROWS()}/${encodeURIComponent(current)}`); current = null; $('#edit').style.display = 'none'; $('#title').textContent = 'Pick one'; $('#meta').textContent = ''; $('#timeline').innerHTML = ''; await loadUnits(); }
   catch (err) { $('#editerr').textContent = 'refused: ' + err.message; }
 };
 function fillEdit(c) {
   const f = $('#edit'); f.style.display = 'grid';
-  for (const k of ['name', 'source', 'retention_days', 'events_retention_days', 'priority', 'ref']) f.elements[k].value = c[k] ?? '';
-  f.elements.labels.value = (c.labels || []).join(', ');
-  $('#toggle').textContent = c.enabled === false ? 'Enable' : 'Disable';
+  for (const fd of spec.fields) {
+    const el = f.elements[fd.name]; if (!el) continue;
+    if (fd.type === 'bool') el.checked = !!c[fd.name];
+    else if (fd.type === 'list') el.value = (c[fd.name] || []).join(', ');
+    else el.value = c[fd.name] ?? '';
+  }
+  if (hasEnabled()) $('#toggle').textContent = c.enabled === false ? 'Enable' : 'Disable';
 }
 
 function segmentURL(s) { return `/segment/${s.media}` + (s.server ? `?server=${encodeURIComponent(s.server)}` : ''); }
@@ -217,5 +246,5 @@ function next() {
 $('#player').onended = next;
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
-loadCameras(); setInterval(loadCameras, 10000);
+loadSpec().then(() => { loadUnits(); setInterval(loadUnits, 10000); });
 </script>

@@ -73,3 +73,38 @@ def test_a_second_subsystem_through_the_same_platform():
     # the two subsystems do not see each other: prefixes, and nothing else
     assert box.vars.list("vms/") == [] and [p for p in box.vars.list("counter/") if "/placement/" not in p] == [
         "counter/epoch/a", "counter/epoch/b", "counter/units/a", "counter/units/b", "counter/workers/c-1"]
+
+
+def test_the_second_subsystem_gets_a_console_for_free():
+    """No console code for the counter either: SpecConsole over the same spec
+    serves the page, /spec, /units, /where and the writes — with the counter's
+    names, and no media because the counter registered none."""
+    import json
+    import urllib.error
+    import urllib.request
+    from vmsplatform.console import SpecConsole
+    box = Box(); ctl, w = CounterController(box), CounterWorker(box, "c-1")
+    srv = SpecConsole(ctl).serve("127.0.0.1", 0); port = srv.server_address[1]
+    def call(method, path, body=None, headers=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req) as r: return r.status, r.read().decode()
+        except urllib.error.HTTPError as e: return e.code, e.read().decode()
+    try:
+        spec = json.loads(call("GET", "/spec")[1])
+        assert spec["name"] == "counter" and spec["rows"] == "units" and spec["id"] == "name" and spec["media"] is False
+        assert [f["name"] for f in spec["fields"]] == ["name", "step"] and spec["metrics"]["running"] == "units_running"
+        assert call("POST", "/units", {"name": "a", "step": 2}, {"Idempotency-Key": "k1"})[0] == 201
+        assert call("POST", "/units", {"step": 2}, {"Idempotency-Key": "k2"})[0] == 400                 # the spec's refusal, over HTTP
+        assert call("POST", "/cameras", {"name": "x"}, {"Idempotency-Key": "k3"})[0] == 404             # not this subsystem's rows
+        w.heartbeat([], capacity=10); ctl.ensure_placed(); w.reconcile_once()
+        d = json.loads(call("GET", "/units")[1])
+        assert d["configured"][0]["id"] == "a" and d["rows"][0]["worker"] == "c-1" and d["rows"][0]["phase"] == "counting"
+        assert json.loads(call("GET", "/where/a")[1])["worker"] == "c-1"
+        assert call("GET", "/timeline/a")[0] == 404 and call("GET", "/segment/x.mp4")[0] == 404         # no media was registered
+        assert "counter_workers_live 1" in call("GET", "/metrics")[1] and "counter_units_running 0" in call("GET", "/metrics")[1]
+        assert call("PUT", "/units/a", {"step": 3})[0] == 200 and ctl.unit("a")["step"] == 3
+        assert call("DELETE", "/units/a")[0] == 200 and ctl.units() == []
+        assert "<video" in call("GET", "/")[1]                                                          # one page; the spec hides it
+    finally:
+        srv.shutdown(); srv.server_close()

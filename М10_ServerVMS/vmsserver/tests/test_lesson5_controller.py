@@ -176,7 +176,10 @@ def test_the_console_over_http():
         w.reconcile_once(); w.heartbeat_once()
         body = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/cameras"))
         assert body["rows"][0]["phase"] == "running" and body["rows"][0]["server"] == "srv-1"
-        assert json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/where/1")) == {"worker": "w-1"}
+        where = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/where/1"))
+        assert where["worker"] == where["directory"] == "w-1"                         # the placement says, the assignments agree
+        spec = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/spec"))      # what the page reads first: the YAML, not code
+        assert spec["rows"] == "cameras" and spec["media"] and {f["name"] for f in spec["fields"]} >= {"name", "source", "enabled"}
         assert b"vms_cameras_recording 1" in urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics").read()
         # an operator's mark is the CONSOLE's event: its own bucket, never a worker's
         req = urllib.request.Request(f"http://127.0.0.1:{port}/marks", data=json.dumps({"cam": 1, "note": "left the bag"}).encode(),
@@ -189,7 +192,7 @@ def test_the_console_over_http():
         assert subsystems_under(box.archive) == {"console": [m["unit"]]}                          # not in vms/1/: that bucket has one writer
         # the page, and the bytes it plays: three fetches and a Range
         page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
-        assert "/cameras" in page and "/timeline/" in page and "/segment/" in page and "<video" in page
+        assert "/spec" in page and "/timeline/" in page and "/segment/" in page and "<video" in page and "camera" not in page.split("-->", 1)[1].lower()   # the page is the spec's, not the VMS's
         from datetime import datetime, timezone
         from vms.archive import segment_path
         seg = segment_path(box.spool, 1, 1, datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)); os.makedirs(os.path.dirname(seg), exist_ok=True)

@@ -367,10 +367,17 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	eq(t, p.SubsystemsUnder(box.Archive), map[string][]string{"console": {m["unit"].(string)}}) // not in vms/1/: that bucket has one writer
 	// the page, and the bytes it plays: three fetches and a Range
 	_, _, page := call(t, "GET", base+"/", nil, nil)
-	for _, want := range []string{"/cameras", "/timeline/", "/segment/", "<video"} {
+	for _, want := range []string{"/spec", "/timeline/", "/segment/", "<video"} {
 		if !strings.Contains(string(page), want) {
 			t.Fatal(want)
 		}
+	}
+	if body := strings.SplitN(string(page), "-->", 2)[1]; strings.Contains(strings.ToLower(body), "camera") { // the page is the spec's, not the VMS's
+		t.Fatal("the page names a camera")
+	}
+	_, spec, _ := call(t, "GET", base+"/spec", nil, nil) // what the page reads first: the YAML, not code
+	if spec["rows"] != "cameras" || spec["media"] != true || len(spec["fields"].([]any)) < 3 {
+		t.Fatal(spec)
 	}
 	seg := writeSegment(t, box.Spool, 1, 1, "2026-09-12T10:00:00", 256, 0)
 	vms.NewArchiveResource(box.Spool, box.Archive, 600, nil).Promote(seg, 0)

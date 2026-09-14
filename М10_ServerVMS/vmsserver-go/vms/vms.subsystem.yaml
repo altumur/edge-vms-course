@@ -24,3 +24,5 @@ placement:
   tie_break:  most-free-capacity
   rebalance:  {dead_band: 0.10}
 snapshot: [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]
+console:
+  running: cameras_recording           # vms_cameras_recording: the gauge for cameras in phase "running"

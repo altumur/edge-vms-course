@@ -182,6 +182,7 @@ type SubsystemSpec struct {
 	TieBreak         string
 	DeadBand         float64
 	Snapshot         []string
+	RunningGauge     string // the console's gauge for units in phase "running": <name>_<RunningGauge>
 }
 
 func asMap(v any) map[string]any {
@@ -199,7 +200,7 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	unit, pl := asMap(d["unit"]), asMap(d["placement"])
 	s := &SubsystemSpec{Name: name, Rows: "units", ID: "numeric", Fields: map[string]FieldSpec{}, CapacityFrom: "capacity",
-		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", TieBreak: "most-free-capacity", DeadBand: 0.10}
+		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", TieBreak: "most-free-capacity", DeadBand: 0.10, RunningGauge: "units_running"}
 	if r, ok := unit["rows"].(string); ok {
 		s.Rows = r
 	}
@@ -264,6 +265,9 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 		}
 	} else {
 		s.Snapshot = append([]string{}, s.FieldOrder...)
+	}
+	if con := asMap(d["console"]); con["running"] != nil {
+		s.RunningGauge = Str(con["running"])
 	}
 	if _, ok := Constraints[s.Constraint]; !ok {
 		return nil, fmt.Errorf("spec: unknown constraint %q", s.Constraint)

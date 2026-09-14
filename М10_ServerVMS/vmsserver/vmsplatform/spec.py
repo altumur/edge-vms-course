@@ -99,6 +99,7 @@ class SubsystemSpec:
     tie_break: str = "most-free-capacity"
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
+    running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
 
     @classmethod
     def from_dict(cls, d: dict) -> "SubsystemSpec":
@@ -115,7 +116,8 @@ class SubsystemSpec:
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), tie_break=pl.get("tie_break", "most-free-capacity"),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
-                   snapshot=list(d.get("snapshot", []) or list(fields)))
+                   snapshot=list(d.get("snapshot", []) or list(fields)),
+                   running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
 
     @classmethod
     def load(cls, path: str) -> "SubsystemSpec":

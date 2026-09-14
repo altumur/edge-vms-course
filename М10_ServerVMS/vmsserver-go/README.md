@@ -16,6 +16,8 @@ vmsserver-go/
     eventindex.go              EventIndex: Rebuild / Tail / Query / Forget over every resource's buckets; the mirror branch
     spec.go  yaml.go           the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name, snapshot), SpecController — the one
                                controller every subsystem runs; a YAML subset parser (block and flow, scalars, comments) so the spec needs no dependency
+    console.go  console.html   the console as data: SpecConsole over the same spec — the page (embedded, built from /spec), /<rows>, /where, /metrics with
+                               the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers an Extra for its own routes
   vms/                         the VMS — a subsystem
     vms.subsystem.yaml         the VMS's controller, as a spec — embedded into the binary (go:embed); the same file the Python package reads
     config.go                  Camera, the typed view of a spec row; Row / ItemsOf through the spec
@@ -25,16 +27,15 @@ vmsserver-go/
     worker.go                  VmsWorker: the slot, server, labels and capacity from the environment (a box or an allocation); the gate (an epoch
                                per start), LeasePass, Fence, Observe, PumpOnce, Status, Headroom, Run
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
-    console.go                 the one-box console: / (console.html, embedded), /segment/<path> with Range, /cameras /where /timeline /metrics; POST /cameras, /marks; PUT /cameras
-    console.html               the page, the same file as the Python package's: the list, the timeline, playback one segment at a time
+    console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> and /segment/<path> with Range
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
   cmd/vms/main.go              vms worker|controller — the two processes on one box, with the fake actuator
-  *_test.go                    41 tests, in the packages they test; -race clean
+  *_test.go                    43 tests, in the packages they test; -race clean
 ```
 
 ```bash
-go test ./...                    # 41 tests, ~130 ms
+go test ./...                    # 43 tests, ~130 ms
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```
