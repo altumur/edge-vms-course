@@ -24,8 +24,8 @@ vmsserver/
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
     console.py                 Lesson 6  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes —
                                /timeline/<id>, /segment/<path>, and the WHEP door /whep/<cam> that creates a fan-out on the first viewer and proxies to its gateway
-    live.subsystem.yaml        Lesson 7  the THIRD subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
-    det.subsystem.yaml         Lesson 8  the FOURTH subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom
+    live.subsystem.yaml        Lesson 7  the SECOND subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
+    det.subsystem.yaml         Lesson 8  the THIRD subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom
     detector.py                Lesson 8  DetWorker: runs a Model against the camera's RTP, writes what it saw into det/<unit>/e<epoch>/ on the resource under its own epoch
     gateway.py                 Lesson 7  LiveGateway, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
                                RTP tee per camera, N webrtcbin peers behind it, WHEP (POST /whep/<cam>, DELETE /whep/session/<id>), demand-created and demand-deleted units
@@ -40,11 +40,11 @@ vmsserver/
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container,
                                vmscontroller.container, vmsconsole.container, vms-archive-retain.container + .timer,
                                vmsgateway@.container, vmslivecontroller.container, vmsdetworker@.container, vmsdetcontroller.container, vms.env.example, check-quadlet.sh
-  tests/                       57 tests, milliseconds, no GStreamer
+  tests/                       55 tests, milliseconds, no GStreamer
 ```
 
 ```bash
-python3 tests/run.py                                   # 57 tests
+python3 tests/run.py                                   # 55 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: records; without: the fake actuator
 python3 -m vms worker                                  # no name: claims the first free slot — a lapsed one first
@@ -58,8 +58,8 @@ python3 -m vms worker                                  # no name: claims the fir
 | 2 | `driverpacksrc` running for an hour with monotonic PTS; the refusal of a vendor URI | `test_lesson2_driverpacksrc.py` — the URI logic here; the element and the hour on a box with GStreamer |
 | 3 | kill the worker at minute seven: six promoted, one closed-but-not-promoted picked up on restart, the open one lost; rebuild the manifest from the files | `test_lesson3_archive.py` — the acknowledgement order, `closed_in_spool`, `repair()`, the fenced epoch on the timeline, two resources merged, retention per kind, event buckets recording or not — silent included — closed, counted onto media, fenced, rebuilt |
 | 4 | М9's four failures against the worker with its tests passing unchanged; the zombie on one box | `test_lesson4_worker.py` — М9 Lesson 6's seven, then the assignment, the epoch per camera, the restart with the controller stopped, a nameless replacement inheriting the lapsed slot, the zombie fenced at the slot, the reassignment that is not one |
-| 5 | one box, two subsystems; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` and `test_second_subsystem.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic, the counter subsystem |
-| 6 | the console as its own process; a camera added, edited, played, deleted from the page; two consoles answering one retry | `test_lesson5_controller.py::test_the_console_over_http` and `…is_one_camera` — the whole surface on a real port, a retry across two consoles; `test_second_subsystem.py` — the counter's console for free; `test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts` |
+| 5 | one box, one controller; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic |
+| 6 | the console as its own process; a camera added, edited, played, deleted from the page; two consoles answering one retry | `test_lesson5_controller.py::test_the_console_over_http` and `…is_one_camera` — the whole surface on a real port, a retry across two consoles; `test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts` |
 | 7 | press *Live*; fifty tabs, one subscription; a gateway killed, the next offer answered by the survivor | `test_lesson7_live.py` — the first viewer creates the fan-out and the controller places it, fifty viewers one subscription and the worker unchanged, the grace period and the gateway deleting its own unit, a dead gateway's fan-outs moved to the survivor, placement by label, two subsystems sharing the platform |
 | 8 | a model added to the camera from the page, its events beside the VMS's on the resource | `test_lesson8_det.py` — a model placed on the GPU worker and writing its own buckets under its epoch, a camera that stops leaving the model waiting, the unplaceable model placed when a GPU arrives |
 | 9 | the box: eight units, one image, an update that records nothing rolled back | `test_deploy_units.py` — the Quadlet units against the package: entrypoints, `/data` volumes, the mounts as the ACL, the image's contents |
@@ -70,8 +70,8 @@ python3 -m vms worker                                  # no name: claims the fir
 
 **The controller never decides how many workers there are.** It has no scheduler client and no `count`. `test_scale_in_releases_a_slot_and_the_controller_redistributes` shows the only thing it does about worker numbers: moving the cameras of a slot whose holder *said* it was stopping — and leaving a merely silent one alone for Nomad. The workers export `headroom`; `/metrics` serves it; whoever runs `count` reads it.
 
-**The platform knows nothing about video.** `test_the_platform_knows_nothing_about_video` greps `psimplatform/` — `events.py` included — for an import from `vms/` and for the word *camera*, and `test_second_subsystem.py` runs a controller and a worker that count seconds through the same base classes with a different prefix, and writes their events into `counter/b/…` on the same resource.
+**The platform knows nothing about video.** `test_the_platform_knows_nothing_about_video` greps `psimplatform/` — `events.py` included — for an import from `vms/` and for the word *camera*.
 
 ## Verified where
 
-The 57 tests ran in the authoring sandbox (Python 3.11) and on the author's machine (3.10). `gstvms/` — the two elements and the actuator — is written to GStreamer's Python binding and not exercised here; the logic it calls (`vms.archive.ArchiveResource.promote`, the URI resolution) is. The hour-long PTS run, `kill -9` mid-segment on real files, and the zombie with two real worker processes are the box's.
+The 55 tests ran in the authoring sandbox (Python 3.11) and on the author's machine (3.10). `gstvms/` — the two elements and the actuator — is written to GStreamer's Python binding and not exercised here; the logic it calls (`vms.archive.ArchiveResource.promote`, the URI resolution) is. The hour-long PTS run, `kill -9` mid-segment on real files, and the zombie with two real worker processes are the box's.

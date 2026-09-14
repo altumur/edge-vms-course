@@ -4,7 +4,7 @@
      how a unit is identified, which fields the operator owns and whether
      there is media — and builds the list, the add form and the edit form
      from that. Nothing on this page names a camera: the VMS is the spec that
-     says `rows: cameras`, `media: true`; a counter is another spec and the
+     says `rows: cameras`, `media: true`; live and det are other specs and the
      same page. With media the page adds the timeline and the player:
      /timeline/<id>, /events?cam=, /segment/<path> (one box: a list; a
      cluster: {segments, unreachable, note}, each span naming its server). -->
@@ -16,8 +16,8 @@ NOTES — what this page is, its regions and its state (each script function is 
 **Role in the module.** Lesson 5. Served by `console.py` at `/`. The page reads `/spec` first — the
 subsystem's name, what its rows are called, how a unit is identified, which fields the operator owns and
 whether there is media — and builds the unit list, the add form and the edit form from that. Nothing on this
-page names a camera: the VMS is the spec that says `rows: cameras`, `media: true`; a counter is another spec
-and the same page (`test_the_second_subsystem_gets_a_console_for_free`, and `test_the_console_over_http`
+page names a camera: the VMS is the spec that says `rows: cameras`, `media: true`; live and det are other specs
+and the same page (`test_one_console_mounts_every_subsystem_it_fronts`, and `test_the_console_over_http`
 asserts the word "camera" does not appear outside the leading comment). With media the page adds the
 timeline and the player, using the routes the subsystem registered (`/timeline/<id>`, `/segment/<path>`)
 plus the platform's `/events?cam=`. Writes go through the console with a fresh `Idempotency-Key` per attempt

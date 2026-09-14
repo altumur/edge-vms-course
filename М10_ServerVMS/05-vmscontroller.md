@@ -1,16 +1,16 @@
-# Lesson 5 — `vmscontroller`, and the Second Subsystem
+# Lesson 5 — `vmscontroller`
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
-**You will build:** the controller — the only writer of `vms/*`, camera CRUD and placement by CAS, stored with a reason, safe at two, never needed to recover, never deciding how many workers there are — the failure arithmetic measured process by process, and a second subsystem through the same platform code. The console is Lesson 6; live video and detectors are Lessons 7 and 8; the box is Lesson 9.
+**You will build:** the controller — the only writer of `vms/*`, camera CRUD and placement by CAS, stored with a reason, safe at two, never needed to recover, never deciding how many workers there are — the failure arithmetic measured process by process, and the controller as data — a YAML the platform runs, so that the next subsystems need no controller of their own. The console is Lesson 6; live video and detectors are Lessons 7 and 8; the box is Lesson 9.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists
 
 Somebody has to write configuration, and the module's answer is: exactly one thing, and it is not the worker and not the console. М9 gave the Node its own database so that an operator could edit a camera with everything above the Node unreachable — an argument about the *domain*, which may be down. Inside a cluster the store is one raft, the workers are stateless, and a single writer keeps every property М9 wanted while dropping the one it paid for. The controller is that writer.
 
-It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on the proof that the shape is not special: a second subsystem, a controller and a worker that count seconds, dropped onto the same platform with a different prefix.
+It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on making the controller a description rather than a program — the YAML that Lessons 7 and 8 will reuse for two more subsystems without writing a controller for either.
 
-> **What you can verify without hardware.** All of it: `tests/test_lesson5_controller.py` and `tests/test_second_subsystem.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock, and the counter subsystem. Every output below came out of them.
+> **What you can verify without hardware.** All of it: `tests/test_lesson5_controller.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock, and the counter subsystem. Every output below came out of them.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ It is also the process most likely to be built wrong, because "one controller" i
 4. Run two controllers at once and show every camera placed exactly once.
 5. Say who decides how many workers run and where — and prove the controller does not: scale-in moves cameras, a crash moves nothing.
 6. Measure the failure arithmetic: stop each process and say what stopped.
-7. Build a second subsystem through the same platform and diff the two.
+7. Write the controller as a spec, and say what a subsystem must still write by hand.
 
 ---
 
@@ -126,19 +126,20 @@ retire("w-1")                         -> released_slots() == ['w-1']        the 
 
 The row to read twice is the second. An edit made *while the worker was dead* is present when it comes back, because the edit went into the store and the worker reads the store. There is no *saved · not yet replicated* on one box, and М11 will show there is none inside a cluster either.
 
-## Step 6 — The second subsystem
+## Step 6 — The controller as data
 
-`tests/test_second_subsystem.py` defines a `CounterWorker` over `Subsystem("counter")` — a worker that adds a `step` each pass, heartbeats its values, and writes an event into `counter/b/e1/…` on the same resource every tenth tick through the platform's `EventLog` — and **no controller at all**. The counter's controller is a *spec*, ten lines of YAML the platform's `SpecController` runs from: a prefix, where the rows live, how a unit is named (`id: name` — the operator names counters; the VMS numbers cameras), the operator's fields with types and defaults, which heartbeat field is capacity. Refusals, CAS, revision bumps, placement by capacity with a reason, redistribution, the read model and the snapshot all come with it — and so does the console: `test_the_second_subsystem_gets_a_console_for_free` puts `SpecConsole` over the counter's controller and gets `/spec` naming `units` and two fields, `POST /units` with the spec's refusal, `/where/a`, `counter_workers_live` and `counter_units_running` on `/metrics`, and a page that draws no timeline because the counter registered no media. Thirty lines of worker, no reference to the VMS, and the platform runs it:
+Read `vmscontroller` line by line and nothing in it is about video. It is parameterised by names and numbers: where the rows live, how a unit is identified, which fields an operator may set and their types, which heartbeat field is capacity, a rule for which workers are eligible, what leaves the cluster. That is a description, not a program — so `vms/vms.subsystem.yaml` is the description and `psimplatform/spec.py`'s `SpecController` is the one program, run from it. `vms/controller.py` is twenty lines that call the platform's class by the VMS's names (`create_camera`, not `create`). The spec's vocabulary is deliberately small: fields with types and defaults, a derived row (`vms/retention/<id>`, what the resource retains buckets by), a constraint and a tie-break **by name** from a catalogue of two (`labels-subset`, `most-free-capacity`), a snapshot list, the console's gauge. A subsystem that needs another rule registers a function under a name — code, named, not YAML pretending to be code. And the two tokens come out of the same file: `acl_console()` is the operator's rows, `acl_controller()` is placement.
 
 ```
-counter/units/a  counter/units/b  counter/workers/c-1  counter/epoch/a  counter/epoch/b
-heartbeat status: [{'id': 'a', 'value': 4, 'phase': 'counting'}, {'id': 'b', 'value': 10, 'phase': 'counting'}]
-vms/*: []            the two subsystems share the platform and see nothing of each other
+name: vms
+unit:      {rows: cameras, id: numeric, fields: {name, source, enabled, retention_days, events_retention_days, priority, labels, ref}, derived: [retention/{id}]}
+placement: {capacity: {from: capacity, fallback: 50}, headroom: {from: headroom}, constraint: labels-subset, tie_break: most-free-capacity}
+snapshot:  [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]
 ```
 
-Diff the two subsystems and you get a YAML file and a worker — the controller and the console are the platform's, run from that file. That is what "each new subsystem provides its controller and its worker to the platform" means as an artifact — and the VMS is no exception: `vms/vms.subsystem.yaml` is *its* controller, and `vms/controller.py` is twenty lines that call the platform's class by the VMS's names (`create_camera`, not `create`). The spec's vocabulary is deliberately small: fields, a derived row, a constraint and a tie-break **by name** from a catalogue of two (`labels-subset`, `most-free-capacity`), a snapshot list. A subsystem that needs another rule registers a function under a name — code, not YAML pretending to be code. Detectors in М11 will be `det.subsystem.yaml` with `constraint: labels-subset` against GPU labels and a `detectorworker` that runs them — the same class, the same stores, the same ACL shape.
+What is *not* in a spec is what a unit *does* — that is the worker, and the worker is the subsystem. So what a new subsystem writes is a YAML and a worker, and the proof is not a toy: Lesson 7 adds live video, whose unit is a camera's fan-out and whose capacity is viewers, and Lesson 8 adds detectors, whose unit is a model on a camera and whose events are their own buckets on the resource — two subsystems that look nothing like recording, through this class, with no controller code for either. `test_the_platform_knows_nothing_about_video` keeps the boundary literal: nothing under `psimplatform/` imports the VMS or says the word *camera*.
 
-**Deliverable:** one box, two subsystems. `POST /cameras` (through the console of Lesson 6, or `create_camera` from a shell) starts a recording within one worker pass; stop the controller and show recording and a worker restart unaffected; kill the worker and show the edit made meanwhile applied on restart; and `test_second_subsystem.py` green, with a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, and nothing else.
+**Deliverable:** one box, one controller. `POST /cameras` (through the console of Lesson 6, or `create_camera` from a shell) starts a recording within one worker pass; stop the controller and show recording and a worker restart unaffected; kill the worker and show the edit made meanwhile applied on restart; and a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, the names in one YAML, and nothing else.
 
 ---
 
@@ -152,7 +153,7 @@ Diff the two subsystems and you get a YAML file and a worker — the controller 
 | A dead worker's cameras are not moved | Correct. Its slot lapsed but was not released; Nomad brings the process back under the same name. If it will not return, `retire(slot)` — an operator's statement. |
 | The autoscaler adds workers at night | It is scaling on CPU. Scale on `vms_headroom`; CPU is a symptom, headroom is the demand. |
 | Rebalance moves the same camera back and forth | No dead band, or budget larger than the imbalance. Ten percent and a small budget. |
-| The counter subsystem sees `vms/` rows | Its prefix is wrong or it is listing `/`. A subsystem lists its own prefix and nothing else; the ACL will make that a rule in М11. |
+| A second subsystem sees `vms/` rows | Its prefix is wrong or it is listing `/`. A subsystem lists its own prefix and nothing else; the ACL will make that a rule in М11. |
 
 ## Recap
 
@@ -162,7 +163,7 @@ Diff the two subsystems and you get a YAML file and a worker — the controller 
 - Two controllers agree because the row is CAS and the assignment merges — and the test found the version that did not.
 - Stop the controller: nothing running stops. Kill the worker: the edit is waiting in the store when it returns.
 - The controller never decides how many workers there are or where they run: the scheduler runs `N`, the autoscaler moves `N` from headroom, and the controller's one unasked move is to redistribute a *released* slot — never a lapsed one.
-- A second subsystem runs through the same platform with a different prefix — a YAML and a worker; the controller is the platform's.
+- The controller is data: a YAML the platform's `SpecController` runs from; a new subsystem writes a YAML and a worker, and Lessons 7 and 8 do exactly that.
 
 ## Exercises
 
@@ -173,4 +174,4 @@ Diff the two subsystems and you get a YAML file and a worker — the controller 
 
 ## Where this is going
 
-One box runs the platform's shape: two stores, a controller, a worker, a resource, and a second subsystem to prove the first is not special. Nobody has looked at a screen yet. [**Lesson 6**](06-the-console.md) gives the operator one — its own process, its own token, and the same YAML the controller runs from.
+One box runs the platform's shape: two stores, a controller run from a description, a worker, a resource. Nobody has looked at a screen yet. [**Lesson 6**](06-the-console.md) gives the operator one — its own process, its own token, and the same YAML the controller runs from.

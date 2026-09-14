@@ -9,7 +9,7 @@ adds is where the bytes are — two routes, registered, not subclassed:
 The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 /resources, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
 `psimplatform.console.SpecConsole` reading `vms.subsystem.yaml`. A console for
-the counter subsystem is the same class with a different YAML and no extra.
+the det subsystem is the same class with a different YAML and no extra.
 """
 from __future__ import annotations
 

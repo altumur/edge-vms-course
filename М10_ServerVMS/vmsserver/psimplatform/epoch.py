@@ -12,7 +12,7 @@ platform only promises that it comes from one issuer and increases.
 # ================================================================================================
 # # epoch.py — the fencing-token issuer and the lease, generic to any writer that can have two instances
 #
-# **Role in the module.** Lesson 1. A unit (a camera, a counter) may at any moment have two processes
+# **Role in the module.** Lesson 1. A unit (a camera, a fan-out, a model) may at any moment have two processes
 # believing they run it — a zombie after a reschedule, or a reassignment window. The platform's answer is a
 # fencing token, the *epoch*: a per-unit integer that comes from one issuer (the CAS on a Variables key) and
 # only increases. Whoever holds the newest epoch is the writer; an older holder discovers it on its next

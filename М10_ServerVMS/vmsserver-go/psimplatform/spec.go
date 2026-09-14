@@ -427,7 +427,7 @@ func unitLess2(a, b string) bool {
 
 // SpecController is the only writer of <name>/*, from a spec. Holds nothing;
 // two instances are harmless; never on the recovery path. The VMS is one
-// spec; a counter, a detector, are others — same code.
+// spec; live and det are others — same code.
 type SpecController struct {
 	*Controller
 	Spec     *SubsystemSpec

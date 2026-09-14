@@ -8,8 +8,8 @@ and it is all of this:
     its index   the manifest beside the unit's buckets, and (М11) a cluster-wide cache over every resource
 
 Nothing here knows what a unit is. The VMS's unit has footage and its
-bucket sits beside it; a detector's unit is a detector job; a counter's
-unit is a counter. The word "event" means only: something a worker
+bucket sits beside it; a detector's unit is a model; a gateway's
+unit is a fan-out. The word "event" means only: something a worker
 observed at a time, about a unit it holds.
 """
 # ================================================================================================

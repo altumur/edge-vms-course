@@ -10,7 +10,7 @@ Lesson 5 left the box with a controller nobody can talk to. Somebody has to serv
 
 The lesson's second half is the claim that made the controller a YAML in Lesson 5 applied to the console: everything a console needs — the rows' name, how a unit is identified, the operator's fields, what counts as running — is already in the spec, so the console is one class for every subsystem, and one process can front several of them.
 
-> **What you can verify without hardware.** `tests/test_lesson5_controller.py::test_the_console_over_http` (the whole surface on a real port), `test_a_retry_that_lands_on_another_console_is_one_camera`, `tests/test_second_subsystem.py::test_the_second_subsystem_gets_a_console_for_free`, and `tests/test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts`. The page itself needs a browser; everything it calls is tested.
+> **What you can verify without hardware.** `tests/test_lesson5_controller.py::test_the_console_over_http` (the whole surface on a real port), `test_a_retry_that_lands_on_another_console_is_one_camera`, and `tests/test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts`. The page itself needs a browser; everything it calls is tested.
 
 ## Prerequisites
 
@@ -93,7 +93,7 @@ GET /det/units       -> the det subsystem's rows with the read model; POST /det/
 
 - The console is its own process with its own token: the operator's rows, never placement; the store refuses the crossing.
 - The page reads `/spec` and builds itself; it plays what the resource holds, one segment at a time, and never calls a worker.
-- `SpecConsole` runs from the same YAML as `SpecController`; the counter subsystem got a console with no console code.
+- `SpecConsole` runs from the same YAML as `SpecController`; the live and det subsystems get a console with no console code.
 - The idempotency key is a Variable, so any instance answers a retry the same way; the console runs on every server with nothing in front.
 - One process mounts every subsystem it fronts: the VMS at `/`, the others under their names.
 
@@ -106,4 +106,4 @@ GET /det/units       -> the det subsystem's rows with the read model; POST /det/
 
 ## Where this is going
 
-The operator has a screen, and the screen plays yesterday. [**Lesson 7**](07-live-video-the-third-subsystem.md) gives it *now* — and finds that live video is not a feature of the console but a subsystem of its own, with workers scaled by the audience.
+The operator has a screen, and the screen plays yesterday. [**Lesson 7**](07-live-video-the-second-subsystem.md) gives it *now* — and finds that live video is not a feature of the console but a subsystem of its own, with workers scaled by the audience.

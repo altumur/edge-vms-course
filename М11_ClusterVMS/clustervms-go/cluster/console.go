@@ -11,7 +11,7 @@ package cluster
 // The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 // /resources, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
 // psimplatform.SpecConsole reading vms.subsystem.yaml. A console for the
-// counter subsystem is the same type with a different YAML and no extra.
+// det subsystem is the same type with a different YAML and no extra.
 
 import (
 	"fmt"

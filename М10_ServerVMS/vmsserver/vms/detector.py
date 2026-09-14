@@ -1,4 +1,4 @@
-"""The detector worker — the fourth subsystem's worker. A unit is one model on
+"""The detector worker — the second subsystem's worker. A unit is one model on
 one camera (`7-linecross`); the worker subscribes to the camera's RTP on the
 loopback the way the gateway does (from the VMS worker's heartbeat, never by
 calling it), decodes, runs the model, and writes what the model saw into the

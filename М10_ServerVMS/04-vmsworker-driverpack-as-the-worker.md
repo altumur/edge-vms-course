@@ -211,4 +211,4 @@ Which means a vendor SDK that segfaults inside a pipeline takes the loop with it
 
 ## Where this is going
 
-Workers run what they are told. [**Lesson 5**](05-vmscontroller-and-the-second-subsystem.md) builds the one that tells them: the controller — the only writer of `vms/*`, placement stored with a reason, safe at two, never needed to recover — the console over it, the failure arithmetic measured, and a second subsystem through the same platform to prove the VMS is not special.
+Workers run what they are told. [**Lesson 5**](05-vmscontroller.md) builds the one that tells them: the controller — the only writer of `vms/*`, placement stored with a reason, safe at two, never needed to recover — the console over it, the failure arithmetic measured, and a second subsystem through the same platform to prove the VMS is not special.

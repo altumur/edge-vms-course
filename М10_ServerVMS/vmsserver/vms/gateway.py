@@ -1,4 +1,4 @@
-"""The live gateway — the third subsystem's worker. A gateway is a worker in
+"""The live gateway — the second subsystem's worker. A gateway is a worker in
 the platform's sense (a slot claimed by CAS, an assignment read from the
 store, a heartbeat with capacity and headroom, count = N by demand) whose
 unit is a camera's live FAN-OUT: one subscription to the worker's RTP tee,

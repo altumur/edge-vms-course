@@ -98,7 +98,7 @@ console:
 # `SpecConsole` over the same controller (see `psimplatform/spec.py` and `console.py` for what each class
 # does with each section). Its header comment draws the line: "Everything the controller does for this
 # subsystem is here; the worker (vmsworker) is the part that knows what a camera is." Nothing in the file
-# says how a camera records. `tests/test_second_subsystem.py` proves the same classes run a counter from a
+# says how a camera records. `live.subsystem.yaml` and `det.subsystem.yaml` prove the same classes run two more subsystems from a
 # different dict.
 #
 # - `row: retention/{id}` — `vms/retention/<id>`, written on create and refreshed on update only when a

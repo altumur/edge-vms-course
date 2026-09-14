@@ -36,7 +36,7 @@ and the worker is the subsystem.
 # `SpecController` extends `contract.Controller` and adds units, placement, redistribution, rebalance, the
 # read model and the snapshot. `vms/controller.py` is this class with the VMS's spec and VMS names for the
 # methods; `vms/config.py` exposes `row()`/`items()`; `console.py` runs over the same spec.
-# `tests/test_second_subsystem.py` runs a counter through it with a different YAML.
+# `tests/test_lesson7_live.py` and `tests/test_lesson8_det.py` run two more subsystems through it from their own YAML.
 #
 # ## Module-level names
 # - `PLATFORM_FIELDS = ("worker", "placement", "epoch", "revision", "observed_revision", "phase", "id")` —
@@ -281,11 +281,11 @@ def _unit_key(u: str):
 
 
 # The only writer of `<name>/*`, from a spec. Holds nothing; two instances are harmless; never on the
-# recovery path. The VMS is one spec; a counter, a detector, are others — same code.
+# recovery path. The VMS is one spec; live and det are others — same code.
 class SpecController(Controller):
     """The only writer of <name>/*, from a spec. Holds nothing; two instances
-    are harmless; never on the recovery path. The VMS is one spec; a counter,
-    a detector, are others — same code."""
+    are harmless; never on the recovery path. The VMS is one spec; live and
+    det are others — same code."""
 
     # `capacity` is only the fallback for a worker whose heartbeat says nothing (defaults to the spec's).
     # `cluster` is the name the snapshot carries (`$CLUSTER`, else `cluster-a`); one box is a cluster of

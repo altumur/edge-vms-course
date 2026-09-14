@@ -6,7 +6,7 @@
                                      neither: the first free slot, a lapsed one first
     CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
-    GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the third subsystem's worker): WHEP on this port; the URL the console proxies to
+    GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the second subsystem's worker): WHEP on this port; the URL the console proxies to
     GATEWAY_NAME=g-1                 its slot (systemd: %i); CAPACITY here is viewers
     DET_NAME=d-1                     a detector worker's slot; CAPACITY here is streams; NOMAD_META_labels=gpu says where it is
 """
@@ -151,7 +151,7 @@ def controller() -> None:
 
 
 def livecontroller() -> None:
-    """The third subsystem's controller: the platform's class from live.subsystem.yaml, placing fan-outs on
+    """The second subsystem's controller: the platform's class from live.subsystem.yaml, placing fan-outs on
     gateways by viewer headroom. No code of its own."""
     from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
@@ -160,7 +160,7 @@ def livecontroller() -> None:
 
 
 def detcontroller() -> None:
-    """The fourth subsystem's controller: the platform's class from det.subsystem.yaml, placing models on
+    """The third subsystem's controller: the platform's class from det.subsystem.yaml, placing models on
     GPU-labelled detector workers by stream headroom. No code of its own."""
     from psimplatform.spec import SpecController
     from .config import DET_SPEC

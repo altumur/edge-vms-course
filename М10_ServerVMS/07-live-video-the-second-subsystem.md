@@ -1,4 +1,4 @@
-# Lesson 7 — Live Video: the Third Subsystem
+# Lesson 7 — Live Video: the Second Subsystem
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
 **You will build:** live video as a subsystem — `live.subsystem.yaml`, whose unit is a camera's fan-out and whose capacity is viewers; the gateway as a worker of it, subscribing to the worker's RTP tee once per camera and fanning out over WebRTC; the console's WHEP door; units created by the first viewer and deleted after the last; failover as the worker's.
@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-A person in front of a wall wants *now*, and "now" is per-frame, per-viewer work — DTLS handshakes, ICE, RTP pacing, a browser that stalls — none of which may run in the process that records. So live view is a fourth process, and the question the platform asks of any process is the one Lesson 5 asked of the counter: *what is its unit, and what is its capacity counted in?* Answering it is what makes live video a subsystem rather than a feature: the unit is a camera's fan-out, the capacity is viewers, and everything else — the controller, the console, placement, failover, scaling — is the platform's, already written.
+A person in front of a wall wants *now*, and "now" is per-frame, per-viewer work — DTLS handshakes, ICE, RTP pacing, a browser that stalls — none of which may run in the process that records. So live view is a fourth process, and the question the platform asks of any process is the one Lesson 5, Step 6 asks of anything that wants a controller: *what is its unit, and what is its capacity counted in?* Answering it is what makes live video a subsystem rather than a feature: the unit is a camera's fan-out, the capacity is viewers, and everything else — the controller, the console, placement, failover, scaling — is the platform's, already written.
 
 > **What you can verify without hardware.** `tests/test_lesson7_live.py`: the first viewer creating the unit and the controller placing it; fifty viewers on one subscription with the worker's heartbeat unchanged; the grace period and the gateway deleting its own unit; a dead gateway's fan-outs moved to the survivor and viewers reconnecting; placement by label; the two subsystems sharing the platform. The media path (`gstvms/webrtc.py`) needs `webrtcbin` and a browser: bench work.
 
@@ -29,7 +29,7 @@ A person in front of a wall wants *now*, and "now" is per-frame, per-viewer work
 
 ## Step 1 — The unit is a fan-out, the capacity is viewers
 
-The page plays what the resource holds, one segment at a time. A person in front of a wall wants *now*, and "now" is per-frame, per-viewer work — DTLS handshakes, ICE, RTP pacing, a browser that stalls — none of which may run in the process that records. So live view is a fourth process, and the question the platform asks of any process is the same: *what is its unit, and what is its capacity counted in?* The answer is what makes it a subsystem rather than a feature: **the unit is a camera's fan-out** — *camera 7 is being watched, from gateway g-2* — and **capacity is viewers**. `vms/live.subsystem.yaml` is that description, ten lines like the counter's: rows `streams`, named by the camera (`id: cam`), a `labels` field for where the viewers are (`public-address`), a `grace` in seconds, capacity and headroom from the heartbeat, `labels-subset`, the snapshot. The controller is `SpecController` run from it (`python3 -m vms livecontroller` — no code of its own); the console for it is `SpecConsole` over the same file.
+The page plays what the resource holds, one segment at a time. A person in front of a wall wants *now*, and "now" is per-frame, per-viewer work — DTLS handshakes, ICE, RTP pacing, a browser that stalls — none of which may run in the process that records. So live view is a fourth process, and the question the platform asks of any process is the same: *what is its unit, and what is its capacity counted in?* The answer is what makes it a subsystem rather than a feature: **the unit is a camera's fan-out** — *camera 7 is being watched, from gateway g-2* — and **capacity is viewers**. `vms/live.subsystem.yaml` is that description, ten lines like the VMS's: rows `streams`, named by the camera (`id: cam`), a `labels` field for where the viewers are (`public-address`), a `grace` in seconds, capacity and headroom from the heartbeat, `labels-subset`, the snapshot. The controller is `SpecController` run from it (`python3 -m vms livecontroller` — no code of its own); the console for it is `SpecConsole` over the same file.
 
 ## Step 2 — The gateway is a worker
 
@@ -90,4 +90,4 @@ What is real and what is a stand-in: signalling, placement, the fan-out arithmet
 
 ## Where this is going
 
-Two subsystems on the box read the same RTP: the gateway shows it to people, and [**Lesson 8**](08-detectors-the-fourth-subsystem.md) shows it to a model — a subsystem whose output is events, which is the case that proves events are a data shape and not a process.
+Two subsystems on the box read the same RTP: the gateway shows it to people, and [**Lesson 8**](08-detectors-the-third-subsystem.md) shows it to a model — a subsystem whose output is events, which is the case that proves events are a data shape and not a process.

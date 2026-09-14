@@ -22,7 +22,7 @@ what the slot held. A slot that merely lapses (a crash) is left alone: the
 scheduler brings the process back, and it claims the same slot.
 
 `Controller` and `Worker` are the two base classes. The platform never
-imports anything from a subsystem; tests/test_second_subsystem.py proves the
+imports anything from a subsystem; the live and det subsystems prove the
 shape is generic by running a subsystem that counts seconds through it.
 """
 # ================================================================================================
@@ -37,7 +37,7 @@ shape is generic by running a subsystem that counts seconds through it.
 # `<name>/epoch/<unit>` the workers take by CAS; an event log on the resource (`events.py`); and a slot
 # prefix `<name>/slots/<worker>` — identity by claim. It depends on `variables.py`, `objects.py` and
 # `epoch.py` and nothing else. `spec.SpecController` extends `Controller`; `vms.worker.VmsWorker` and the
-# counter worker in `tests/test_second_subsystem.py` extend `Worker`. The file's own docstring settles who
+# gateway (`vms/gateway.py`) and the detector (`vms/detector.py`) extend `Worker`. The file's own docstring settles who
 # decides how many workers there are: not the controller. The scheduler runs `count` of them; the platform's
 # part is to give those interchangeable processes stable names — the slots — so assignments survive a
 # reschedule. A slot released on an orderly stop is redistributed by the controller; a slot that merely
@@ -54,7 +54,7 @@ shape is generic by running a subsystem that counts seconds through it.
 #
 # ## Notes
 # - The tests enforce the boundary: `test_the_platform_knows_nothing_about_video` asserts no import from
-#   `vms/` and not the word "camera" in this file; `test_second_subsystem.py` runs a counter through the
+#   `vms/` and not the word "camera" in this file; `test_lesson7_live.py` and `test_lesson8_det.py` run two more subsystems through the
 #   same `Controller`/`Worker`.
 # - Ordering that matters: a worker claims its slot before reading its assignment (the name is the row key);
 #   it takes an epoch before writing anything for a unit; it renews slot and leases on a shorter period than
@@ -78,7 +78,7 @@ from .variables import Conflict, Variables
 
 # A name, and the key layout derived from it. Every path the platform touches for a subsystem is produced
 # here, so the layout is in one place.
-# - `name` — the prefix (`vms`, `counter`).
+# - `name` — the prefix (`vms`, `live`, `det`).
 @dataclass
 class Subsystem:
     name: str

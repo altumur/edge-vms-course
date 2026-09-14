@@ -1,4 +1,4 @@
-# Detectors, as the platform sees them: the FOURTH subsystem. Its unit is one
+# Detectors, as the platform sees them: the THIRD subsystem. Its unit is one
 # model on one camera — "line-crossing on camera 7" — named by the operator
 # from the camera's page (`7-linecross`); its workers are detector workers
 # (vms/detector.py) on GPU-labelled servers, capacity in STREAMS a GPU can
