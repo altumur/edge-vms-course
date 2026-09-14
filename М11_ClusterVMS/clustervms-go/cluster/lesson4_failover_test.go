@@ -54,6 +54,63 @@ func TestThePowerPull(t *testing.T) {
 	eq(t, ctl.Where(1), "w-1") // nothing was rewritten
 }
 
+func TestAServerGoneWithNowhereToRescheduleTheControllerMovesTheCameras(t *testing.T) {
+	// One worker per server (distinct_hosts), count = the archive servers: when
+	// srv-a dies there is no spare server for Nomad to put w-1 on, so nobody claims
+	// the slot. Two silences from one server — the slot lapsed and stayed lapsed for
+	// another lostAfter (Nomad's chance), and the resource on srv-a silent — are a
+	// fact about the server, and the controller moves w-1's cameras to the worker
+	// that is here. One silence — a crashed process, its resource still answering —
+	// moves nothing: that process returns under the same name.
+	c, ctl, a, actA := recording(t, 3)
+	rs := c.resources(nil)
+	actB := vms.NewFakeActuator()
+	b := c.worker(t, 2, "srv-b", 0, actB) // the other server's worker, idle
+	b.HeartbeatOnce()
+	eq(t, len(ctl.Assignment("w-2").Units), 0)
+	// a crash: w-1's process dies, srv-a's resource keeps heartbeating — Nomad restarts the process under the same name
+	c.Wall.Advance(2*lostAfter + 3)
+	b.HeartbeatOnce()
+	for _, r := range rs {
+		r.Heartbeat()
+	}
+	if !ctl.Slots()["w-1"].Lapsed(c.Wall.Now()) || len(ctl.GoneServers(45)) != 0 || len(ctl.Redistribute(nil)) != 0 { // one silence: left alone
+		t.Fatal("one silence")
+	}
+	// the power pull: srv-a is gone — its worker and its resource both silent; nothing can claim w-1 (distinct_hosts)
+	c.Wall.Advance(2*lostAfter + 3)
+	b.HeartbeatOnce()
+	rs["srv-b"].Heartbeat()
+	rs["srv-c"].Heartbeat()
+	eq(t, ctl.GoneServers(45), map[string]string{"w-1": "srv-a"})
+	moves := ctl.Redistribute(nil)
+	eq(t, len(moves), 3)
+	for _, m := range moves {
+		if m.From != "w-1" || m.To != "w-2" {
+			t.Fatal(m)
+		}
+	}
+	if r := ctl.Placement(1).Reason; !strings.HasPrefix(r, "server srv-a gone: slot w-1 lapsed and its resource silent; ") || !strings.HasSuffix(r, "; on srv-b") {
+		t.Fatal(r)
+	}
+	eq(t, b.ReconcileOnce(), actions("start 1", "start 2", "start 3")) // the next epoch, on srv-b
+	eq(t, actB.Epochs, map[int]int{1: 2, 2: 2, 3: 2})
+	b.HeartbeatOnce()
+	eq(t, len(ctl.Assignment("w-1").Units), 0)
+	eq(t, ctl.Where(1), "w-2")
+	// srv-a returns: its worker claims w-1 again, reads an empty assignment, records nothing; nothing moves back
+	rs["srv-a"].Heartbeat()
+	a2 := c.worker(t, 1, "srv-a", 0, nil)
+	a2.HeartbeatOnce()
+	eq(t, a2.Name, "w-1")
+	eq(t, len(a2.ReconcileOnce()), 0)
+	eq(t, len(ctl.Redistribute(nil)), 0)
+	eq(t, ctl.ResourceState("srv-a", 45), "live")
+	eq(t, ctl.Where(1), "w-2")                        // adding a place to record moves nothing
+	eq(t, actA.Epochs, map[int]int{1: 1, 2: 1, 3: 1}) // the fenced instance's footage is intact under e1; B's under e2
+	_ = a
+}
+
 func TestTheOldInstanceWakesUpAndTheArchiveIsIntact(t *testing.T) {
 	// Server A was not dead — partitioned, or paused. It comes back with w-1
 	// still running epoch 1. Its next renewal finds the slot held by B: fenced

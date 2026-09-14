@@ -478,6 +478,23 @@ class SpecController(Controller):
             return []
         return [w for w in workers if self.resource_state(self.server_of(w)) == "silent"]
 
+    # A server that is gone, not a process that crashed: the slot has lapsed and stayed lapsed for another
+    # `lost_after` — Nomad's chance to reschedule it onto a spare server, in which case the replacement
+    # claims the name and inherits the assignment (Lesson 4) — AND the resource on the slot's last known
+    # server is silent. One silence is a crash and is left alone; two independent silences from the same
+    # server are a fact about the server. Only when the spec requires a resource.
+    def gone_servers(self, lost_after: float = 45.0) -> dict[str, str]:
+        """Lapsed slots whose server's resource is silent too: {slot: server}."""
+        if self.spec.requires != "resource":
+            return {}
+        now = self.wall(); out = {}
+        for name, slot in self.slots().items():
+            if slot.lapsed(now) and now > slot.until + lost_after and self.assignment(name).units:
+                server = self.server_of(name)
+                if server != "?" and self.resource_state(server, lost_after) == "silent":
+                    out[name] = server
+        return out
+
     # The given list, or the workers seen heartbeating in the last 45 s; minus those whose resource is
     # silent when the spec requires one; sorted.
     def _pool(self, workers):
@@ -578,7 +595,10 @@ class SpecController(Controller):
     # The controller's one unasked move: for each released slot (scale-in, or `retire`) that still lists
     # units, move each to the live worker with the most free capacity; stop when the system is full (the
     # unit waits, listed where it was). A merely lapsed slot is not touched: that is a crash, and its
-    # process returns under the same name. `test_scale_in_releases_a_slot_and_the_controller_redistributes`:
+    # process returns under the same name. Two more cases when the spec requires a resource: a live worker
+    # whose server's resource went silent (it has nowhere to write), and a slot that lapsed AND whose
+    # server's resource is silent — the server is gone, and with one worker per server (`distinct_hosts`)
+    # nobody will claim that slot until the server returns; its units go to the workers that are here. `test_scale_in_releases_a_slot_and_the_controller_redistributes`:
     # a silent `w-3` moves nothing; after `release_slot()` its two cameras go to `w-1`/`w-2` with reason
     # `slot w-3 released; …`.
     def redistribute(self, workers: list[str] | None = None) -> list[tuple]:
@@ -595,6 +615,8 @@ class SpecController(Controller):
         for w in self.without_resource(seen):
             if self.assignment(w).units:
                 gone_for.setdefault(w, f"resource on {self.server_of(w)} silent")
+        for w, server in self.gone_servers().items():                  # the server is gone: its slot lapsed and its resource silent
+            gone_for.setdefault(w, f"server {server} gone: slot {w} lapsed and its resource silent")
         for gone, why in gone_for.items():
             live = [w for w in self._pool(workers) if w != gone]
             for unit in sorted(self.assignment(gone).units, key=_unit_key):

@@ -13,7 +13,7 @@ job "vmsworker" {
     scaling {
       enabled = true
       min     = 1
-      max     = 12                                   # the servers' budget: B + n·I from М9 Lesson 7
+      max     = 12                                   # ≤ the archive servers (distinct_hosts): the budget B + n·I from М9 Lesson 7 is per server
       policy {
         cooldown            = "5m"                   # longer than a failover, so a reschedule is not read as demand
         evaluation_interval = "1m"
@@ -29,6 +29,14 @@ job "vmsworker" {
     constraint {
       attribute = "${meta.archive}"
       operator  = "is_set"
+    }
+    # and one worker per server: a second worker on the same disks and NIC is no second place to record.
+    # So `count` ≤ the archive servers (scaling.max says the same), and when a server dies there is nowhere
+    # to reschedule its worker — the slot stays pending, and the CONTROLLER moves the cameras (two
+    # silences: the slot lapsed and the server's resource silent), rather than Nomad piling two workers on
+    # one server. Explicit, and visible in every placement reason.
+    constraint {
+      distinct_hosts = true
     }
 
     disconnect {                                     # Lesson 4: the defaults are wrong for a recorder

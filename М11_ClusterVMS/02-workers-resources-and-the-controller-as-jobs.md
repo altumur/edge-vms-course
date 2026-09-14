@@ -34,7 +34,7 @@ The other thing this lesson settles is a question М10 left open and answered la
 
 | Program | Quadlet unit on М9's box (М10) | Under Nomad | Why that shape |
 |---|---|---|---|
-| **`vmsworker`** | `vmsworker@.container`, `vmsworker@w-N` started by hand | `service`, `count = N`, `scaling {}`, `disconnect {}`, `kill_timeout = 20s` | movable; placed by constraint; N is the scheduler's |
+| **`vmsworker`** | `vmsworker@.container`, `vmsworker@w-N` started by hand | `service`, `count = N`, `scaling {}`, `disconnect {}`, `kill_timeout = 20s`, `distinct_hosts` | movable; placed by constraint, one per server; N ≤ the archive servers is the scheduler's |
 | **`resource`** — the platform's, with the VMS registered on it | `vmsresource.container` — the same process (М10 Lesson 9) | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the VMS's manifests and footage as *its* part |
 | **`vmscontroller`** | `vmscontroller.container` | `service`, `count = 1`, no port | one is economy, not correctness — CAS is the correctness, and a second would repeat the same pass; its token writes placement only (`vmscontroller-policy.hcl`) |
 | **`console`** | `vmsconsole.container` | `system`, port 8080 on every server, `constraint meta.archive is_set` (for marks) | a person is waiting on it, and any server's address is the console — no load balancer, nothing in front; stateless; a retry is answered the same by any instance (`vms/idem/*`); its token writes the operator's rows only (`console-policy.hcl`) — a console that could place would be a second controller with a browser in front |

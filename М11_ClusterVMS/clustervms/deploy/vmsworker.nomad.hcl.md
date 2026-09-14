@@ -22,6 +22,7 @@
 
 ### `constraint`
 - `attribute = "${meta.archive}"  operator = "is_set"` — the comment: a worker records into the resource on its own server, so only servers that have one.
+- `distinct_hosts = true` — one worker per server: a second worker on the same disks and NIC is no second place to record. So `count` ≤ the archive servers, and a dead server's worker stays pending rather than doubling up on a neighbour; the controller moves its cameras instead (`SpecController.gone_servers`, Lesson 4: the slot lapsed and the server's resource silent).
 
 ### `disconnect`
 Lesson 4 — the comment: the defaults are wrong for a worker.

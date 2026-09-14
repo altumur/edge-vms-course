@@ -104,6 +104,16 @@ The number comes from the workers, not from Nomad: the replacement reads the hea
 
 What the replacement did not do: ask the controller, read a published object, restore anything. It read raft and recorded.
 
+**When there is nowhere to reschedule.** The power pull above assumes a spare server: Nomad puts the replacement on srv-b. The worker job now says `constraint { distinct_hosts = true }` — one worker per server, because a second worker on the same disks and NIC is not a second place to record, and `scaling.max` is the number of archive servers — so on a two-server cluster with a worker on each, srv-a dying leaves `w-1` *pending*: no server may take it. Nobody claims the slot; the assignment sits under a name nobody holds; the cameras wait. The controller's rule for a lapsed slot is "leave it — that is a crash, and the process returns under the same name", and the rule is right for a crash. What tells a dead server from a crashed process is a second, independent silence from the same server: the resource job there has stopped heartbeating too. `gone_servers()` is that test — a slot lapsed *and* still unclaimed another `lost_after` later (Nomad's chance to reschedule it, if a server is free) *and* the resource on its last known server silent — and `redistribute()` moves its cameras to the workers that are here, with the reason `server srv-a gone: slot w-1 lapsed and its resource silent; most free capacity (…); on srv-b`. `w-2` takes the next epoch for each and records on srv-b. When srv-a returns, its worker claims `w-1` again, reads an empty assignment and records nothing; nothing moves back, because adding a place to record moves nothing, like adding a worker.
+
+```
+crash:      w-1 silent, srv-a's resource live      gone_servers() == {}          redistribute() moves nothing
+power pull: w-1 silent, srv-a's resource silent    gone_servers() == {w-1: srv-a}   3 cameras → w-2, epoch 2, on srv-b
+srv-a back: w-1 claimed, assignment empty          nothing moves back
+```
+
+`test_a_server_gone_with_nowhere_to_reschedule_the_controller_moves_the_cameras`. This is the one place the controller acts on a silence, and it acts on two of them, from different processes on the same box, after giving the scheduler first refusal; the record's *Scale-in* row — a lapsed slot is not touched — stands for one silence. The price of `distinct_hosts` is that the surviving worker must carry both servers' cameras: `capacity` is sized for that, and М9 Lesson 1's arithmetic says what it costs in retention. The gain is control: every camera's move is a placement row with a reason, a worker never shares disks with another, and the operator can read on `/servers` which server is gone and where its cameras went.
+
 ## Step 6 — The old instance wakes up
 
 Server A was not dead — partitioned, or paused. It comes back with `w-1` still running epoch 1 on three cameras. `test_the_old_instance_wakes_up_and_the_archive_is_intact`:
@@ -168,6 +178,7 @@ A drained worker leaves through `release_slot()` — so its slot is *released*, 
 - The RTO is measured from the workers' own heartbeats, worst of three, and the replacement asked nobody.
 - The old instance is fenced at the slot and at every epoch; its footage is kept, marked.
 - A reassignment loses the same lease and is not a zombie; a drain releases the slot and is not a crash.
+- One worker per server (`distinct_hosts`): a dead server's slot stays pending, and the controller — on two silences, the slot's and the resource's, after Nomad's chance — moves its cameras with a reason; one silence is a crash and moves nothing.
 
 ## Exercises
 

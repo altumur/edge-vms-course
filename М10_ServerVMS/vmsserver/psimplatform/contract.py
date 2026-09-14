@@ -320,7 +320,8 @@ class Controller:
         """An operator's statement that a slot is gone for good (the process
         that held it will not return). Marks it released; the subsystem's
         redistribution takes it from there. The controller never decides this
-        on its own from a silence."""
+        on its own from ONE silence — a subsystem that requires a resource may
+        act on two, the slot's and its server's resource's (spec.gone_servers)."""
         def mutate(items):
             s = Slot.from_items(worker, items)
             if s.released:

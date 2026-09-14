@@ -35,6 +35,40 @@ def test_the_power_pull():
     assert ctl.workers_seen()["w-1"].extra["server"] == "srv-b" and ctl.where(1) == "w-1"   # nothing was rewritten
 
 
+def test_a_server_gone_with_nowhere_to_reschedule_the_controller_moves_the_cameras():
+    """One worker per server (`distinct_hosts`), count = the archive servers: when
+    srv-a dies there is no spare server for Nomad to put w-1 on, so nobody claims
+    the slot. Two silences from one server — the slot lapsed and stayed lapsed for
+    another lost_after (Nomad's chance), and the resource on srv-a silent — are a
+    fact about the server, and the controller moves w-1's cameras to the worker
+    that is here. One silence — a crashed process, its resource still answering —
+    moves nothing: that process returns under the same name."""
+    from cluster.resource import cluster_resource
+    c, ctl, a, act_a = _recording()
+    rs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
+    for r in rs.values(): r.heartbeat()
+    act_b = FakeActuator(); b = c.worker(2, "srv-b", actuator=act_b); b.heartbeat_once()   # the other server's worker, idle
+    assert ctl.assignment("w-2").units == []
+    # a crash: w-1's process dies, srv-a's resource keeps heartbeating — Nomad restarts the process under the same name
+    c.wall.advance(2 * LOST_AFTER + 3); b.heartbeat_once(); rs["srv-a"].heartbeat(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    assert ctl.slots()["w-1"].lapsed(c.wall()) and ctl.gone_servers() == {} and ctl.redistribute() == []   # one silence: left alone
+    # the power pull: srv-a is gone — its worker and its resource both silent; nothing can claim w-1 (distinct_hosts)
+    c.wall.advance(2 * LOST_AFTER + 3); b.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    assert ctl.gone_servers() == {"w-1": "srv-a"}
+    moves = ctl.redistribute()
+    assert [(m[1], m[2]) for m in moves] == [("w-1", "w-2")] * 3
+    assert ctl.placement(1).reason.startswith("server srv-a gone: slot w-1 lapsed and its resource silent; ") and ctl.placement(1).reason.endswith("; on srv-b")
+    assert b.reconcile_once() == [("start", 1), ("start", 2), ("start", 3)] and act_b.epochs == {1: 2, 2: 2, 3: 2}   # the next epoch, on srv-b
+    b.heartbeat_once()
+    assert ctl.assignment("w-1").units == [] and ctl.where(1) == "w-2"
+    # srv-a returns: its worker claims w-1 again, reads an empty assignment, records nothing; nothing moves back
+    rs["srv-a"].heartbeat(); a2 = c.worker(1, "srv-a"); a2.heartbeat_once()
+    assert a2.name == "w-1" and a2.reconcile_once() == [] and ctl.redistribute() == []
+    assert ctl.resource_state("srv-a") == "live" and ctl.where(1) == "w-2"                   # adding a place to record moves nothing
+    # the fenced instance's footage is intact under e1; B's under e2 — the timeline says whose is whose
+    assert act_a.epochs == {1: 1, 2: 1, 3: 1}
+
+
 def test_the_old_instance_wakes_up_and_the_archive_is_intact():
     """Server A was not dead — partitioned, or paused. It comes back with w-1 still
     running epoch 1. Its next renewal finds the slot held by B: fenced at the slot,

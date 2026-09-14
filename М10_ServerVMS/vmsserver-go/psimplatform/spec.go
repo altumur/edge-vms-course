@@ -726,6 +726,31 @@ func (c *SpecController) WithoutResource(workers []string) []string {
 	return out
 }
 
+// GoneServers: lapsed slots whose server's resource is silent too —
+// {slot: server}. A server that is gone, not a process that crashed: the
+// slot lapsed and stayed lapsed for another lostAfter (Nomad's chance to
+// reschedule it onto a spare server, whose replacement would claim the name
+// and inherit the assignment) AND the resource on the slot's last known
+// server is silent. One silence is a crash and is left alone; two independent
+// silences from the same server are a fact about the server. Only when the
+// spec requires a resource.
+func (c *SpecController) GoneServers(lostAfter float64) map[string]string {
+	out := map[string]string{}
+	if c.Spec.Requires != "resource" {
+		return out
+	}
+	now := c.Wall()
+	for name, slot := range c.Slots() {
+		if slot.Lapsed(now) && now > slot.Until+lostAfter && len(c.Assignment(name).Units) > 0 {
+			server := c.ServerOf(name)
+			if server != "?" && c.ResourceState(server, lostAfter) == "silent" {
+				out[name] = server
+			}
+		}
+	}
+	return out
+}
+
 func (c *SpecController) seen(workers []string) []string {
 	if workers == nil {
 		for w := range c.WorkersSeen(45) {
@@ -873,8 +898,10 @@ func (c *SpecController) MoveTo(uid, to, reason string) (Placement, error) {
 
 // Redistribute is the controller's one unasked move: a slot that was
 // RELEASED still lists units — and, when the spec requires a resource, a live
-// worker whose server's resource went silent: it heartbeats, but it has
-// nowhere to write. Move their units to the workers that are here.
+// worker whose server's resource went silent (it heartbeats, but it has
+// nowhere to write), and a slot that lapsed AND whose server's resource is
+// silent (the server is gone; with one worker per server nobody will claim
+// that slot until it returns). Move their units to the workers that are here.
 func (c *SpecController) Redistribute(workers []string) []Move {
 	c.UnplaceDeleted()
 	moves := []Move{}
@@ -887,6 +914,15 @@ func (c *SpecController) Redistribute(workers []string) []Move {
 		if len(c.Assignment(w).Units) > 0 {
 			gones = append(gones, gone{w, "resource on " + c.ServerOf(w) + " silent"})
 		}
+	}
+	gs := c.GoneServers(45) // the server is gone: its slot lapsed and its resource silent
+	var gnames []string
+	for w := range gs {
+		gnames = append(gnames, w)
+	}
+	sort.Strings(gnames)
+	for _, w := range gnames {
+		gones = append(gones, gone{w, "server " + gs[w] + " gone: slot " + w + " lapsed and its resource silent"})
 	}
 	for _, g := range gones {
 		var live []string
