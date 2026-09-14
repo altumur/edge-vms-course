@@ -96,7 +96,7 @@ This is deliberate and follows the course's existing discipline — `camera_sim.
 
 ### М9 — EdgeVMS, Lessons 5–9: Postgres and the worker · [written](./М9_EdgeVMS/README.md)
 
-*Folded into М9 on 12 September 2026: the recorder's five lessons follow the appliance's four, so one module carries the box from an A/B root to a database that owns what the box should be. The design brief is [`recorder-design.md`](./М9_EdgeVMS/recorder-design.md).*
+*Folded into М9 on 12 September 2026: the recorder's five lessons follow the appliance's four, so one module carries the box from an A/B root to a database that owns what the box should be. The design brief is Part 2 of [`module-design.md`](./М9_EdgeVMS/module-design.md).*
 
 The cloud VMS spec forbade a database outright. The appliance needs one, and understanding *why the answer flipped* is half the module: in the cloud, KVS held the configuration; on-prem, the box holds it. The other half is that a row saying a camera should be recording is a wish until something makes it true.
 

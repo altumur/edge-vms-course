@@ -2,7 +2,7 @@
 
 The cloud VMS from [Module 8](../М8_KVS_VMS/README.md) runs on a computer somebody administers. This module turns it into one that nobody does — a box in a ceiling void that updates itself over a network, recovers from its own bad updates, and keeps recording when the link goes down.
 
-Nine lessons, one box, in two halves. **Lessons 1–4** ship the VMS as an appliance: an A/B root under RAUC, rollback decided by a health check, Podman under Quadlet, and a spool that survives the uplink. **Lessons 5–9** make the box own its truth: a database holding what it should be, a reconcile loop making it so, fifty pipelines in one process, failure as the feature, and the console — the design that [М11](../М11_ClusterVMS/README.md) puts under a scheduler. The design briefs are [`module-design.md`](module-design.md) for the appliance and [`recorder-design.md`](recorder-design.md) for the recorder.
+Nine lessons, one box, in two halves. **Lessons 1–4** ship the VMS as an appliance: an A/B root under RAUC, rollback decided by a health check, Podman under Quadlet, and a spool that survives the uplink. **Lessons 5–9** make the box own its truth: a database holding what it should be, a reconcile loop making it so, fifty pipelines in one process, failure as the feature, and the console — the design that [М11](../М11_ClusterVMS/README.md) puts under a scheduler. The design brief is [`module-design.md`](module-design.md), in two parts — the appliance, then the recorder.
 
 ## The thesis
 
@@ -142,4 +142,4 @@ Everything in this module holds because there is exactly one box — one writer,
 
 **М9 has no desired state.** You flash an image and containers run; actual state is the only state there is, and this module's entire job is making that replaceable safely.
 
-[**М9 — Recorder**](../М9_EdgeVMS/recorder-design.md) introduces the wish: a row saying a camera *should* be recording, and a loop that closes the gap. Its first act is to put an index over the segments Lesson 4 started writing — turning a spool into an archive.
+[**Part 2 of this module**](module-design.md#part-2--the-recorder-lessons-59) introduces the wish: a row saying a camera *should* be recording, and a loop that closes the gap. Its first act is to put an index over the segments Lesson 4 started writing — turning a spool into an archive.

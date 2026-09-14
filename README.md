@@ -101,7 +101,7 @@ The same lesson has the module's other sharp edge. **Pull the network cable for 
 *The multi-node half of this module moved to М11, where recorders are scheduled across servers. A module called EdgeVMS should not build a raft cluster.*
 
 - [Lesson index](./М9_EdgeVMS/README.md) — start here
-- [Module design](./М9_EdgeVMS/module-design.md) — lesson plan, partition layout, verification strategy, ARM porting appendix
+- [Module design](./М9_EdgeVMS/module-design.md) — both halves in one record: the two update planes, the partition layout and the ARM appendix; then the recorder's lesson plan, the Python shard model, and what the operator is never asked to decide
 - [RAUC alternatives](./М9_EdgeVMS/rauc-alternatives.md) — SWUpdate, Mender, bootc, systemd-sysupdate, and where each wins
 - [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's artifacts, whole: the bench, the PKI, RAUC config and bundle builder, the GRUB state machine, the health check (now reading the recorder's own signal), Quadlet units, the spool
 - [One container per camera?](./М9_EdgeVMS/worker-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle
@@ -112,7 +112,6 @@ Both reach the same shape of conclusion, as does the orchestrator record now fil
 
 Its organising rule is that **desired state is persisted and actual state is derived** — persist the second and you have built a cache that lies. It is also where the process model from М9's decision record gets built: fifty GStreamer pipelines in one Python process, with the GIL boundary demonstrated rather than asserted.
 
-- [recorder design](./М9_EdgeVMS/recorder-design.md) — lesson plan, the Python shard model, and what the operator is never asked to decide
 - [`reference/shard-memory-probe.py`](./М9_EdgeVMS/reference/shard-memory-probe.py) — measures what sharding actually saves, in PSS rather than RSS
 - [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's one project: the box (bench, PKI, RAUC, GRUB, health, Quadlet, spool) and, under [`edgevms/recorder/`](./М9_EdgeVMS/edgevms/recorder/README.md), the recorder that runs on it — migrations, reconciler, GStreamer actuator, retention, console, tests
 
