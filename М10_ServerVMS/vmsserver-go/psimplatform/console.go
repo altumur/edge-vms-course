@@ -351,6 +351,62 @@ func (c *SpecConsole) WhereScanned(uid string) string {
 	return strings.Join(hits, "+") // a reassignment window shows as both
 }
 
+// Servers: every server this subsystem runs on, as placement sees it — the
+// archive its workers say they record into (on a cluster Nomad's meta.archive,
+// the label the scheduler placed by), its resource's state (the fact), its
+// workers with load and capacity, and whether the controller would place
+// there now, with the reason when it would not.
+func (c *SpecConsole) Servers() map[string]any {
+	type srv struct {
+		archive string
+		workers []map[string]any
+	}
+	now := c.O.Wall()
+	seen := map[string]*srv{}
+	for w, hb := range Heartbeats(c.Ctl.Objects, c.Spec.Name+"/") {
+		name := hb.ExtraString("server", "?")
+		s, ok := seen[name]
+		if !ok {
+			s = &srv{}
+			seen[name] = s
+		}
+		if a := hb.ExtraString("archive", ""); a != "" {
+			s.archive = a
+		}
+		state := "live"
+		if now-hb.Ts > c.O.LostAfter {
+			state = "stale"
+		}
+		s.workers = append(s.workers, map[string]any{"worker": w, "load": c.Ctl.Load(w), "capacity": c.Ctl.CapacityOf(w),
+			"labels": hb.ExtraString("labels", ""), "state": state})
+	}
+	for name := range ResourcesSeen(c.Ctl.Objects) {
+		if _, ok := seen[name]; !ok {
+			seen[name] = &srv{}
+		}
+	}
+	out := map[string]any{}
+	for name, s := range seen {
+		sort.Slice(s.workers, func(i, j int) bool { return s.workers[i]["worker"].(string) < s.workers[j]["worker"].(string) })
+		res := c.Ctl.ResourceState(name, c.O.LostAfter)
+		req := c.Spec.Requires == "resource"
+		placeable := !(req && res == "silent")
+		var why any
+		if !placeable {
+			why = "resource on " + name + " silent"
+		}
+		var archive any
+		if s.archive != "" {
+			archive = s.archive
+		}
+		if s.workers == nil {
+			s.workers = []map[string]any{}
+		}
+		out[name] = map[string]any{"archive": archive, "resource": res, "workers": s.workers, "requires_resource": req, "placeable": placeable, "why": why}
+	}
+	return out
+}
+
 func (c *SpecConsole) MetricsText() string {
 	p, s := c.Spec.Name, c.Spec
 	hbs := Heartbeats(c.Ctl.Objects, p+"/")
@@ -538,6 +594,8 @@ func (c *SpecConsole) Handler() http.Handler {
 					body["worker"], body["reason"], st = pl.Worker, pl.Reason, 200
 				}
 				SendJSON(w, st, body)
+			case path == "/servers":
+				SendJSON(w, 200, c.Servers())
 			case path == "/resources":
 				now := c.O.Wall()
 				out := map[string]any{}

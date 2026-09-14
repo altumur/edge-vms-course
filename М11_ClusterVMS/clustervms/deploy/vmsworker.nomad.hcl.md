@@ -39,6 +39,7 @@ Lesson 4 — the comment: the defaults are wrong for a worker.
 - `config.args = ["python3", "-m", "cluster", "worker"]` — the `worker` verb.
 - `config.volumes = ["/data/spool:/data/spool", "/data/archive:/data/archive", "/data/media:/data/media"]` — the spool `archivesink` writes, the archive it promotes into (the resource's tree on this server), and the media files `driverpack://file/<name>` plays. Unlike М10's unit, `/data/media` is not `:ro` here.
 - `env.OBJECTS = "variables://objects"` — heartbeats as Variables; the comment says no MinIO on this cluster.
+- `env.ARCHIVE = "${meta.archive}"` — the label the `constraint` above placed by, interpolated into the worker's environment: it records there (`VmsWorker.archive_root`) and reports it in its heartbeat as `archive`, so the console's `/servers` shows the label beside the fact (the resource heartbeat).
 - `env.CAPACITY = "50"` — the comment: this server's number (cameras it can carry), per node class in a product. The worker reports it in its heartbeat and the controller places by that report, not by this file.
 - `resources { cpu = 2000  memory = 2048 }` — the comment: B + n·I, rounded up — 2 GHz and 2 GB for 50 cameras' pipelines.
 

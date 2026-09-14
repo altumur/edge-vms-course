@@ -169,6 +169,15 @@ func TestAWorkerRunsWhereAResourceAnswersAndLeavesWhenItStops(t *testing.T) {
 	if r := ctl.Placement(a.ID).Reason; !strings.HasPrefix(r, "resource on srv-a silent; ") || !strings.HasSuffix(r, "; on srv-b") {
 		t.Fatal(r)
 	}
+	// the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
+	sv := cluster.NewConsole(ctl, cluster.ConsoleOptions{}).Servers()
+	sa, sb := sv["srv-a"].(map[string]any), sv["srv-b"].(map[string]any)
+	if sa["resource"] != "silent" || sa["placeable"] != false || sa["why"] != "resource on srv-a silent" || sa["archive"] != "/data/archive" {
+		t.Fatal(sa)
+	}
+	if sb["resource"] != "live" || sb["placeable"] != true || sb["workers"].([]map[string]any)[0]["worker"] != "w-1" {
+		t.Fatal(sb)
+	}
 	x := c.create(t, ctl, map[string]any{"source": "driverpack://file/x.mp4", "labels": []any{"vlan:cctv-a"}})
 	pl, _ := ctl.Place(x.ID, nil)
 	eq(t, pl.Worker, "w-1") // never w-0 while srv-a's resource is silent

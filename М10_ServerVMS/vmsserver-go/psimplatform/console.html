@@ -42,8 +42,10 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
         - `#addbox` / `#addlabel` — a collapsible "Add" section containing form `#add` with `#addfields`
       (inputs generated from the spec), a submit button, `#addnote` (how the id is made) and `#adderr`.
   - `#status` — "N workers live · M <running gauge>" from `/metrics`.
-  - `#resources` — one line per resource from `/resources`: server, live/silent, its subsystems' unit counts;
-    and what this process fronts, from `/mounts`.
+  - `#servers` — one line per server from `/servers`: the archive its workers record into (on a cluster
+    Nomad's `meta.archive`, the label the scheduler placed by), its resource (`live`, `silent`, `unknown` —
+    the fact), its workers with load/capacity, and *not placeable: …* in red when the controller would not
+    place there now; then what this process fronts, from `/mounts`.
 - `main`
   - `#title` — the selected unit's label, or "Pick one".
   - `#meta` — phase · worker · server · epoch · placement reason · "last known state" when stale.
@@ -92,7 +94,7 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
 - `GET /timeline/<id>?from&to`, `GET /segment/<path>[?server=]` — only when `spec.media`; registered by the
   subsystem.
 - `GET /events?from&to&cam=<id>` — the resources' event databases, merged by the console, tolerated when absent;
-  `POST /marks` — the operator's event; `GET /resources`, `GET /mounts` — the read model's shape.
+  `POST /marks` — the operator's event; `GET /servers`, `GET /mounts` — the servers as placement sees them, and what this process fronts.
 
 ## Notes
 - The page never sends `worker`, `epoch`, `revision`, `phase` or `id` — the inputs are generated only from
@@ -133,7 +135,11 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
   #livefeed { display:none; margin-top:6px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; max-height:18vh; overflow:auto; }
   #livefeed .ev { padding:2px 0; } #livefeed .ev:first-child { font-weight:600; }
   select { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--fg); }
-  #resources { color:var(--muted); font-size:12px; margin-top:8px; white-space:pre-line; }
+  #servers { font-size:12px; margin-top:8px; }
+  #servers .srv { padding:4px 0; border-top:1px solid var(--line); }
+  #servers .srv small { color:var(--muted); display:block; }
+  #servers .bad { color:var(--stale); }
+  #mounts { color:var(--muted); font-size:12px; margin-top:6px; }
   #axis { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
   video { width:100%; max-height:60vh; background:#000; border-radius:6px; margin-top:8px; }
   #note { color:var(--stale); }
@@ -159,7 +165,8 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
     </form>
   </details>
   <div id="status"></div>
-  <div id="resources"></div>
+  <div id="servers"></div>
+  <div id="mounts"></div>
 </aside>
 <main>
   <h1 id="title">Pick one</h1>
@@ -566,22 +573,26 @@ $('#detadd').onsubmit = async e => {
   try { await send('POST', '/det/units', { name: `${current}-${f.kind}`, cam: String(current), kind: f.kind, params: f.params || '' }); e.target.reset(); loadDets(); }
   catch (err) { $('#deterr').textContent = 'refused: ' + err.message; }
 };
-// -- the read model's shape: the resources this console sees, and what this process fronts -----------
-// `GET /resources` → one line per server: live/silent, and its subsystems' unit counts (what the resource's
-// database holds); `GET /mounts` → the subsystems this process fronts under their names.
+// -- the servers, as placement sees them -------------------------------------------------------------
+// `GET /servers` → one block per server: `archive` (what its workers say they record into — on a cluster the
+// value of Nomad's `meta.archive`, i.e. the label the scheduler's constraint placed by), `resource` (the
+// fact: the resource job's heartbeat — live / silent / unknown), the workers with load/capacity, and
+// `placeable` with `why` when the controller would not place there now. Then `GET /mounts`: what this
+// process fronts.
 async function loadResources() {
-  const lines = [];
+  const box = $('#servers'); box.innerHTML = '';
   try {
-    const rs = await (await fetch('/resources')).json();
-    for (const [srv, hb] of Object.entries(rs)) {
-      const units = Object.entries(hb.units || {}).map(([s, u]) => `${s} ${u.length}`).join(', ');
-      const mirrors = Object.keys(hb.mirrors || {}).length ? ` · copies of ${Object.keys(hb.mirrors).join(', ')}` : '';
-      lines.push(`resource ${srv}: ${hb.state}${units ? ' · ' + units : ''}${mirrors}`);
+    const sv = await (await fetch('/servers')).json();
+    for (const [name, s] of Object.entries(sv)) {
+      const el = document.createElement('div'); el.className = 'srv';
+      const ws = s.workers.map(w => `${w.worker} ${w.load}/${w.capacity}${w.state === 'stale' ? ' (stale)' : ''}`).join(', ') || 'no workers';
+      el.innerHTML = `<strong>${name}</strong> <small>archive ${s.archive || '—'} · resource <span class="${s.resource === 'silent' ? 'bad' : ''}">${s.resource}</span></small>` +
+                     `<small>${ws}</small>` + (s.placeable ? '' : `<small class="bad">not placeable: ${s.why}</small>`);
+      box.appendChild(el);
     }
-    if (!lines.length) lines.push('no resource heartbeats yet');
+    if (!Object.keys(sv).length) box.textContent = 'no servers yet';
   } catch (_) {}
-  try { const m = await (await fetch('/mounts')).json(); const names = Object.keys(m.mounts || {}); if (names.length) lines.push(`fronts ${m.root} at / and ${names.map(n => n + ' at /' + n + '/').join(', ')}`); } catch (_) {}
-  $('#resources').textContent = lines.join('\n');
+  try { const m = await (await fetch('/mounts')).json(); const names = Object.keys(m.mounts || {}); $('#mounts').textContent = names.length ? `fronts ${m.root} at / and ${names.map(n => n + ' at /' + n + '/').join(', ')}` : ''; } catch (_) {}
 }
 window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };

@@ -74,7 +74,7 @@ def test_three_subsystems_events_reach_one_timeline_through_the_resource_process
         assert ev[0]["unit"] == "1-linecross" and ev[0]["pass"] == 3 and ev[0]["epoch"] == 1 and ev[1]["user"] == "murat"
         # the page shows all of it: the events under the timeline, the live feed beside the picture, the Mark button
         page = urllib.request.urlopen(base + "/").read().decode()
-        assert 'id="events"' in page and 'id="livefeed"' in page and "/marks" in page and "/resources" in page
+        assert 'id="events"' in page and 'id="livefeed"' in page and "/marks" in page and "/servers" in page
         # the same answer under the mount: /det/events fences by det's epochs too
         assert call(base, "GET", "/det/events?cam=1&subsystem=det")[1]["events"][0]["kind"] == "linecross"
         # an open bucket keeps growing: the next event is picked up by the next tail, not left for a rebuild

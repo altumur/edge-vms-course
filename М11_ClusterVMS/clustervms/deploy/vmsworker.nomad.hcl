@@ -31,7 +31,7 @@ job "vmsworker" {
       operator  = "is_set"
     }
 
-    disconnect {                                     # Lesson 4: the defaults are wrong for a worker
+    disconnect {                                     # Lesson 4: the defaults are wrong for a recorder
       lost_after           = "45s"
       replace              = true
       stop_on_client_after = "25s"                   # the holder stops at TTL − margin on its own clock anyway
@@ -51,7 +51,8 @@ job "vmsworker" {
       env {
         OBJECTS   = "variables://objects"          # heartbeats and the snapshot as Variables; no MinIO on this cluster
         CAPACITY  = "50"                             # this server's number; per node class in a product
-      }
+        ARCHIVE   = "${meta.archive}"                # the label the constraint above placed by, handed to the worker: it records there,
+      }                                              # and reports it in its heartbeat — the console's /servers shows the label beside the fact
       resources { cpu = 2000  memory = 2048 }        # B + n·I, rounded up
     }
   }

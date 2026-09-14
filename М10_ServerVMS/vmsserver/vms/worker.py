@@ -388,7 +388,8 @@ class VmsWorker(Worker):
 
     # `Worker.heartbeat(status, …)` to the object `vms/<name>/heartbeat` with the extras the platform reads
     # by name: `server`, `instance`, `alloc`, `labels` (comma-joined), `assignment_rev`, `fenced`,
-    # `conflicts`, `passes`, `capacity`, `headroom`, `started`, `previous_hb`, `previous_instance`. The
+    # `conflicts`, `passes`, `capacity`, `headroom`, `started`, `previous_hb`, `previous_instance`, `archive`
+    # (the resource root it records into — on a cluster the value of Nomad's `meta.archive`, via `$ARCHIVE`). The
     # controller's `capacity_of`, `labels_of`, `server_of`, `headroom`, `failover_seconds` and the console's
     # metrics all read from here.
     def heartbeat_once(self) -> None:
@@ -396,7 +397,8 @@ class VmsWorker(Worker):
                        labels=",".join(self.labels), assignment_rev=self.assignment_rev,
                        fenced=not self.recording_allowed, conflicts=self.conflicts(), passes=self.passes,
                        capacity=self.capacity, headroom=self.headroom(), started=self._started_wall,
-                       previous_hb=self.previous_hb, previous_instance=self.previous_instance)
+                       previous_hb=self.previous_hb, previous_instance=self.previous_instance,
+                       archive=self.archive_root)                                    # where it records: on a cluster, Nomad's meta.archive, through $ARCHIVE
 
     # The loop as a process. Every `poll` seconds: `reconcile_once`, `pump_once`, `lease_pass` every `max(1,
     # (lease_ttl − lease_margin)/3)` s (≈8.3 s by default, well inside the 25 s the lease allows),

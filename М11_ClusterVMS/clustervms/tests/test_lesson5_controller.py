@@ -95,6 +95,12 @@ def test_a_worker_runs_where_a_resource_answers_and_leaves_when_it_stops():
     assert sorted(m[1] for m in moves) == ["w-0"] * len(on_a) and all(m[2] == "w-1" for m in moves)   # off srv-a, onto srv-b (cctv-a reaches it; srv-c cannot)
     assert ctl.assignment("w-0").units == [] and ctl.placement(a).reason.startswith("resource on srv-a silent; ")
     assert ctl.placement(a).reason.endswith("; on srv-b")
+    # the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
+    from cluster.console import make_console
+    sv = make_console(ctl).servers()
+    assert sv["srv-a"]["resource"] == "silent" and sv["srv-a"]["placeable"] is False and sv["srv-a"]["why"] == "resource on srv-a silent"
+    assert sv["srv-b"]["resource"] == "live" and sv["srv-b"]["placeable"] is True and [w["worker"] for w in sv["srv-b"]["workers"]] == ["w-1"]
+    assert sv["srv-a"]["archive"] == "/data/archive"                                                # the worker's $ARCHIVE — Nomad's meta.archive on a cluster
     x = ctl.create_camera({"source": "driverpack://file/x.mp4", "labels": ["vlan:cctv-a"]})["id"]
     assert ctl.place(x).worker == "w-1"                                                            # never w-0 while srv-a's resource is silent
     assert ctl.unplaceable() == []                                                                 # srv-b reaches cctv-a too; nothing waits

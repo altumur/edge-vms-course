@@ -10,6 +10,7 @@ show them. So the console is one class, run from the same spec:
     GET  /where/<id>             the stored placement (why) and the assignments' answer (where, one scan)
     GET  /resources              the platform's resources: usage, units, live | silent
     GET  /unplaceable            units nothing live can serve, with the labels that say why
+    GET  /servers                every server as placement sees it: its archive (the label), its resource (the fact), its workers, placeable or why not
     GET  /events?from&to&unit&kind&subsystem   the resources' event databases, merged (MergedIndex), fenced by every subsystem's epochs
     GET  /metrics                <name>_workers_live · <name>_worker_headroom{worker,server} · <name>_worker_load ·
                                  <name>_epoch_conflicts · <name>_failover_seconds{kind="worst"} · <name>_resources_live ·
@@ -256,6 +257,30 @@ class SpecConsole:
     # `<p>_failover_seconds{kind="worst"}`; `<p>_resources_live`; and `<p>_<running_gauge>` — the count of
     # status entries in phase `running` on live workers (`vms_cameras_recording`). The page reads two of
     # these for its status line.
+    # The servers this subsystem runs on, as the placement sees them: every server a worker heartbeats from
+    # or a resource heartbeats from — the archive root its workers say they record into (on a cluster the
+    # value of Nomad's `meta.archive`, the label the scheduler placed by), the state of its resource (`live`,
+    # `silent`, `unknown`), its workers with load and capacity, and whether the controller would place
+    # there now, with the reason when it would not.
+    def servers(self) -> dict:
+        ctl, now = self.ctl, self.wall()
+        out: dict[str, dict] = {}
+        for w, hb in heartbeats(ctl.objects, ctl.sub.name + "/").items():
+            s = out.setdefault(hb.extra.get("server", "?"), {"archive": None, "resource": "unknown", "workers": []})
+            if hb.extra.get("archive"):
+                s["archive"] = hb.extra["archive"]
+            s["workers"].append({"worker": w, "load": ctl.load(w), "capacity": ctl.capacity_of(w), "labels": hb.extra.get("labels", ""),
+                                 "state": "live" if now - hb.ts <= self.lost_after else "stale"})
+        for server in resources_seen(ctl.objects):
+            out.setdefault(server, {"archive": None, "resource": "unknown", "workers": []})
+        for server, s in out.items():
+            s["resource"] = ctl.resource_state(server, self.lost_after)
+            s["requires_resource"] = ctl.spec.requires == "resource"
+            s["placeable"] = not (s["requires_resource"] and s["resource"] == "silent")
+            s["why"] = f"resource on {server} silent" if not s["placeable"] else None
+            s["workers"].sort(key=lambda x: x["worker"])
+        return dict(sorted(out.items()))
+
     def metrics_text(self) -> str:
         p = self.spec.name
         hbs = heartbeats(self.ctl.objects, p + "/"); now = self.wall()
@@ -338,6 +363,8 @@ class SpecConsole:
     #         - `GET /where/<id>` — `{worker, reason}` from the stored placement (404 with nulls if
     #       unplaced), plus `directory` (the assignments' answer) and `scans`.
     #   - `GET /resources` — every resource heartbeat with `state: live | silent` by `lost_after`.
+    #   - `GET /servers` — `servers()`: per server, `archive` (what its workers record into — Nomad's `meta.archive`
+    #     on a cluster), `resource` (`live | silent | unknown`), `workers`, `placeable` and `why`.
     #   - `GET /unplaceable` — `ctl.unplaceable()`.
     #         - `GET /events?from&to&cam|unit&kind&subsystem` — 503 if no index; else builds
     #       `current_epochs` from every `<sub>/epoch/*` row and calls `index.query`. A numeric `unit` is
@@ -415,6 +442,8 @@ class SpecConsole:
                 now = con.wall()
                 return h._send(200, {s: {**hb, "state": "live" if now - float(hb["ts"]) <= con.lost_after else "silent"}
                                      for s, hb in resources_seen(ctl.objects).items()})
+            if path == "/servers":
+                return h._send(200, con.servers())
             if path == "/unplaceable":
                 return h._send(200, ctl.unplaceable())
             if path == "/events":

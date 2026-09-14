@@ -414,7 +414,8 @@ func (w *VmsWorker) HeartbeatExtra() map[string]any {
 	return map[string]any{"server": w.Server, "instance": w.Instance, "alloc": w.Alloc, "labels": strings.Join(w.Labels, ","),
 		"assignment_rev": w.AssignmentRev, "fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
 		"capacity": w.Capacity, "headroom": w.Headroom(), "started": w.StartedWall,
-		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance}
+		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance,
+		"archive": w.ArchiveRoot} // where it records: on a cluster, Nomad's meta.archive, through $ARCHIVE
 }
 
 func (w *VmsWorker) HeartbeatOnce() error {
