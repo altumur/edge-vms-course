@@ -10,7 +10,7 @@ Somebody has to write configuration, and the module's answer is: exactly one thi
 
 It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on making the controller a description rather than a program — the YAML that Lessons 7 and 8 will reuse for two more subsystems without writing a controller for either.
 
-> **What you can verify without hardware.** All of it: `tests/test_lesson5_controller.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock, and the counter subsystem. Every output below came out of them.
+> **What you can verify without hardware.** All of it: `tests/test_lesson5_controller.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock. Every output below came out of them.
 
 ## Prerequisites
 
