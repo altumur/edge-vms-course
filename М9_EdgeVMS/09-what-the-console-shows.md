@@ -1,18 +1,14 @@
-# Lesson 9 — What the Console Shows, and What Python Stops Being Right For
+# Lesson 9 — What the Console Shows
 
 **Module:** EdgeVMS — the box owns its truth (Module 9)
-**You will build:** the operator's view — one query answering *is this camera actually recording?* — behind a login; and a written argument for the production language split.
-**Time:** ~120 minutes.
+**You will build:** the operator's view — one query answering *is this camera actually recording?* — behind a login; and the honest note on why the page itself waits for М10.
+**Time:** ~90 minutes.
 
 ## Why this lesson exists
 
-Two things close this module, and they are less unrelated than they look.
+One thing closes this module: everything built so far is invisible. The recorder converges, survives four kinds of failure, and the only way to see any of it is `psql`. A console is not decoration: it is where the desired/actual distinction stops being an architecture diagram and becomes something an operator can act on — or, done badly, a screen that shows amber for both "changed 300 ms ago" and "broken since Tuesday".
 
-The first is that everything built so far is invisible. The recorder converges, survives four kinds of failure, and the only way to see any of it is `psql`. A console is not decoration: it is where the desired/actual distinction stops being an architecture diagram and becomes something an operator can act on — or, done badly, a screen that shows amber for both "changed 300 ms ago" and "broken since Tuesday".
-
-The second is the question you should be asking by now. Fifty pipelines in Python worked. Does that mean the product should ship in Python? **No** — and the interesting part is precisely which parts change, because it turns out to be a much smaller set than "the slow ones", and the reconcile loop you wrote by hand is not in it.
-
-> **What you can verify without hardware.** The query, the login and the status vocabulary run against Postgres and need nothing else. The rewrite argument is a decision record — sourced from the binding projects' own documentation, and marked where it is a judgement rather than a fact.
+> **What you can verify without hardware.** The query, the login and the status vocabulary run against Postgres and need nothing else.
 
 ## Prerequisites
 
@@ -26,7 +22,7 @@ The second is the question you should be asking by now. Fifty pipelines in Pytho
 2. Keep **positions** and **reasons** on separate axes, and say why merging them is a design error with a documented precedent.
 3. Put a login in front of the console and mark it honestly as temporary.
 4. State what an operator is never asked to decide, and the four places physics leaks anyway.
-5. Argue the production language split from evidence, and identify what a rewrite would *not* touch.
+5. Say what the console does not show yet, and why the page waits for М10.
 
 ---
 
@@ -169,63 +165,13 @@ None of the four bites in this module — one recorder, one server. All four bit
 
 **Write the list down as a deliverable.** "Every decision the operator is never asked to make" is a one-page document, and it is the most useful page in a product specification, because every entry is a support call that will not happen and a form field that does not exist.
 
-## Step 5 — What Python stops being right for
+## Step 5 — The screen you do not get yet
 
-The design is proven. Now be honest about the language.
+Everything in this lesson is an API: `/status`, `/timeline?camera_id&start&end`, `/events`, behind `/login`. There is no page. М8 had one — the timeline and the player — but it knows exactly one stream by name and has never heard of a camera list, and this module deliberately does not bolt it on. The reason is where the footage is. Here it lives in two places at once: the closed segments still in the spool, and everything the uploader has already handed to Kinesis. A page that played "this span" would need a `/segment` route over the spool *and* М8's HLS session against KVS, and a column saying which stream a camera uploads to — a lesson and a half of plumbing for an arrangement the next module removes.
 
-Three things end Python's case for the *product*, and none of them is "Python is slow":
+So the screen arrives in [М10 Lesson 5](../М10_ServerVMS/05-vmscontroller-and-the-second-subsystem.md), the moment the archive is on the box: the camera list from the read model, the timeline from the manifest, playback of promoted segments straight off the resource, and the add/edit/disable/delete forms — one HTML file with three fetches, and М11 serves it unchanged. What this lesson leaves behind is what that page needs and nothing it does not: one query for the list, positions apart from reasons, `unreachable` as a state with a name, and a login.
 
-**The per-process baseline `B` is larger than a compiled worker's.** You measured it in Lesson 7. Multiply by the number of shards on a server and it is memory that could have been page cache for video.
-
-**One segfault takes the whole shard.** True in any language; the difference is that a compiled worker with no interpreter and no binding layer has meaningfully fewer places to segfault.
-
-**Any requirement for per-frame work in Python is fatal**, by Lesson 7's table. Today the pipeline never decodes. The moment a product manager asks for on-box analytics with a Python model in the path, the design is over — and "we cannot do that" is a bad answer to give at that point.
-
-### The split
-
-**Go for the controller.** It is a gRPC-and-Postgres service — Go's centre of gravity — and its per-frame exposure is exactly zero, because the controller never touches a buffer. Everything Lesson 6 built maps across without redesign.
-
-**C++ for the media worker.** GStreamer is a C library, so C++ calls it with **no binding layer at all**. That is not a performance argument; it is a *whole class of problem that stops existing* — no GIL, no cgo pointer rules, no binding maintained by three volunteers.
-
-### Binding reality, because it is easy to choose wrong
-
-| Binding                   | Status                                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| **`gstreamer-rs`** (Rust) | Maintained by GStreamer's own developers; the strongest non-C binding by some distance    |
-| **`go-gst`**              | The live Go binding, successor to `tinyzimmer/go-gst`. Real, and a much smaller community |
-| **`gstreamermm`** (C++)   | **Archived.** C++ means calling the C API directly — which is what C++ projects do anyway |
-
-That last row surprises people and then stops being surprising: a C++ wrapper around a C API adds a layer whose only job is to be idiomatic, and GStreamer's C API is already object-oriented in all but syntax.
-
-If the team is Rust-shaped rather than C++-shaped, `gstreamer-rs` is a genuinely defensible substitution for the worker and the rest of this argument is unchanged.
-
-### What the rewrite does *not* touch — the point of having written it in Python
-
-| Survives unchanged                                               | Gets rewritten              |
-| ---------------------------------------------------------------- | --------------------------- |
-| The schema                                                       | The actuator                |
-| The reconcile loop's **logic**                                   | Its implementation language |
-| The state machine and its transitions                            |                             |
-| The backoff and jitter policy                                    |                             |
-| The desired/actual contract, and `observed_revision >= revision` |                             |
-| The status vocabulary and the conditions model                   |                             |
-
-**Only the actuator changes.** Everything expensive to get right — and everything that was wrong in your first draft — is language-independent, and you established all of it in a language where a wrong idea costs ten minutes instead of an afternoon.
-
-That is the honest defence of building it in Python first, and it is not "Python is easier". It is that **the risky part of this system was never the code; it was the design**, and you de-risked the design cheaply. Lesson 7's backoff policy needing no changes when the actuator went from `print()` to GStreamer was the same property, demonstrated one layer down.
-
-### The claim, measured
-
-That argument is cheap to make and cheap to check, and the course checks it two modules on, where the recorder has become a worker and a controller on a platform: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port the whole of М10 and М11 to Go — Lesson 6's loop with the same `>=`, the same stop loop over *actual*, the same jitter, and everything built on it since — and run **the Python suites' seventy tests against the Go code, unchanged in meaning**. All pass, under the race detector. Then they put a worker and a controller in each language at idle — fifty converged cameras, a heartbeat, the placement pass, no GStreamer in either — and read PSS:
-
-| | Go | Python |
-|---|---|---|
-| Worker + controller at idle, 50 cameras | **8.9 MB** | **21.2 MB** |
-| Deployable artifact | one static binary, 6.8 MB; arm64 cross-compiled in one command, 6.4 MB | interpreter 55 MB + packages, in a rootfs М9 ships twice and signs |
-
-Roughly two and a half times the controller's share of `B`, and the thing М9's bundle carries shrinks by an interpreter. What the table does *not* show is the media worker, because GStreamer's 24 MB of libraries cost the same in every language and the per-frame rule from Lesson 7 survives in Go — which is why the worker's pipeline is the C++ half of the split, not the Go half. Per operation the languages are within 2× of each other, and JSON goes the other way; the measurement and what it means are in `clustervms-go/README.md`.
-
-**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make. Then, when you reach М11, `measure.sh` in `clustervms-go/` — to produce the table above on your own hardware.
+**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make.
 
 ---
 
@@ -250,16 +196,14 @@ Roughly two and a half times the controller's share of `B`, and the thing М9's 
 - `unreachable` greys the recorder out rather than showing its cameras green. Stale green is Lesson 6's lying cache, arriving through the interface.
 - The login is the course's **fourth temporary secret**, named where it appears. This is the last module with exactly one surface to protect.
 - **Site is a first-class operator concept; server is not, and recorder barely is** — but physics leaks in four places, and hiding it there would be a lie.
-- Python ends for three reasons: baseline memory, blast radius, and per-frame work being fatal. **Go for the controller, C++ for the worker** — and `gstreamermm` is archived, so C++ means the C API directly.
-- **Only the actuator gets rewritten.** The schema, the loop, the state machine, the backoff policy and the desired/actual contract all survive — which is the real defence of prototyping in Python.
+- The console is an API here, on purpose: the page — list, timeline, playback, the forms — comes in М10 Lesson 5, when the footage is on the box and there is one place to play it from.
 
 ## Exercises
 
 1. Write the "decisions the operator is never asked to make" page. Keep it to one side of paper. Then, for each entry, name the support call it prevents.
 2. Add a condition the module has not needed yet — `within_licence` — wire it to nothing, and show it in the console. Then explain why a condition that is always true is still worth having in the model.
 3. Build the failure-grouping view: given a server with 200 cameras, produce **one** row saying the server is down rather than 200 rows saying cameras are unreachable. This is М11's console, sketched a module early.
-4. Take one non-trivial piece — the backoff policy — and port it to Go. Time yourself. That number is the honest cost of the rewrite for the parts that are pure logic, and it is smaller than people assume.
-5. Argue the opposite case: keep the media worker in Python and ship it. Be specific about camera counts, memory budget and what feature request ends it. A good version of this argument is worth having before somebody makes it badly in a meeting.
+4. Sketch the page this lesson does not build: which of its fields come from `/status`, which from `/timeline`, and which would need a route that does not exist yet. Then read М10 Lesson 5's Step 6 and compare.
 
 ## Where this is going
 

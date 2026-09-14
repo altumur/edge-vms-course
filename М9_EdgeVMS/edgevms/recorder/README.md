@@ -8,7 +8,7 @@ segment and nothing else; an operator sees all of it behind a login.
 recorder/
   migrations/          Lesson 5 — schema, partitions, operators; Lesson 9 — conditions + camera_status
   worker/
-    reconciler.py      Lesson 6 — the loop, with nothing in it (pure; survives the rewrite)
+    reconciler.py      Lesson 6 — the loop, with nothing in it (pure; М10 copies it unchanged)
     pipeline.py        Lesson 7 — CameraPipeline state machine, GstActuator, FakeActuator
     retention.py       Lesson 8 — partitions ahead, detach+drop, the disk-full policy, orphan sweep
     worker.py         Lessons 6–9 — reconcile / pump_buses / report / retention, one process

@@ -227,7 +227,7 @@ If a lesson does not move that demo forward, it does not belong in this module.
 | Actual state | **Derived, never persisted** | Kill the worker and it must rebuild its picture from Postgres plus observation. Anything it remembers across a restart is a bug. |
 | Change notification | **Poll on a timer, `LISTEN/NOTIFY` for latency** | NOTIFY is not durable — a listener that was disconnected misses it forever. Notify for speed, poll for correctness. Teaching only NOTIFY produces a system that silently stops converging. |
 | recorder visibility | **Decided for the operator, never by them** | See below. The `cameras` table has no recorder column a client may write. |
-| Language | **Python for the course; Go + C++ for the product** | Python teaches the loop and makes the language boundary visible. The product splits it — Go for the controller, C++ for the media worker — and Lesson 9 says why that split costs almost nothing. |
+| Language | **Python for the course; Go + C++ for the product** | Python teaches the loop and makes the language boundary visible. The product splits it — Go for the controller, C++ for the media worker — and М10/М11's Go ports show what that costs: the loop written here ports unchanged. |
 | Databases | **One, and the recorder owns it** | Configuration, archive index and events in one Postgres. М11 adds recorders, not a second database — the domain above them is a Nomad Variable and an object store, so nothing here is ever demoted to a cache. See [`where-the-database-lives.md`](../М12_DomainVMS/where-the-database-lives.md). |
 | Database placement | **On the data partition, as a Quadlet unit** | М9's three-way boundary with consequences: `PGDATA` in a rootfs slot is destroyed by the next OS update. |
 | Authentication | **One hand-provisioned operator, marked temporary** | On one recorder there is nothing to decide. The `grants` table exists from Lesson 5 so М12 adds policy rather than schema — but the `operators` table is **superseded** there rather than extended: with N recorders a local password hash is N Alices, and М12 replaces it with an issuer's public key. |
@@ -417,16 +417,13 @@ Each failure mode reproduced on purpose, then handled.
 
 ---
 
-#### Lesson 9 — What the console shows, and what Python stops being right for
+#### Lesson 9 — What the console shows
 
 - The joined view: desired and observed in one query, so "is this camera actually recording?" is not three round trips
 - **The console requires a login**, against Lesson 5's `operators` table — one hand-provisioned account, all capabilities, **marked temporary**. No VMS ships with an open API, and this is the last module where there is exactly *one* surface to protect: М11 gives every recorder its own, which is where authorization stops being trivial
 - Status vocabulary for the UI: `converged`, `lagging`, `stalled`, `unreachable` as *positions*; licence, storage and reachability as **conditions** — reasons an object cannot converge, kept out of the phase enum
 - **The recorder-versus-server conversation**, from the section above: what the operator is asked, and the four places the server has to surface anyway
-- **The rewrite sidebar.** Three things end Python's case for the product: the per-process baseline `B` is larger than a compiled worker's, one segfault takes the whole shard, and any requirement for per-frame work in Python is fatal by the table above
-- **The split that follows from it.** **Go for the controller** — it is a gRPC-and-Postgres service, which is Go's centre of gravity, and its per-frame exposure is zero because the controller never touches a buffer. **C++ for the media worker** — GStreamer is a C library, so C++ calls it with no binding layer at all, and existing pipeline code can be reused rather than ported
-- **What the rewrite does *not* touch**, which is the point of having written it in Python first: the schema, the reconcile loop, the state machine, the backoff policy and the desired/actual contract are all language-independent. Only the actuator changes. Building it in Python proved the design cheaply; it did not waste the work
-- **Binding reality**, because it is easy to choose wrong here: `gstreamer-rs` is maintained by GStreamer's own developers and is the strongest non-C binding; `go-gst` is the live Go one; `gstreamermm` for C++ has been archived, so C++ means calling the C API directly — which is what C++ projects do anyway
+- **No page.** The console is an API behind a login; the screen — list, timeline, playback, the forms — is built in М10 Lesson 5 once the archive is on the box, and the lesson says so rather than bolting М8's one-stream player onto a spool-and-Kinesis arrangement the next module removes
 
 **Deliverable:** the console view, and a written statement of every decision the operator is never asked to make.
 

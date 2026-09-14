@@ -27,7 +27,7 @@ And a third thing that belongs to neither: **the data**. It must outlive both pl
 | 6 | [A Reconcile Loop with Nothing in It](06-a-reconcile-loop-with-nothing-in-it.md) | Write the loop against a `print()`; use `observed_revision >= revision` as the only test of "applied"; explain why polling is correctness and `NOTIFY` only latency; implement backoff **with jitter** and say what the jitter is for; build the lying-cache bug deliberately. |
 | 7 | [Fifty Pipelines in One Process](07-fifty-pipelines-in-one-process.md) | Build pipelines from Python; explain where the work actually happens; cross the GIL boundary deliberately and watch the worker fall over; detect a stalled stream without touching a buffer; turn М9's spool into an archive. |
 | 8 | [Failure Is the Feature](08-failure-is-the-feature.md) | Reproduce four failures on purpose and assert recovery from each; enforce retention under disk pressure without a scan; bound what a crash loses and prove it; state the fencing rule and the problem it stands in for. |
-| 9 | [What the Console Shows, and What Python Stops Being Right For](09-the-console-and-the-rewrite.md) | Answer *is this camera recording?* in one query; keep positions apart from reasons; put a login in front of it; argue the production language split and identify what a rewrite would **not** touch. |
+| 9 | [What the Console Shows](09-what-the-console-shows.md) | Answer *is this camera recording?* in one query; keep positions apart from reasons; put a login in front of it; say why the page itself waits for М10. |
 
 ## What each lesson leaves running
 
@@ -115,7 +115,7 @@ Two corrections worth knowing before you start, both found by running the thing 
 cd edgevms/recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
 ```
 
-Lesson 9's rewrite argument is made into a number two modules on, where the recorder has become a worker and a controller: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port М10 and М11 whole, the same seventy tests passing, and measure a worker and a controller at idle — 8.9 MB against 21.2 MB, one 6.8 MB static binary against an interpreter and its packages.
+The production language question — Python for the course, Go and C++ for the product — is argued where it is measured: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port М10 and М11 whole with the same seventy tests, and the reconcile loop written here is what ports unchanged.
 
 ### The stand-ins, and where they get collected
 
