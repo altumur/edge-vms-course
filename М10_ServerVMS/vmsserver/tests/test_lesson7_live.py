@@ -1,4 +1,4 @@
-"""Lesson 5, Step 9 — live video as the third subsystem. A gateway is a worker
+"""Lesson 7 — live video as the third subsystem. A gateway is a worker
 whose unit is a camera's fan-out and whose capacity is viewers; the unit is
 created by the first viewer and deleted after the last; one subscription per
 camera whatever the audience; the worker never learns a viewer exists."""

@@ -64,7 +64,7 @@ A shipped edge VMS is seven layers deep. One module per layer, each ending with 
 |---|---|---|
 | [**М8** — Cloud VMS](./М8_KVS_VMS) | The product itself, against a cloud archive | **Complete** · 8 lessons |
 | [**М9** — EdgeVMS](./М9_EdgeVMS) | 1 · RAUC — OS, atomic, rollback<br>3 · Postgres — the recorder's own state<br>4 · The worker — the loop that acts on it | **Written** · 9 lessons |
-| [**М10** — ServerVMS](./М10_ServerVMS) | The platform's shape on one server: `driverpacksrc`, `archivesink`, a controller and a worker — the subsystem contract, prototyped without a scheduler | **Written** · 5 lessons |
+| [**М10** — ServerVMS](./М10_ServerVMS) | The platform's shape on one server: `driverpacksrc`, `archivesink`, a controller and a worker — the subsystem contract, prototyped without a scheduler | **Written** · 9 lessons |
 | [**М11** — ClusterVMS](./М11_ClusterVMS) | 2 · Nomad + Podman — workers that outlive their server, resources that stay, one controller<br>4 · The cluster's own directory | **Written** · 5 lessons · rewritten to *2c* with `clustervms/` on М10's `vmsserver/`, 29 tests |
 | [**М12** — DomainVMS](./М12_DomainVMS) | 4 · Several clusters, one directory of directories<br>5 · The domain as its own root: enrollment, lifetimes, identity<br>7 · Its own update server, and clusters it rents for itself | **Written** · 8 lessons |
 | [**М13** — Observability](./М13_Observability) | 6 · Prometheus + logs — collecting what М9–М12 emit, from the domain cluster | **Designed** · 4 lessons |

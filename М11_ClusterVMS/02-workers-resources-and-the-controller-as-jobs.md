@@ -17,7 +17,7 @@ The other thing this lesson settles is a question М10 left open and answered la
 - **М10 Lesson 1, Step 5a** — identity by claim: `vms/slots/<name>`, `claim_slot(prefer)`, `released` versus lapsed.
 - **М10 Lesson 5, Step 4a** — the controller's one unasked move.
 - **Lesson 1** — the cluster, `meta.labels`, `meta.archive`, ACLs on.
-- **М9 Lesson 4** — Quadlet; **М10 Lesson 5, Step 8** — the four Quadlet units these jobs translate, over the image these jobs build `FROM`.
+- **М9 Lesson 4** — Quadlet; **М10 Lesson 9** — the Quadlet units these jobs translate, over the image these jobs build `FROM`.
 
 ## Learning objectives
 

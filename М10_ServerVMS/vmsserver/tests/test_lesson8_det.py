@@ -1,4 +1,4 @@
-"""Lesson 5, Step 10 — detectors as the fourth subsystem, and one console for
+"""Lesson 8 — detectors as the fourth subsystem, and one console for
 all of them. A unit is one model on one camera, created from the camera's page
 with the console's token, placed on a GPU-labelled worker by stream headroom;
 its events are buckets under det/<unit>/e<epoch>/ on the resource, written

@@ -1,4 +1,4 @@
-"""Lesson 5 — what runs on М9's box: the three processes and the policy pass as
+"""Lesson 9 — what runs on М9's box: the three processes and the policy pass as
 Quadlet units over one image, on the data partition. No podman here (the
 generator's dry-run is deploy/check-quadlet.sh, for the bench); this checks
 that the units and the Containerfile agree with the package they run."""

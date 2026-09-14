@@ -423,7 +423,7 @@ Each failure mode reproduced on purpose, then handled.
 - **The console requires a login**, against Lesson 5's `operators` table — one hand-provisioned account, all capabilities, **marked temporary**. No VMS ships with an open API, and this is the last module where there is exactly *one* surface to protect: М11 gives every recorder its own, which is where authorization stops being trivial
 - Status vocabulary for the UI: `converged`, `lagging`, `stalled`, `unreachable` as *positions*; licence, storage and reachability as **conditions** — reasons an object cannot converge, kept out of the phase enum
 - **The recorder-versus-server conversation**, from the section above: what the operator is asked, and the four places the server has to surface anyway
-- **No page.** The console is an API behind a login; the screen — list, timeline, playback, the forms — is built in М10 Lesson 5 once the archive is on the box, and the lesson says so rather than bolting М8's one-stream player onto a spool-and-Kinesis arrangement the next module removes
+- **No page.** The console is an API behind a login; the screen — list, timeline, playback, the forms — is built in М10 Lesson 6 once the archive is on the box, and the lesson says so rather than bolting М8's one-stream player onto a spool-and-Kinesis arrangement the next module removes
 
 **Deliverable:** the console view, and a written statement of every decision the operator is never asked to make.
 

@@ -13,27 +13,27 @@ vmsserver/
     resource.py                Lesson 3  the resource as a platform job: heartbeat, buckets over HTTP, retention by each subsystem's row, the mirror to a peer, restore
     eventindex.py              Lesson 3  the index over every subsystem's buckets on every resource — a cache
     spec.py                    Lesson 5  the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name, snapshot, the two ACLs) and SpecController, the one controller every subsystem runs
-    console.py                 Lesson 5  the console as data: SpecConsole over the same spec — the page, /spec, /<rows>, /where, /metrics with the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers extra routes;
+    console.py                 Lesson 6  the console as data: SpecConsole over the same spec — the page, /spec, /<rows>, /where, /metrics with the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers extra routes;
                                Mount — one process fronting several subsystems, the root at / and the others under their names (/live/…, /det/…)
-    console.html               Lesson 5  the one page for every subsystem: reads /spec, builds the list and the forms from the fields; timeline and player only when the spec says media
+    console.html               Lesson 6  the one page for every subsystem: reads /spec, builds the list and the forms from the fields; timeline and player only when the spec says media
   vms/                         the VMS — the first subsystem
     reconciler.py              Lesson 4  М9 Lesson 6's loop, copied unchanged: the contract
     archive.py                 Lesson 3  the VMS's part of the resource under vms/<cam>/: spool → promote → manifest; the camera's event buckets; ArchivePolicy (repair, close, media retention) registered on the platform's resource
     worker.py                  Lesson 4  vmsworker: N pipelines against an assignment; an epoch per camera; a lease; the heartbeat with server, labels and capacity — on a box or in an allocation
     vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
-    console.py                 Lesson 5  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes —
+    console.py                 Lesson 6  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes —
                                /timeline/<id>, /segment/<path>, and the WHEP door /whep/<cam> that creates a fan-out on the first viewer and proxies to its gateway
-    live.subsystem.yaml        Lesson 5  the THIRD subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
-    det.subsystem.yaml         Lesson 5  the FOURTH subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom
-    detector.py                Lesson 5  DetWorker: runs a Model against the camera's RTP, writes what it saw into det/<unit>/e<epoch>/ on the resource under its own epoch
-    gateway.py                 Lesson 5  LiveGateway, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
+    live.subsystem.yaml        Lesson 7  the THIRD subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
+    det.subsystem.yaml         Lesson 8  the FOURTH subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom
+    detector.py                Lesson 8  DetWorker: runs a Model against the camera's RTP, writes what it saw into det/<unit>/e<epoch>/ on the resource under its own epoch
+    gateway.py                 Lesson 7  LiveGateway, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
                                RTP tee per camera, N webrtcbin peers behind it, WHEP (POST /whep/<cam>, DELETE /whep/session/<id>), demand-created and demand-deleted units
     config.py                  the schema's Python view over the spec: row() and items()
     __main__.py                python3 -m vms worker | controller | console | retain | gateway | livecontroller | detworker | detcontroller
   gstvms/                      Track 2 — needs GStreamer
     uri.py                     Lesson 2  driverpack://file/<name> resolved and refused — pure, no GStreamer
-    webrtc.py                  Lesson 5  the gateway's media path (Track 2): udpsrc ! rtpjitterbuffer ! tee per camera, queue ! webrtcbin per viewer, WHEP without trickle
+    webrtc.py                  Lesson 7  the gateway's media path (Track 2): udpsrc ! rtpjitterbuffer ! tee per camera, queue ! webrtcbin per viewer, WHEP without trickle
     driverpacksrc.py           Lesson 2  the element: looping, PTS rebased across the loop
     archivesink.py             Lesson 3  splitmuxsink into the spool; on fragment-closed, promote
     actuator.py                Lesson 4  driverpacksrc ! h264parse ! watchdog ! tee ! archivesink, per camera; the bus drained into (dead, posted)
@@ -58,7 +58,11 @@ python3 -m vms worker                                  # no name: claims the fir
 | 2 | `driverpacksrc` running for an hour with monotonic PTS; the refusal of a vendor URI | `test_lesson2_driverpacksrc.py` — the URI logic here; the element and the hour on a box with GStreamer |
 | 3 | kill the worker at minute seven: six promoted, one closed-but-not-promoted picked up on restart, the open one lost; rebuild the manifest from the files | `test_lesson3_archive.py` — the acknowledgement order, `closed_in_spool`, `repair()`, the fenced epoch on the timeline, two resources merged, retention per kind, event buckets recording or not — silent included — closed, counted onto media, fenced, rebuilt |
 | 4 | М9's four failures against the worker with its tests passing unchanged; the zombie on one box | `test_lesson4_worker.py` — М9 Lesson 6's seven, then the assignment, the epoch per camera, the restart with the controller stopped, a nameless replacement inheriting the lapsed slot, the zombie fenced at the slot, the reassignment that is not one |
-| 5 | one box, two subsystems, one console; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` and `test_second_subsystem.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic, the console over HTTP, a retry across two consoles, the counter subsystem and its console for free; `test_deploy_units.py` — the Quadlet units against the package; `test_lesson5_live.py` — the first viewer creates the fan-out and the controller places it, fifty viewers one subscription and the worker unchanged, the grace period and the gateway deleting its own unit, a dead gateway's fan-outs moved to the survivor, placement by label, two subsystems sharing the platform; `test_lesson5_det.py` — one console mounting every subsystem, a model placed on the GPU worker and writing its own buckets under its epoch, a camera that stops leaving the model waiting, the unplaceable model placed when a GPU arrives |
+| 5 | one box, two subsystems; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` and `test_second_subsystem.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic, the counter subsystem |
+| 6 | the console as its own process; a camera added, edited, played, deleted from the page; two consoles answering one retry | `test_lesson5_controller.py::test_the_console_over_http` and `…is_one_camera` — the whole surface on a real port, a retry across two consoles; `test_second_subsystem.py` — the counter's console for free; `test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts` |
+| 7 | press *Live*; fifty tabs, one subscription; a gateway killed, the next offer answered by the survivor | `test_lesson7_live.py` — the first viewer creates the fan-out and the controller places it, fifty viewers one subscription and the worker unchanged, the grace period and the gateway deleting its own unit, a dead gateway's fan-outs moved to the survivor, placement by label, two subsystems sharing the platform |
+| 8 | a model added to the camera from the page, its events beside the VMS's on the resource | `test_lesson8_det.py` — a model placed on the GPU worker and writing its own buckets under its epoch, a camera that stops leaving the model waiting, the unplaceable model placed when a GPU arrives |
+| 9 | the box: eight units, one image, an update that records nothing rolled back | `test_deploy_units.py` — the Quadlet units against the package: entrypoints, `/data` volumes, the mounts as the ACL, the image's contents |
 
 ## The three lines the code holds
 
