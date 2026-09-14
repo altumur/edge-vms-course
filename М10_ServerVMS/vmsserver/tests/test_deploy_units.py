@@ -53,7 +53,7 @@ def test_who_may_write_where_is_in_the_mounts_too():
 
 
 def test_the_image_carries_the_three_packages_and_nothing_else():
-    cf = open(os.path.join(DEPLOY, "Containerfile")).read()
+    cf = "\n".join(l for l in open(os.path.join(DEPLOY, "Containerfile")) if not l.startswith("#"))   # the instructions, not the notes
     copied = re.findall(r"^COPY (\S+) ", cf, re.M)
     assert copied == ["vmsplatform", "vms", "gstvms"]
     assert "postgres" not in cf.lower()                                                # the per-box database is gone (М10 Lesson 1)

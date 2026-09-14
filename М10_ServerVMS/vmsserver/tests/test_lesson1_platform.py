@@ -79,7 +79,7 @@ def test_the_platform_knows_nothing_about_video():
     here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vmsplatform")
     for f in os.listdir(here):
         if f.endswith(".py"):
-            src = open(os.path.join(here, f)).read()
+            src = "\n".join(l for l in open(os.path.join(here, f)) if not l.lstrip().startswith("#"))   # the code, not the notes
             assert "from vms" not in src and "import vms" not in src, f
             if f != "__init__.py":
                 assert "camera" not in src.lower(), f              # not even the word

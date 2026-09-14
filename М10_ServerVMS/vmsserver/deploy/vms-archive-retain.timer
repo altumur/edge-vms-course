@@ -1,5 +1,42 @@
 # /etc/containers/systemd/vms-archive-retain.timer — a plain timer beside the
 # Quadlet unit; Quadlet generates vms-archive-retain.service from the .container.
+# ================================================================================================
+# NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
+# ================================================================================================
+# # vms-archive-retain.timer — run the archive resource's policy every ten minutes
+#
+# **Role.** A plain systemd timer at `/etc/containers/systemd/vms-archive-retain.timer`, beside the Quadlet
+# unit; Quadlet generates `vms-archive-retain.service` from `vms-archive-retain.container`, and this timer
+# starts that service. The archive has no controller and no daemon of its own: its policy (repair, close event
+# buckets, retain media) is a pass, and a timer is what runs a pass. Enable with `systemctl enable --now
+# vms-archive-retain.timer`. `tests/test_deploy_units.py` asserts `Unit=vms-archive-retain.service`.
+#
+# ## Stanza by stanza
+#
+# ### `[Unit]`
+# - `Description=Run the archive resource's policy every ten minutes`
+#
+# ### `[Timer]`
+# - `OnBootSec=2min` — the first pass two minutes after boot: long enough for the worker to have started and
+#   promoted what the last instance left in the spool, so `repair` sees a settled tree.
+# - `OnUnitActiveSec=10min` — then every ten minutes after the last activation of the service. Ten minutes is
+#   one segment length (`SEGMENT_SECONDS=600`) and one bucket span, so each pass finds at most one new closed
+#   segment and bucket per camera to index and never lags the archive by more than a segment.
+# - `Unit=vms-archive-retain.service` — the generated service to start (a timer defaults to the unit of the
+#   same name, which here would work too; stated explicitly because the source file is a `.container`, not a
+#   `.service`).
+#
+# ### `[Install]`
+# - `WantedBy=timers.target` — the timer is enabled at boot; the service itself has no `[Install]` and is only
+#   ever started by this timer.
+#
+# ## Notes
+# - `OnUnitActiveSec` (not `OnCalendar`) means the schedule drifts with each run's duration and with boots;
+#   that is fine for a retention pass, and it means two boxes do not run their passes in lockstep.
+# - Bucket retention by `vms/retention/<cam>` rides on this timer too: `retain` ends with the platform's
+#   `Resource.retain()`, so one pass covers both kinds; the manifest lines for removed buckets are dropped by
+#   `repair` at the next tick.
+# ================================================================================================
 [Unit]
 Description=Run the archive resource's policy every ten minutes
 

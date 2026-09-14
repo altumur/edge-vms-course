@@ -5,6 +5,66 @@
 # created here is placed by the controller's next pass. The spool is mounted
 # read-only (the console never records); the archive is writable because an
 # operator's marks are the console's own buckets, console/<instance>/…, on it.
+# ================================================================================================
+# NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
+# ================================================================================================
+# # vmsconsole.container — the console: the page and the API as its own process, with the operator's token and
+# never placement
+#
+# **Role.** The Quadlet unit for `vmsconsole` at `/etc/containers/systemd/vmsconsole.container`. It runs
+# `python3 -m vms console`: `SpecConsole` over the VMS spec with the VMS's two media routes, on
+# `0.0.0.0:8080`. Its own process (a system job on every server in М11, nothing in front) with its own token —
+# `vms/cameras/*`, `vms/next_id`, `vms/retention/*`, `vms/idem/*` (`SPEC.acl_console()`) — and never
+# placement: a camera created here is placed by the controller's next pass. The header comment states the
+# mounts' reasoning: the spool is read-only (the console never records); the archive is writable because an
+# operator's marks are the console's own buckets, `console/<instance>/…`, on it — segments it only serves.
+# Checked by `tests/test_deploy_units.py` (`/data/spool` ends with `:ro,z`).
+#
+# ## Stanza by stanza
+#
+# ### `[Unit]`
+# - `Description=VMS console — the operator's rows, the read model, the page`
+# - `After=network.target` — it listens on a port, so it waits for the network.
+#
+# ### `[Container]`
+# - `Image=localhost/vmsserver:latest`
+# - `Exec=python3 -m vms console` — the `console` verb: a `VmsController` opened as writer `vmsconsole` with
+#   the console ACL, an `ArchiveResource($SPOOL, $ARCHIVE)`, and `vms.console.serve(...)`.
+# - `Environment=CONSOLE_HOST=0.0.0.0` — listen on every interface (the code's default is `127.0.0.1`); with
+#   `Network=host` this is the box's :8080.
+# - `Environment=CONSOLE_PORT=8080` — the port the README's `PLATFORM_DIR=… python3 -m vms controller  # the
+#   console on :8080` line refers to; the page, `/spec`, `/cameras`, `/where`, `/metrics`, `/marks`,
+#   `/timeline`, `/segment` all live here.
+# - `EnvironmentFile=/data/config/vms.env` — `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `CAPACITY` (the fallback
+#   capacity its controller object carries; it never places, so it is unused in practice), `LOG_LEVEL`.
+# - `Volume=/data/platform:/data/platform:z` — read-write: the console's token writes camera rows, `next_id`,
+#   derived retention rows and idempotency keys, and reads heartbeats for the read model.
+# - `Volume=/data/spool:/data/spool:ro,z` — read-only. The console constructs an `ArchiveResource` with the
+#   spool root (which `makedirs` it — already present on the box) but serves only from the archive; the mount
+#   says it cannot record.
+# - `Volume=/data/archive:/data/archive:z` — read-write, as the header says: operator marks are the console's
+#   own event buckets, `console/<hostname:pid>/e1/…` on this server's resource (`POST /marks` →
+#   `SpecConsole.mark`), and that is the one thing it writes there; segments are only read (`/segment/<path>`,
+#   with `Range`). It never touches `vms/<cam>/…`, whose buckets have one writer, the worker holding the
+#   epoch.
+# - `Network=host` — the port is the box's own; no mapping.
+#
+# ### `[Service]`
+# - `Restart=always` — the console holds nothing: idempotency keys are in the store (`vms/idem/*`), so a retry
+#   that reaches the restarted instance (or another one) gets the same reply. Marks use epoch 1 forever
+#   because `hostname:pid` names a fresh log per instance.
+# - `RestartSec=2`.
+#
+# ### `[Install]`
+# - `WantedBy=multi-user.target`.
+#
+# ## Notes
+# - The split with the controller unit is the two ACLs cut from `vms/*` (see `vmsplatform/spec.py`): this
+#   token cannot `place`, and `test_the_console_over_http` proves it with a `Forbidden`. Deleting a camera
+#   here marks the row; the placement is taken back by `vmscontroller`'s next `unplace_deleted`.
+# - "Count as many as you like" (`__main__.console` docstring): several consoles over one store are safe;
+#   `test_a_retry_that_lands_on_another_console_is_one_camera`.
+# ================================================================================================
 [Unit]
 Description=VMS console — the operator's rows, the read model, the page
 After=network.target

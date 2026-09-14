@@ -193,7 +193,7 @@ def test_the_console_over_http():
         assert subsystems_under(box.archive) == {"console": [m["unit"]]}                          # not in vms/1/: that bucket has one writer
         # the page, and the bytes it plays: three fetches and a Range
         page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
-        assert "/spec" in page and "/timeline/" in page and "/segment/" in page and "<video" in page and "camera" not in page.split("-->", 1)[1].lower()   # the page is the spec's, not the VMS's
+        assert "/spec" in page and "/timeline/" in page and "/segment/" in page and "<video" in page and "camera" not in page.rsplit("-->", 1)[1].lower()   # the page (after its comments) is the spec's, not the VMS's
         from datetime import datetime, timezone
         from vms.archive import segment_path
         seg = segment_path(box.spool, 1, 1, datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)); os.makedirs(os.path.dirname(seg), exist_ok=True)
