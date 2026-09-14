@@ -1,6 +1,6 @@
 # deploy/Containerfile — localhost/clustervms:latest
 # Build from the COURSE ROOT: М10's vmsserver plus this package. One image,
-# three entrypoints: python3 -m cluster worker | controller | resource.
+# four entrypoints: python3 -m cluster worker | controller | console | resource.
 #   podman build -f М11_ClusterVMS/clustervms/deploy/Containerfile -t localhost/clustervms:latest .
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

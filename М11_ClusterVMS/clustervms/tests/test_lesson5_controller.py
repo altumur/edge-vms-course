@@ -91,10 +91,11 @@ def test_the_console_over_http():
             with urllib.request.urlopen(req) as r: return r.status, r.read().decode()
         except urllib.error.HTTPError as e: return e.code, e.read().decode()
     st, out = call("POST", "/cameras", {"source": "driverpack://file/1.mp4", "labels": ["vlan:cctv-b"]}, {"Idempotency-Key": "k1"})
-    assert st == 201 and json.loads(out)["worker"] in ("w-1", "w-2")
+    assert st == 201 and json.loads(out)["worker"] is None                    # the console wrote the row; placement is the controller's
     assert call("POST", "/cameras", {"source": "driverpack://file/1.mp4"}, {"Idempotency-Key": "k1"})[0] == 201 and len(ctl.cameras()) == 1
     assert call("PUT", "/cameras/1", {"worker": "w-0"})[0] == 400
-    ws[json.loads(out)["worker"]].reconcile_once(); ws[json.loads(out)["worker"]].heartbeat_once()
+    placed = ctl.ensure_placed()[0].worker; assert placed in ("w-1", "w-2")   # the controller's pass, under the label
+    ws[placed].reconcile_once(); ws[placed].heartbeat_once()
     st, out = call("GET", "/where/1"); d = json.loads(out)
     assert st == 200 and d["worker"] == d["directory"] and "on srv-" in d["reason"]
     st, out = call("GET", "/metrics")
@@ -127,5 +128,6 @@ def test_the_console_over_http():
     assert call("GET", f"/segment/{seg['path']}?server=srv-b")[0] == 404          # srv-b has never heartbeaten
     assert call("PUT", "/cameras/1", {"enabled": False})[0] == 200 and ctl.camera(1)["enabled"] is False
     assert call("DELETE", "/cameras/1")[0] == 200 and ctl.cameras() == [] and call("DELETE", "/cameras/1")[0] == 404
+    assert ctl.unplace_deleted() == [1] and ctl.assignment(placed).units == []   # the controller takes the placement back
     rsrv.shutdown()
     srv.shutdown()

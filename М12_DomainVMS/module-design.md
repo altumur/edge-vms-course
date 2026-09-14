@@ -147,7 +147,7 @@ The word *domain controller* was retired from this course on purpose, because it
 | **Cluster-level placement** | stateless computation | new cameras get no cluster |
 | **The aggregating read view** | stateless; an in-memory read model rebuilt from the snapshot and heartbeats each cluster publishes | the console sees only its own cluster — from its own object store, by the same code |
 | **The remote observer** | stateless, scrapes the other clusters | nobody is told a cluster went silent — [М13](../М13_Observability/module-design.md) |
-| **The console** *(every cluster)* | stateless: the UI, the API façade, the read model, TLS, token verification, the cluster's grants | nobody logs in or sees the list; recording and established live sessions continue |
+| **The console** *(every cluster; built in М10/М11 as its own job, `count = 2`, a token for the operator's rows and never placement)* | stateless: the UI, the API façade, the read model, TLS, token verification, the cluster's grants | nobody logs in or sees the list; recording and established live sessions continue |
 | **The live gateway** *(every cluster)* | stateless fan-out: one subscription per camera to the owning worker's tee, N browser sessions out; transcoding and TURN where needed | live view and playback stop; recording continues |
 
 Every outage in that column is bounded, and none of it is recording or recovery. That is the thesis, made into a table.

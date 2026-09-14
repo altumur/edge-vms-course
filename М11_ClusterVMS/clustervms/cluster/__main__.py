@@ -1,4 +1,4 @@
-"""python3 -m cluster worker | controller | resource — the jobs (the eventindex runs beside the controller's console).
+"""python3 -m cluster worker | controller | console | resource — the jobs (the eventindex runs beside the console).
 
     NOMAD_ADDR, NOMAD_TOKEN            the task's own workload identity (Variables)
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
@@ -47,6 +47,22 @@ def worker() -> None:
 
 
 def controller() -> None:
+    """count = 1, the only writer of placement. No HTTP: nothing asks it anything."""
+    from cluster.controller import ClusterController
+    ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
+                            cluster=os.environ.get("CLUSTER", "cluster-a"))
+    while not stop.is_set():
+        try:
+            ctl.ensure_placed(); ctl.redistribute(); ctl.publish_snapshot()
+        except Exception:                         # noqa: BLE001
+            logging.exception("placement pass failed")
+        stop.wait(5)
+
+
+def console() -> None:
+    """count ≥ 2, anywhere: the page, the API, the eventindex. Its token writes
+    the operator's rows and nothing else; a create is placed by the controller's
+    next pass."""
     from cluster.console import serve
     from cluster.controller import ClusterController
     from vmsplatform.eventindex import EventIndex, ResourceReader
@@ -56,13 +72,12 @@ def controller() -> None:
     index = EventIndex(ResourceReader(), os.environ.get("EVENTINDEX_DB", ":memory:"))     # a cache: rebuilt on every start
     index.rebuild(resources_seen(objects))
     srv = serve(ctl, os.environ.get("CONSOLE_HOST", "0.0.0.0"), int(os.environ.get("CONSOLE_PORT", "8080")), index=index,
-                archive_root=archive if os.path.isdir(archive) else None)     # marks go into this server's resource
+                archive_root=archive if os.path.isdir(archive) else None)     # marks go into this server's resource, if it has one
     while not stop.is_set():
         try:
-            ctl.ensure_placed(); ctl.redistribute(); ctl.publish_snapshot()
             index.tail(resources_seen(objects))
         except Exception:                         # noqa: BLE001
-            logging.exception("placement pass failed")
+            logging.exception("index pass failed")
         stop.wait(5)
     srv.shutdown()
 
@@ -91,4 +106,4 @@ def resource() -> None:
 
 
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "resource": resource}[sys.argv[1]]()
+    {"worker": worker, "controller": controller, "console": console, "resource": resource}[sys.argv[1]]()

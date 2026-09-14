@@ -181,7 +181,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	st, out := call(t, "POST", base+"/cameras", srcLabels(1, "vlan:cctv-b"), map[string]string{"Idempotency-Key": "k1"})
 	var created map[string]any
 	json.Unmarshal([]byte(out), &created)
-	if st != 201 || !oneOf(created["worker"].(string), "w-1", "w-2") {
+	if st != 201 || created["worker"] != nil { // the console wrote the row; placement is the controller's
 		t.Fatal(st, out)
 	}
 	if st, _ := call(t, "POST", base+"/cameras", src(1), map[string]string{"Idempotency-Key": "k1"}); st != 201 || len(ctl.Cameras()) != 1 {
@@ -190,7 +190,12 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if st, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"worker": "w-0"}, nil); st != 400 {
 		t.Fatal(st)
 	}
-	w := ws[created["worker"].(string)]
+	pls, _ := ctl.EnsurePlaced(nil) // the controller's pass, under the label
+	if len(pls) != 1 || !oneOf(pls[0].Worker, "w-1", "w-2") {
+		t.Fatal(pls)
+	}
+	placed := pls[0].Worker
+	w := ws[placed]
 	w.ReconcileOnce()
 	w.HeartbeatOnce()
 	st, out = call(t, "GET", base+"/where/1", nil, nil)
@@ -265,5 +270,8 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	}
 	if st, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 {
 		t.Fatal(st)
+	}
+	if gone := ctl.UnplaceDeleted(); len(gone) != 1 || len(ctl.Assignment(placed).Units) != 0 { // the controller takes the placement back
+		t.Fatal(gone)
 	}
 }

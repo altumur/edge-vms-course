@@ -1,6 +1,6 @@
 # clustervms-go — М11, whole, in Go, measured against the Python original
 
-М9 built the recorder in Python and argued the product would ship in Go and C++ with only the actuator rewritten. This directory is that claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror, the event index that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
+М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror, the event index that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 29 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
 
 ```
 clustervms-go/

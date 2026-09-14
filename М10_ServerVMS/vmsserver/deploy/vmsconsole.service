@@ -1,0 +1,17 @@
+# The console: the page and the API, its own process. Stateless — run one per
+# box here, two per cluster in М11. Its token writes the operator's rows only —
+# vms/cameras/*, vms/next_id, vms/retention/* — and never placement; a camera
+# created here is placed by the controller's next pass.
+[Unit]
+Description=VMS console — the operator's rows, the read model, the page
+After=network.target
+
+[Service]
+Environment=PLATFORM_DIR=/data/platform SPOOL=/data/spool ARCHIVE=/data/archive CONSOLE_PORT=8080 CAPACITY=50
+WorkingDirectory=/opt/vmsserver
+ExecStart=/usr/bin/python3 -m vms console
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

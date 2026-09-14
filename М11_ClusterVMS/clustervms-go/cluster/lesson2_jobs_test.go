@@ -106,5 +106,19 @@ func TestTheACLFromInsideAnAllocation(t *testing.T) {
 	if ctl.Camera(1).Name != "ok" || ep["epoch"] != "1" {
 		t.Fatal(ep)
 	}
-	_ = vms.Converged
+	// and the console's token: the operator's rows, never placement — two tokens, two prefixes, one class
+	con := cluster.NewClusterController(c.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), c.Objects, 0, c.Wall.Now, "")
+	if r, err := con.CreateCamera(src(2)); err != nil || r.ID != 2 {
+		t.Fatal(r, err)
+	}
+	if r, err := con.UpdateCamera(2, map[string]any{"name": "from the console"}); err != nil || r.Revision != 2 {
+		t.Fatal(r, err)
+	}
+	w.HeartbeatOnce()
+	if _, err := con.Place(2, nil); !errors.Is(err, cluster.ErrForbidden) {
+		t.Fatal(err)
+	}
+	if _, err := ctl.EnsurePlaced(nil); err != nil || ctl.Where(2) != "w-0" { // the controller placed what the console created
+		t.Fatal(err, ctl.Where(2))
+	}
 }

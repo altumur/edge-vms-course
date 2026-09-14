@@ -145,18 +145,29 @@ def test_scale_in_releases_a_slot_and_the_controller_redistributes():
 
 
 def test_the_console_over_http():
-    box = Box(); ctl = VmsController(box.vars, box.objects, wall=box.wall)
+    """The console is its own process with its own token: the operator's rows,
+    never placement. The controller, on its pass, places what the console created
+    and unplaces what it deleted."""
+    from vms.config import SPEC
+    from vmsplatform.variables import Forbidden
+    box = Box(); ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
+    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)   # what the console process holds
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1")
     w.heartbeat_once()
     from vms.archive import ArchiveResource
     from vmsplatform.events import read_bucket, subsystems_under
-    srv = serve(ctl, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall); port = srv.server_address[1]
+    srv = serve(con, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall); port = srv.server_address[1]
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras", data=json.dumps({"name": "gate", "source": "driverpack://file/gate.mp4"}).encode(),
                                      method="POST", headers={"Idempotency-Key": "k1"})
-        r = json.load(urllib.request.urlopen(req)); assert r["id"] == 1 and r["worker"] == "w-1"
+        r = json.load(urllib.request.urlopen(req)); assert r["id"] == 1 and r["worker"] is None    # the row; not placed by the console
         r2 = json.load(urllib.request.urlopen(req)); assert r2 == r                    # the same POST, not a second camera
         assert len(ctl.cameras()) == 1
+        try:
+            con.place(1); raise AssertionError("a console token never writes placement")
+        except Forbidden:
+            pass
+        assert ctl.ensure_placed()[0].worker == "w-1" and ctl.where(1) == "w-1"          # the controller's pass did
         req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras/1", data=b'{"worker":"w-9"}', method="PUT", headers={"Idempotency-Key": "k2"})
         try:
             urllib.request.urlopen(req); raise AssertionError()
@@ -196,7 +207,8 @@ def test_the_console_over_http():
         req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras/1", data=b'{"enabled": false}', method="PUT", headers={"Idempotency-Key": "k4"})
         assert json.load(urllib.request.urlopen(req))["enabled"] is False and ctl.camera(1)["revision"] == 2
         req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras/1", method="DELETE")
-        assert json.load(urllib.request.urlopen(req)) == {"deleted": 1} and ctl.cameras() == [] and ctl.where(1) is None
+        assert json.load(urllib.request.urlopen(req)) == {"deleted": 1} and ctl.cameras() == [] and ctl.where(1) == "w-1"   # the row is gone; the placement waits for the pass
+        assert ctl.unplace_deleted() == [1] and ctl.where(1) is None and ctl.assignment("w-1").units == []
         try:
             urllib.request.urlopen(req); raise AssertionError()
         except urllib.error.HTTPError as e:

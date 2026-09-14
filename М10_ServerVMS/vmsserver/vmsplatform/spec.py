@@ -127,6 +127,18 @@ class SubsystemSpec:
     def sub(self) -> Subsystem:
         return Subsystem(self.name)
 
+    # -- who writes what: two tokens, one prefix each ------------------------------------
+    def acl_console(self) -> list[str]:
+        """The operator's rows: what a console (count ≥ 2, anywhere) may write — never placement."""
+        out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id"]
+        for d in self.derived:
+            out.append(f"{self.name}/{d.row.split('/')[0]}/*")
+        return out
+
+    def acl_controller(self) -> list[str]:
+        """Placement: what the controller (count = 1) may write — never a unit's row."""
+        return [f"{self.name}/workers/*", f"{self.name}/placement/*", f"{self.name}/slots/*"]
+
     @property
     def numeric(self) -> bool:
         return self.id == "numeric"
@@ -266,13 +278,25 @@ class SpecController(Controller):
         return r
 
     def delete(self, uid) -> None:
+        """The operator's half: the row is marked. Its placement is the controller's
+        half, taken back on the next pass (`unplace_deleted`) — a console's token
+        cannot touch an assignment, and does not need to."""
         self.write(self._row_key(uid), lambda it: {**it, "deleted": "true"} if it else None)
         self._derived(None, uid, deleted=True)
-        pl = self.placement(uid)
-        if pl:
-            self.assign_remove(pl.worker, str(uid))
-            self.write(self.sub.config("placement", str(uid)),
-                       lambda it: {"worker": "", "reason": "deleted", "at": self.wall(), "rev": int(it.get("rev", 0)) + 1})
+
+    def unplace_deleted(self) -> list:
+        """The controller's half of a delete: every placement whose unit is gone
+        loses its assignment and its row says so. Runs first in every pass."""
+        gone = []
+        for p in self.vars.list(self.sub.config("placement") + "/"):
+            uid = self.spec.parse_id(p.rsplit("/", 1)[1])
+            it, _ = self.vars.get(p)
+            if not it or not it.get("worker") or self.unit(uid) is not None:
+                continue
+            self.assign_remove(it["worker"], str(uid))
+            self.write(p, lambda it: {"worker": "", "reason": "deleted", "at": self.wall(), "rev": int(it.get("rev", 0)) + 1})
+            gone.append(uid)
+        return gone
 
     def unit(self, uid) -> dict | None:
         it, _ = self.vars.get(self._row_key(uid))
@@ -341,6 +365,7 @@ class SpecController(Controller):
         return pl
 
     def ensure_placed(self, workers: list[str] | None = None) -> list[Placement]:
+        self.unplace_deleted()
         out = []
         for r in self.units():
             pl = self.place(r["id"], workers)
@@ -375,6 +400,7 @@ class SpecController(Controller):
         scheduler scaled in, or an operator retired it — still lists units. Move
         them to the workers that are here. A slot that merely lapsed is not
         touched: that is a crash, and its process returns under the same name."""
+        self.unplace_deleted()
         moves = []
         for gone in self.released_slots():
             live = [w for w in self._pool(workers) if w != gone]

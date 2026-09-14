@@ -133,6 +133,15 @@ func (c *VmsController) Unplaceable() []Unplaceable {
 
 func (c *VmsController) Where(cid int) string { return c.SpecController.Where(strconv.Itoa(cid)) }
 
+func (c *VmsController) UnplaceDeleted() []int {
+	out := []int{}
+	for _, u := range c.SpecController.UnplaceDeleted() {
+		n, _ := strconv.Atoi(u)
+		out = append(out, n)
+	}
+	return out
+}
+
 func (c *VmsController) MoveTo(cid int, to, reason string) (Placement, error) {
 	pl, err := c.SpecController.MoveTo(strconv.Itoa(cid), to, reason)
 	return *placementOf(&pl), err
@@ -144,9 +153,4 @@ func (c *VmsController) Redistribute(workers []string) []Move {
 
 func (c *VmsController) Rebalance(budget int, deadBand float64, workers []string) []Move {
 	return movesOf(c.SpecController.Rebalance(budget, deadBand, workers))
-}
-
-// Placer is what a console calls per created camera.
-type Placer interface {
-	Place(cid int, workers []string) (*Placement, error)
 }

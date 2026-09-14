@@ -19,16 +19,16 @@ vmsserver/
     worker.py                  Lesson 4  vmsworker: N pipelines against an assignment; an epoch per camera; a lease; the heartbeat with server, labels and capacity — on a box or in an allocation
     vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
-    console.py                 Lesson 5  the one-box console, standard library: the read model from heartbeats; writes to the controller; operator marks into its own bucket; /segment/<path>
+    console.py                 Lesson 5  the console, its own process with its own token (the operator's rows, never placement): the read model, writes by CAS, marks, /segment/<path>
     console.html               Lesson 5  the page: the camera list, a camera's timeline (recorded / events-only / fenced), playback one segment at a time; add, edit, enable/disable, delete
     config.py                  the schema's Python view over the spec: row() and items()
-    __main__.py                python3 -m vms worker | controller
+    __main__.py                python3 -m vms worker | controller | console
   gstvms/                      Track 2 — needs GStreamer
     uri.py                     Lesson 2  driverpack://file/<name> resolved and refused — pure, no GStreamer
     driverpacksrc.py           Lesson 2  the element: looping, PTS rebased across the loop
     archivesink.py             Lesson 3  splitmuxsink into the spool; on fragment-closed, promote
     actuator.py                Lesson 4  driverpacksrc ! h264parse ! watchdog ! tee ! archivesink, per camera; the bus drained into (dead, posted)
-  deploy/                      systemd: vmscontroller.service, vmsworker@.service, the archive policy on a timer
+  deploy/                      systemd: vmscontroller.service, vmsconsole.service, vmsworker@.service, the archive policy on a timer
   tests/                       42 tests, milliseconds, no GStreamer
 ```
 

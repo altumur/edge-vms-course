@@ -1,7 +1,7 @@
 # Lesson 2 — Workers, Resources and the Controller as Jobs
 
 **Module:** ClusterVMS — workers that outlive their server (Module 11)
-**You will build:** four jobs — the worker with `count = N` and a `scaling` block, the archive resource as a `system` job, the controller at `count = 1`, and the Nomad Autoscaler — a worker identity that survives being rescheduled because it is claimed rather than given, and the ACL proven from inside an allocation.
+**You will build:** five jobs — the worker with `count = N` and a `scaling` block, the archive resource as a `system` job, the controller at `count = 1`, the console at `count = 2`, and the Nomad Autoscaler — a worker identity that survives being rescheduled because it is claimed rather than given, and the ACL proven from inside an allocation.
 **Time:** ~180 minutes.
 
 ## Why this lesson exists
@@ -36,7 +36,8 @@ The other thing this lesson settles is a question М10 left open and answered la
 |---|---|---|---|
 | **`vmsworker`** | `vmsworker@w-N`, started by hand | `service`, `count = N`, `scaling {}`, `disconnect {}`, `kill_timeout = 20s` | movable; placed by constraint; N is the scheduler's |
 | **`resource`** — the platform's, with the VMS registered on it | the directory, a timer for the policy | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the VMS's manifests and footage as *its* part |
-| **`vmscontroller`** | `vmscontroller.service` | `service`, `count = 1` | one is a preference; CAS is the correctness; safe at two during a reschedule |
+| **`vmscontroller`** | `vmscontroller.service` | `service`, `count = 1`, no port | one is economy, not correctness — CAS is the correctness, and a second would repeat the same pass; its token writes placement only (`vmscontroller-policy.hcl`) |
+| **`console`** | `vmsconsole.service` | `service`, `count = 2`, port 8080, `constraint meta.archive is_set` (for marks) | a person is waiting on it; stateless; its token writes the operator's rows only (`console-policy.hcl`) — a console that could place would be a second controller with a browser in front |
 | **the Nomad Autoscaler** | the operator's hand | `service`, `count = 1`, reads Prometheus, talks to Nomad | the only thing that changes `count`; MPL-2.0; not ours |
 
 The files are in [`deploy/`](clustervms/deploy/). Two things in the worker's job are not translation but new:
@@ -148,7 +149,7 @@ own=200 other=403 — one writer per key holds
 
 `own` is `PUT vms/epoch/verify`; `other` is `PUT vms/cameras/verify`. If `other` ever comes back 200, the sentence the whole module rests on — *the controller writes, the platform stores, the worker reads its share* — is a convention, and conventions do not survive the first "quick fix".
 
-**Deliverable:** the four jobs running with the behaviour they had under `systemd`; `nomad job scale vmsworker 3` → a new slot claimed and the next camera placed on it within one pass; `… 2` → the released slot's cameras redistributed; `verify-bench.sh` all PASS, including `own=200 other=403` from inside the allocation.
+**Deliverable:** the five jobs running with the behaviour they had under `systemd`; `nomad job scale vmsworker 3` → a new slot claimed and the next camera placed on it within one pass; `… 2` → the released slot's cameras redistributed; `verify-bench.sh` all PASS, including `own=200 other=403` from inside the allocation.
 
 ---
 
@@ -165,7 +166,7 @@ own=200 other=403 — one writer per key holds
 
 ## Recap
 
-- Four jobs: worker (`service`, `count = N`), resource (`system`, on `meta.archive`), controller (`count = 1`), autoscaler.
+- Five jobs: worker (`service`, `count = N`), resource (`system`, on `meta.archive`), controller (`count = 1`, placement's token), console (`count = 2`, the operator's rows' token), autoscaler.
 - A name is a slot claimed by CAS; `NOMAD_ALLOC_INDEX` is the preference; the duplicate-index bug is harmless.
 - Nomad places; the Autoscaler moves `count` from `vms_worker_load`; the controller never asks.
 - Scale-in releases a slot and the controller redistributes; a crash releases nothing and the controller waits.

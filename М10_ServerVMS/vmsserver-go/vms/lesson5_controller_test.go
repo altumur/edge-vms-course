@@ -308,23 +308,33 @@ func call(t *testing.T, method, url string, body any, headers map[string]string)
 }
 
 func TestTheConsoleOverHTTP(t *testing.T) {
+	// The console is its own process with its own token: the operator's rows,
+	// never placement. The controller, on its pass, places what the console
+	// created and unplaces what it deleted.
 	box := testbox.NewBox()
-	ctl := vms.NewVmsController(box.Vars, box.Objects, 0, box.Wall.Now)
+	ctl := vms.NewVmsController(box.Vars.AsWriter("vmscontroller", vms.Spec.ACLController()...), box.Objects, 0, box.Wall.Now)
+	con := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now) // what the console process holds
 	w := worker(t, box, "w-1", vms.NewFakeActuator(), vms.VmsWorkerOptions{Server: "srv-1"})
 	w.HeartbeatOnce()
-	srv, ln, err := vms.Serve(ctl, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now)
+	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 	base := "http://" + ln.Addr().String()
 	st, r, _ := call(t, "POST", base+"/cameras", map[string]any{"name": "gate", "source": "driverpack://file/gate.mp4"}, map[string]string{"Idempotency-Key": "k1"})
-	if st != 201 || r["id"] != 1.0 || r["worker"] != "w-1" {
+	if st != 201 || r["id"] != 1.0 || r["worker"] != nil { // the row; not placed by the console
 		t.Fatal(st, r)
 	}
 	_, r2, _ := call(t, "POST", base+"/cameras", map[string]any{"name": "gate", "source": "driverpack://file/gate.mp4"}, map[string]string{"Idempotency-Key": "k1"})
 	if !reflect.DeepEqual(r2, r) || len(ctl.Cameras()) != 1 { // the same POST, not a second camera
 		t.Fatal(r2)
+	}
+	if _, err := con.Place(1, nil); !errors.Is(err, p.ErrForbidden) { // a console token never writes placement
+		t.Fatal(err)
+	}
+	if pls, _ := ctl.EnsurePlaced(nil); len(pls) != 1 || pls[0].Worker != "w-1" || ctl.Where(1) != "w-1" { // the controller's pass did
+		t.Fatal(pls)
 	}
 	if st, _, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"worker": "w-9"}, map[string]string{"Idempotency-Key": "k2"}); st != 400 {
 		t.Fatal(st)
@@ -388,8 +398,11 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if st, r, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"enabled": false}, map[string]string{"Idempotency-Key": "k4"}); st != 200 || r["enabled"] != false || ctl.Camera(1).Revision != 2 {
 		t.Fatal(st, r)
 	}
-	if st, r, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || r["deleted"] != 1.0 || len(ctl.Cameras()) != 0 || ctl.Where(1) != "" {
+	if st, r, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || r["deleted"] != 1.0 || len(ctl.Cameras()) != 0 || ctl.Where(1) != "w-1" { // the row is gone; the placement waits for the pass
 		t.Fatal(st, r)
+	}
+	if gone := ctl.UnplaceDeleted(); !reflect.DeepEqual(gone, []int{1}) || ctl.Where(1) != "" || len(ctl.Assignment("w-1").Units) != 0 {
+		t.Fatal(gone)
 	}
 	if st, _, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 { // gone is gone
 		t.Fatal(st)

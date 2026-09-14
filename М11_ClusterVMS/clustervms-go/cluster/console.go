@@ -1,7 +1,8 @@
 package cluster
 
-// The cluster console, standard library. М10's console with three more reads
-// and no more writes:
+// The cluster console, standard library — its own job (count ≥ 2, anywhere),
+// its own token (the operator's rows, never placement). М10's console with
+// three more reads and no more writes:
 //
 //	GET /                  М10's page, unchanged: the camera list, a timeline merged across resources, playback
 //	GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
@@ -243,7 +244,7 @@ func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {
 					r = marks.Handle(vms.ReadBody(req), user, ctl.Wall())
 				}
 			} else {
-				r = vms.CreateReply(ctl, ctl, vms.ReadBody(req))
+				r = vms.CreateReply(ctl, vms.ReadBody(req))
 			}
 			seen.Set(key, r)
 			vms.SendJSON(w, r.Status, r.Body)

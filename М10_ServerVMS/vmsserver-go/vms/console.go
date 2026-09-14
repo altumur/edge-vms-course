@@ -1,14 +1,15 @@
 package vms
 
-// The one-box console, standard library. Reads never touch a worker;
-// writes go through the controller, the only writer.
+// The one-box console, standard library — its own process (`vms console`),
+// its own token: it writes the operator's rows (cameras, next_id, retention)
+// and never placement. Reads never touch a worker.
 //
 //	GET  /                        the page: the camera list, a camera's timeline, playback of a span (console.html)
 //	GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
 //	GET  /cameras                 the read model: every camera from the workers' heartbeats, with age
 //	GET  /where/<id>              which worker — from the stored placement
 //	GET  /timeline/<id>?from&to   segments from the archive resource's manifest, fenced ones marked
-//	POST /cameras                 create (Idempotency-Key required)
+//	POST /cameras                 create (Idempotency-Key required) — the row only; the controller places it on its next pass
 //	POST /marks                   an operator's observation {cam, note} — the CONSOLE's event, into console/<instance>/…
 //	PUT  /cameras/<id>            update — refuses placement and controller-owned fields
 //	DELETE /cameras/<id>          the row is marked deleted; its assignment goes; footage stays until retention
@@ -159,7 +160,9 @@ func (m *Marks) Handle(body map[string]any, user string, now float64) Reply {
 	return Reply{201, map[string]any{"subsystem": "console", "unit": m.Instance, "bucket": filepath.ToSlash(rel)}}
 }
 
-func CreateReply(ctl *VmsController, placer Placer, body map[string]any) Reply {
+// CreateReply writes the row and nothing else: placement is the controller's
+// next pass, never the console's — its token could not do it anyway.
+func CreateReply(ctl *VmsController, body map[string]any) Reply {
 	r, err := ctl.CreateCamera(body)
 	var refused *Refused
 	if errors.As(err, &refused) {
@@ -168,13 +171,8 @@ func CreateReply(ctl *VmsController, placer Placer, body map[string]any) Reply {
 	if err != nil {
 		return Reply{500, map[string]any{"detail": err.Error()}}
 	}
-	pl, _ := placer.Place(r.ID, nil)
 	out := r.ToMap()
-	if pl != nil {
-		out["worker"] = pl.Worker
-	} else {
-		out["worker"] = nil
-	}
+	out["worker"] = nil
 	return Reply{201, out}
 }
 
@@ -324,7 +322,7 @@ func NewHandler(ctl *VmsController, archive *ArchiveResource, wall p.Clock) http
 					r = marks.Handle(ReadBody(req), user, wall())
 				}
 			} else {
-				r = CreateReply(ctl, ctl, ReadBody(req))
+				r = CreateReply(ctl, ReadBody(req))
 			}
 			seen.Set(key, r)
 			SendJSON(w, r.Status, r.Body)

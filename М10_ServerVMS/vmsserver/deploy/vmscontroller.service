@@ -1,10 +1,12 @@
-# The controller: one per box (one per cluster in М11). Stateless — restart it freely.
+# The controller: one per box (one per cluster in М11). Stateless — restart it
+# freely. No port: nothing asks it anything. Its token (М11) writes placement
+# only — vms/workers/*, vms/placement/*, vms/slots/*, the snapshot.
 [Unit]
-Description=VMS controller — the only writer of vms/*
+Description=VMS controller — the only writer of placement
 After=network.target
 
 [Service]
-Environment=PLATFORM_DIR=/data/platform SPOOL=/data/spool ARCHIVE=/data/archive CONSOLE_PORT=8080 CAPACITY=50
+Environment=PLATFORM_DIR=/data/platform CAPACITY=50
 WorkingDirectory=/opt/vmsserver
 ExecStart=/usr/bin/python3 -m vms controller
 Restart=always

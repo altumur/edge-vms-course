@@ -1,5 +1,6 @@
-"""The cluster console, standard library. М10's console with three more reads
-and no more writes:
+"""The cluster console, standard library — its own job (count ≥ 2, anywhere),
+its own token (the operator's rows, never placement). М10's console with
+three more reads and no more writes:
 
     GET /                  М10's page, unchanged: the camera list, a timeline merged across resources, playback
     GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
@@ -147,8 +148,8 @@ def make_handler(ctl: ClusterController, reader=None, worst_failover: float = 0.
                     seen[key] = (201, {"subsystem": "console", "unit": instance, "bucket": os.path.relpath(p, archive_root)})
                 return self._send(*seen[key])
             try:
-                r = ctl.create_camera(self._body()); pl = ctl.place(r["id"])
-                seen[key] = (201, {**r, "worker": pl.worker if pl else None})
+                r = ctl.create_camera(self._body())
+                seen[key] = (201, {**r, "worker": None})        # placed by the controller's next pass, never by the console
             except Refused as e:
                 seen[key] = (400, {"error": str(e)})
             self._send(*seen[key])

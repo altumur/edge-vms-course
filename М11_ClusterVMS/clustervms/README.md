@@ -12,20 +12,21 @@ clustervms/
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  the VMS's part of the platform's resource job: ArchivePolicy (repair, close, media retention) registered as the `vms` hook; /manifest and /segment plugged in
     eventindex.py    L3  a name for vmsplatform.eventindex — the platform's index over every subsystem's buckets on every resource
-    console.py       L5  the cluster console: М10's page at /, the merged timeline, /segment/<path>?server= proxied from that server's resource, /events, /metrics
+    console.py       L5  the cluster console — its own job, its own token: М10's page at /, the merged timeline, /segment/<path>?server= proxied from that server's resource, /events, /metrics
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console, standard library: /cameras /where /timeline /resources /unplaceable /events /metrics; /marks into the console's own bucket
     __main__.py      python3 -m cluster worker | controller | resource   (the controller job also runs the eventindex beside the console)
   deploy/
     server.hcl, client.hcl     L1  three servers, ACLs on, meta.labels and meta.archive, the Podman plugin
     vmsworker.nomad.hcl        L2  service, count = N, the `scaling` block on avg(vms_worker_load), the disconnect numbers, kill_timeout for the slot release
-    vmscontroller.nomad.hcl    L2  service, count = 1 — safe at two
+    vmscontroller.nomad.hcl    L2  service, count = 1, no port — safe at two; economy, not correctness
+    console.nomad.hcl          L2  service, count = 2 — the page, the API, the eventindex; a person is waiting on it
     resource.nomad.hcl         L2  system, on meta.archive — the PLATFORM's resource job, with the VMS registered on it
-    autoscaler.nomad.hcl       L2  the Nomad Autoscaler (MPL-2.0): the fourth job, and the only thing that changes count
-    vmsworker-policy.hcl, vmscontroller-policy.hcl, resource-policy.hcl   L2  one writer per key: vms/* for the controller; vms/epoch/*, vms/slots/* and its heartbeat for a worker; platform/resources/* for a resource
+    autoscaler.nomad.hcl       L2  the Nomad Autoscaler (MPL-2.0): the fifth job, and the only thing that changes count
+    vmsworker-policy.hcl, vmscontroller-policy.hcl, console-policy.hcl, resource-policy.hcl   L2  one writer per prefix: placement (workers/, placement/, slots/, the snapshot) for the controller; the operator's rows (cameras/, next_id, retention/) for the console; vms/epoch/*, vms/slots/* and its heartbeat for a worker; platform/resources/* for a resource
     verify-bench.sh            the six checks that need a real cluster, PASS/FAIL — including the ACL from inside an allocation and a scale drill
     failover-drill.sh          L4  the power pull, measured: three runs, worst case kept, the old instance's conflicts counted
-    Containerfile              the image: vmsserver + cluster, three entrypoints
+    Containerfile              the image: vmsserver + cluster, four entrypoints
   tests/                       29 tests, no Nomad, no GStreamer, milliseconds: python3 tests/run.py
 ```
 

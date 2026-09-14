@@ -1,12 +1,13 @@
-"""The one-box console, standard library. Reads never touch a worker;
-writes go through the controller, the only writer.
+"""The one-box console, standard library. Its own process (`python3 -m vms
+console`), with its own token: it writes the operator's rows — cameras,
+next_id, retention — and never placement. Reads never touch a worker.
 
     GET  /                        the page: the camera list, a camera's timeline, playback of a span (console.html)
     GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
     GET  /cameras                 the read model: every camera from the workers' heartbeats, with age
     GET  /where/<id>              which worker — from the stored placement
     GET  /timeline/<id>?from&to   segments from the archive resource's manifest, fenced ones marked
-    POST /cameras                 create (Idempotency-Key required)
+    POST /cameras                 create (Idempotency-Key required) — the row only; the controller places it on its next pass
     POST /marks                   an operator's observation {cam, note} — the CONSOLE's event, into console/<instance>/…
                                   on this box's resource (never a worker's bucket; the index joins on `cam`)
     PUT  /cameras/<id>            update — refuses placement and controller-owned fields
@@ -129,8 +130,8 @@ def make_handler(ctl: VmsController, archive: ArchiveResource | None, wall=None)
             if key is None:
                 return
             try:
-                r = ctl.create_camera(self._body()); pl = ctl.place(r["id"])
-                resp = (201, {**r, "worker": pl.worker if pl else None})
+                r = ctl.create_camera(self._body())
+                resp = (201, {**r, "worker": None})              # placed by the controller's next pass, never by the console
             except Refused as e:
                 resp = (400, {"detail": str(e)})
             seen[key] = resp; self._send(*resp)

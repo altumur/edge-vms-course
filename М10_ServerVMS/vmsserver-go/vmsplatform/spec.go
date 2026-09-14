@@ -284,7 +284,21 @@ func LoadSpec(path string) (*SubsystemSpec, error) {
 }
 
 func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
-func (s *SubsystemSpec) Numeric() bool  { return s.ID == "numeric" }
+
+// ACLConsole: the operator's rows — what a console (count ≥ 2, anywhere) may write; never placement.
+func (s *SubsystemSpec) ACLConsole() []string {
+	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id"}
+	for _, d := range s.Derived {
+		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")
+	}
+	return out
+}
+
+// ACLController: placement — what the controller (count = 1) may write; never a unit's row.
+func (s *SubsystemSpec) ACLController() []string {
+	return []string{s.Name + "/workers/*", s.Name + "/placement/*", s.Name + "/slots/*"}
+}
+func (s *SubsystemSpec) Numeric() bool { return s.ID == "numeric" }
 
 func (s *SubsystemSpec) parseID(v string) any {
 	if s.Numeric() {
@@ -588,6 +602,9 @@ func (c *SpecController) Update(uid string, fields map[string]any) (Row, error) 
 	return r, nil
 }
 
+// Delete is the operator's half: the row is marked. Its placement is the
+// controller's half, taken back on the next pass (UnplaceDeleted) — a
+// console's token cannot touch an assignment, and does not need to.
 func (c *SpecController) Delete(uid string) error {
 	if _, err := c.Write(c.rowKey(uid), func(it Items) Items {
 		if len(it) == 0 {
@@ -598,15 +615,28 @@ func (c *SpecController) Delete(uid string) error {
 	}); err != nil {
 		return err
 	}
-	c.derived(nil, uid, true)
-	if pl := c.Placement(uid); pl != nil {
-		c.AssignRemove(pl.Worker, uid)
-		c.Write(c.Sub.Config("placement", uid), func(it Items) Items {
+	return c.derived(nil, uid, true)
+}
+
+// UnplaceDeleted is the controller's half of a delete: every placement whose
+// unit is gone loses its assignment and its row says so. Runs first in every pass.
+func (c *SpecController) UnplaceDeleted() []string {
+	gone := []string{}
+	paths, _ := c.Vars.List(c.Sub.Config("placement") + "/")
+	for _, pth := range paths {
+		uid := pth[strings.LastIndex(pth, "/")+1:]
+		it, _, _ := c.Vars.Get(pth)
+		if it == nil || it["worker"] == "" || c.Unit(uid) != nil {
+			continue
+		}
+		c.AssignRemove(it["worker"], uid)
+		c.Write(pth, func(it Items) Items {
 			n, _ := strconv.Atoi(it["rev"])
 			return Items{"worker": "", "reason": "deleted", "at": Str(c.Wall()), "rev": strconv.Itoa(n + 1)}
 		})
+		gone = append(gone, uid)
 	}
-	return nil
+	return gone
 }
 
 func (c *SpecController) Unit(uid string) Row {
@@ -719,6 +749,7 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 }
 
 func (c *SpecController) EnsurePlaced(workers []string) ([]Placement, error) {
+	c.UnplaceDeleted()
 	out := []Placement{}
 	for _, r := range c.Units() {
 		pl, err := c.Place(r.ID(), workers)
@@ -781,6 +812,7 @@ func (c *SpecController) MoveTo(uid, to, reason string) (Placement, error) {
 // Redistribute is the controller's one unasked move: a slot that was
 // RELEASED still lists units. Move them to the workers that are here.
 func (c *SpecController) Redistribute(workers []string) []Move {
+	c.UnplaceDeleted()
 	moves := []Move{}
 	for _, gone := range c.ReleasedSlots() {
 		var live []string

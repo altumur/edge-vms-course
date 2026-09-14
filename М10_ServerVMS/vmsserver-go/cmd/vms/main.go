@@ -1,11 +1,11 @@
-// vms worker|controller — the two processes, on one box.
+// vms worker|controller|console — the three processes, on one box.
 //
 //	PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
 //	SPOOL=/data/spool  ARCHIVE=/data/archive
 //	WORKER_NAME=w-1                  the slot to claim (systemd: %i); unset: NOMAD_ALLOC_INDEX → w-<index>;
 //	                                 neither: the first free slot, a lapsed one first
 //	CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
-//	CONSOLE_PORT=8080                the controller's console
+//	CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
 package main
 
 import (
@@ -56,9 +56,25 @@ func main() {
 		}
 		log.Printf("worker %s (instance %s) claimed its slot", w.Name, w.Instance)
 		w.Run(2*time.Second, stop)
-	case "controller":
+	case "controller": // count = 1, the only writer of placement; no HTTP — nothing asks it anything
 		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmscontroller", "vms/*")
+		vars = vars.AsWriter("vmscontroller", vms.Spec.ACLController()...)
+		ctl := vms.NewVmsController(vars, objects, capacity, nil)
+		for {
+			if _, err := ctl.EnsurePlaced(nil); err != nil { // deleted rows unplaced; new cameras onto the workers it sees
+				log.Println("placement pass failed:", err)
+			}
+			ctl.Redistribute(nil) // cameras of a RELEASED slot (scale-in) onto the rest; nothing else, ever
+			ctl.PublishSnapshot()
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
+		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
+		vars = vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...)
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
 		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil)
@@ -66,20 +82,10 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("console on %s", ln.Addr())
-		for {
-			if _, err := ctl.EnsurePlaced(nil); err != nil { // new cameras onto the workers it sees
-				log.Println("placement pass failed:", err)
-			}
-			ctl.Redistribute(nil) // cameras of a RELEASED slot (scale-in) onto the rest; nothing else, ever
-			select {
-			case <-stop:
-				srv.Close()
-				return
-			case <-time.After(5 * time.Second):
-			}
-		}
+		<-stop
+		srv.Close()
 	default:
-		log.Fatal("usage: vms worker|controller")
+		log.Fatal("usage: vms worker|controller|console")
 	}
 }
 

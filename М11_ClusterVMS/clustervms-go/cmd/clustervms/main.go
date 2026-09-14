@@ -1,4 +1,4 @@
-// clustervms worker|controller|resource|eventindex — the cluster's jobs, in Go.
+// clustervms worker|controller|console|resource — the cluster's jobs, in Go.
 //
 //	NOMAD_ADDR, NOMAD_TOKEN         the task's own workload identity (Variables)
 //	OBJECT_STORE_URL                variables://objects (default) · s3+http://minio:9000/vms?region=us-east-1 · file:///path
@@ -31,7 +31,7 @@ func env(k, def string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: clustervms worker|controller|resource|eventindex")
+		log.Fatal("usage: clustervms worker|controller|console|resource")
 	}
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)
@@ -70,14 +70,9 @@ func main() {
 		}
 		log.Printf("worker %s (alloc %s) on %s claimed its slot", w.Name, w.Alloc, w.Server)
 		w.Run(2*time.Second, stop)
-	case "controller":
+	case "controller": // count = 1, the only writer of placement; no HTTP — nothing asks it anything
 		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
 		ctl := cluster.NewClusterController(vars, objects, capacity, nil, env("CLUSTER", "cluster-a"))
-		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive})
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("console on %s", ln.Addr())
 		every(5*time.Second, func() {
 			if _, err := ctl.EnsurePlaced(nil); err != nil {
 				log.Println("placement:", err)
@@ -85,6 +80,17 @@ func main() {
 			ctl.Redistribute(nil)
 			ctl.PublishSnapshot()
 		})
+	case "console": // count ≥ 2, anywhere: the page, the API, the eventindex; a token for the operator's rows only
+		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
+		ctl := cluster.NewClusterController(vars, objects, capacity, nil, env("CLUSTER", "cluster-a"))
+		idx := p.NewEventIndex(p.NewHTTPResourceReader(), nil)
+		idx.Rebuild(p.ResourcesSeen(objects))
+		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive, Index: idx})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("console on %s", ln.Addr())
+		every(5*time.Second, func() { idx.Tail(p.ResourcesSeen(objects)) })
 		srv.Close()
 	case "resource":
 		ar := vms.NewArchiveResource(spool, archive, 600, nil)
@@ -98,11 +104,7 @@ func main() {
 			r.Heartbeat()
 			r.Pass()
 		})
-	case "eventindex":
-		idx := p.NewEventIndex(p.NewHTTPResourceReader(), nil)
-		log.Printf("eventindex: %+v", idx.Rebuild(p.ResourcesSeen(objects)))
-		every(10*time.Second, func() { idx.Tail(p.ResourcesSeen(objects)) })
 	default:
-		log.Fatal("usage: clustervms worker|controller|resource|eventindex")
+		log.Fatal("usage: clustervms worker|controller|console|resource")
 	}
 }

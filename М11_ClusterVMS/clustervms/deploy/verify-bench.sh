@@ -32,7 +32,7 @@ done
 [ "$archives" -ge 1 ] && ok "$archives server(s) declare meta.archive (the resource has somewhere to be)" || bad "no server declares meta.archive"
 
 # 3
-for j in vmsworker vmscontroller resource autoscaler; do
+for j in vmsworker vmscontroller console resource autoscaler; do
   nomad job validate "$HERE/$j.nomad.hcl" >/dev/null 2>&1 && ok "$j.nomad.hcl validates" || bad "$j.nomad.hcl: $(nomad job validate "$HERE/$j.nomad.hcl" 2>&1 | tail -1)"
 done
 
@@ -40,6 +40,7 @@ done
 nomad acl policy apply -description vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description resource resource "$HERE/resource-policy.hcl" >/dev/null 2>&1
+nomad acl policy apply -description console console "$HERE/console-policy.hcl" >/dev/null 2>&1
 tok="$(nomad acl token create -type client -policy vmsworker -ttl 10m -json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["SecretID"])')"
 if [ -n "$tok" ]; then
   NOMAD_TOKEN="$tok" nomad var put -force vms/epoch/verify epoch=1 >/dev/null 2>&1 && ok "worker token writes vms/epoch/*" || bad "worker token cannot write its epochs"
@@ -51,10 +52,19 @@ if [ -n "$tok" ]; then
 else
   bad "could not create a client token with policy vmsworker (ACLs bootstrapped? NOMAD_TOKEN set?)"
 fi
+# 4b — the console's token: the operator's rows, never placement
+ctok="$(nomad acl token create -type client -policy console -ttl 10m -json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["SecretID"])')"
+if [ -n "$ctok" ]; then
+  NOMAD_TOKEN="$ctok" nomad var put -force vms/cameras/verify name=probe >/dev/null 2>&1 && ok "console token writes vms/cameras/*" || bad "console token cannot write a camera row"
+  if NOMAD_TOKEN="$ctok" nomad var put -force vms/placement/verify worker=w-0 >/dev/null 2>&1; then bad "console token wrote vms/placement/* — a console that can place is a second controller"; else ok "console token refused on vms/placement/* (403)"; fi
+  if NOMAD_TOKEN="$ctok" nomad var put -force vms/workers/w-verify units=1 >/dev/null 2>&1; then bad "console token wrote vms/workers/*"; else ok "console token refused on vms/workers/* (403)"; fi
+  nomad var purge vms/cameras/verify >/dev/null 2>&1
+fi
 
 # 5 — the binding to the JOB's workload identity, which is what the product relies on
 nomad acl policy apply -namespace default -job vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsworker" || bad "policy binding to job failed"
 nomad acl policy apply -namespace default -job vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmscontroller" || bad "policy binding to vmscontroller failed"
+nomad acl policy apply -namespace default -job console console "$HERE/console-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job console" || bad "policy binding to console failed"
 alloc="$(nomad job allocs -json vmsworker 2>/dev/null | python3 -c 'import sys,json;a=[x for x in json.load(sys.stdin) if x["ClientStatus"]=="running"];print(a[0]["ID"] if a else "")')"
 if [ -n "$alloc" ]; then
   inside='H="X-Nomad-Token: $NOMAD_TOKEN"; A="${NOMAD_ADDR:-http://127.0.0.1:4646}";

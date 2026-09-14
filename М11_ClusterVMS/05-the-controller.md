@@ -78,7 +78,7 @@ ctl.publish_snapshot()   -> vms/snapshot  {cluster: "north", ts, cameras: [{…r
 
 ## Step 6 — The console
 
-`cluster/console.py`, standard library, the reads a cluster needs and no new writes:
+`cluster/console.py`, standard library — its own job now (`count = 2`, `console.nomad.hcl`, a token for the operator's rows and nothing else; М10 Lesson 5, Step 6 has the argument), the reads a cluster needs and no new writes:
 
 ```
 GET /cameras            rows from every heartbeat: phase, server, age, worker_state
