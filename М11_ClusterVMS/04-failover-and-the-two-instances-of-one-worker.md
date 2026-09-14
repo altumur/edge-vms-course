@@ -1,7 +1,7 @@
 # Lesson 4 — Failover, and the Two Instances of One Worker
 
 **Module:** ClusterVMS — workers that outlive their server (Module 11)
-**You will build:** the `disconnect` numbers a recorder needs and the lease arithmetic that agrees with them; the power pull measured from the workers' own heartbeats; the old instance waking up and being fenced twice — at its slot and at every epoch — with its footage kept; and the reassignment window, which is the same window with a different verdict.
+**You will build:** the `disconnect` numbers a worker needs and the lease arithmetic that agrees with them; the power pull measured from the workers' own heartbeats; the old instance waking up and being fenced twice — at its slot and at every epoch — with its footage kept; and the reassignment window, which is the same window with a different verdict.
 **Time:** ~180 minutes.
 
 > **The two numbers this lesson exports.** `vms_failover_seconds{kind="worst"}` — the last heartbeat of the dead instance to the replacement's first pass, worst of three runs — is the product's RTO. `vms_epoch_conflicts{worker}` counts a stale instance fenced at the resource; zero forever on a healthy cluster, alarmed on anyway.
@@ -24,7 +24,7 @@ The first ClusterVMS design solved this with an epoch in the archive path and a 
 ## Learning objectives
 
 1. Distinguish restart from reschedule and say which keeps footage on the same disk.
-2. Set the `disconnect` block for a recorder and defend the four values.
+2. Set the `disconnect` block for a worker and defend the four values.
 3. State why the epoch must come from a single issuer, and why Nomad's variable lock is the wrong one.
 4. Derive the lease margins on a monotonic clock and the clock-rate error they tolerate.
 5. Pull the power, measure the RTO from the heartbeats, and show the replacement asked nobody.
@@ -40,11 +40,11 @@ The first ClusterVMS design solved this with an epoch in the archive path and a 
 | **Restart** | the same server | `restart {}` | a crashed process — a vendor SDK taking the worker with it | stays on the same resource; the closed-but-unpromoted segment is picked up (М10 Lesson 3) |
 | **Reschedule** | a different server | `reschedule {}` | a dead server, a full disk, a constraint no longer met | the old resource keeps the past; the new one takes the future |
 
-Restart first, reschedule second: three restarts in ten minutes on one server before Nomad decides the server is the problem. Service jobs default to unlimited reschedule attempts with exponential delay — right for a recorder, which must not give up while the operator is asleep.
+Restart first, reschedule second: three restarts in ten minutes on one server before Nomad decides the server is the problem. Service jobs default to unlimited reschedule attempts with exponential delay — right for a worker, which must not give up while the operator is asleep.
 
 ## Step 2 — The `disconnect` block
 
-By default, when a client stops heartbeating Nomad marks its allocations lost and places replacements *while the client, if merely partitioned, keeps running its tasks.* For a web service that is fine. For a recorder it is two writers on camera 7. The block (Nomad ≥ 1.8.0 — the version floor) is where you say what you want instead; the worker job carries:
+By default, when a client stops heartbeating Nomad marks its allocations lost and places replacements *while the client, if merely partitioned, keeps running its tasks.* For a web service that is fine. For a worker it is two writers on camera 7. The block (Nomad ≥ 1.8.0 — the version floor) is where you say what you want instead; the worker job carries:
 
 ```hcl
 disconnect {

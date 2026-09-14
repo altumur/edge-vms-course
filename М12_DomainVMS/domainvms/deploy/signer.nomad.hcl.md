@@ -1,4 +1,4 @@
-# signer.nomad.hcl — the domain signer job: one job, two keys, in the DOMAIN CLUSTER only, kept off recorders by a constraint
+# signer.nomad.hcl — the domain signer job: one job, two keys, in the DOMAIN CLUSTER only, kept off the servers that carry workers by a constraint
 
 **Role.** Lessons 4 and 7. The jobspec for `python3 -m domain.signer_service` (`../domain/signer_service.py.md`, `../domain/signer.py.md`); its token is `signer-policy.hcl`. The header comment: one job, two keys (the CA and the token issuer); `count = 1` is not exactly-one during a reschedule, and that is harmless here — same key, same signatures; the key lives in the Variable `domain/signer`, a software key on purpose, because a TPM would pin the job to one server and defeat the failover it just gained.
 
@@ -10,7 +10,7 @@
 
 ### `group "signer"`
 - `count = 1` — one signer; a reschedule may briefly run two, which is fine because both load the same `domain/signer`.
-- `constraint { attribute = "${meta.role}"  operator = "!="  value = "recorder" }` — the comment: what the operator may say is a CONSTRAINT, never a server — not on a server carrying fifty cameras. `meta.role` is set in each client's `client.hcl`.
+- `constraint { attribute = "${meta.role}"  operator = "!="  value = "worker" }` — the comment: what the operator may say is a CONSTRAINT, never a server — not on a server carrying fifty cameras. `meta.role` is set in each client's `client.hcl`.
 - `network { port "https" {} }` — a dynamic port; the service registration below is how it is found.
 - `service { name = "domain-signer"  port = "https"  provider = "nomad" }` — registered in Nomad's catalogue so consoles and the registrar can find `/login`, `/revoke`, `/keys`. No health check.
 

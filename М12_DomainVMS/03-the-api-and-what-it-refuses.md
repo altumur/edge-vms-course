@@ -8,7 +8,7 @@
 
 Every screen an operator opens starts with the same list: every camera, its name, its site, whether it is recording, when it was last seen — across workers and across clusters. The architecture so far cannot draw it. The directory answers *where* camera 7 is from a cluster's snapshot; the phase, the position and `observed_revision` are what a worker observes, and they live only in its heartbeat, because М10 put them there and nowhere else. So the list exists nowhere and has to be assembled, and the wrong way to assemble it is the obvious one.
 
-The second half of the lesson is a question the single-box modules never had to ask: who talks to people? М9 put a console on the recorder and М10 on the controller, and each was the right console for the right client — the box's own status, one query. It never said who is allowed to be that console's client, and the answer decides whether every browser tab is a subtraction from the camera count.
+The second half of the lesson is a question the single-box modules never had to ask: who talks to people? М9 put a console on the recorder and М10 beside the controller, as its own process, and each was the right console for the right client — the box's own status, one query. It never said who is allowed to be that console's client, and the answer decides whether every browser tab is a subtraction from the camera count.
 
 > **What you can verify without hardware.** The read model, the causes, the API façade and the gateway's contract run against fakes in `tests/test_lesson3_readview_api_gateway.py`, including the console over real HTTP on a random port. Two hundred cameras across four workers, a server killed, one cause — that is a test. WebRTC, fMP4 and TURN are the transport under the gateway's contract and need a browser and the bench.
 
@@ -105,7 +105,7 @@ The API is unauthenticated in this lesson, and every response says so: `"authent
 
 ## Step 5 — Who serves browsers
 
-Everything so far is recorders talking to stores. Now people.
+Everything so far is workers and controllers talking to stores. Now people.
 
 **A worker serves few, trusted, internal clients. Something else serves many, untrusted, external ones.** A worker's memory is `B + n·I`, budgeted for cameras; a browser is numerous, on a bad network, behind NAT, inclined to open six tabs and leave them. The moment a worker serves browsers, a slow viewer on a Saturday night competes with recording for the same process. So the worker's clients are exactly one — the live gateway, on its tee — and the console never touches a worker at all; the two are separate processes because they fail differently:
 
@@ -130,7 +130,7 @@ class LiveTee:             # the worker side: subscribers are gateways, never br
 class Gateway:             # ONE subscription per camera upstream; N viewer queues out; relays the token
 ```
 
-The test puts fifty viewers on one camera and asserts what the design record promises: the tee has **one** subscriber, the gateway has fifty; a hundred frames pushed into a thirty-frame upstream queue leak seventy and the recorder's `push()` never waited; every viewer with a five-frame queue leaked its own twenty-five and nobody else noticed. A stalled browser costs itself frames. It cannot cost the worker anything.
+The test puts fifty viewers on one camera and asserts what the design record promises: the tee has **one** subscriber, the gateway has fifty; a hundred frames pushed into a thirty-frame upstream queue leak seventy and the worker's `push()` never waited; every viewer with a five-frame queue leaked its own twenty-five and nobody else noticed. A stalled browser costs itself frames. It cannot cost the worker anything.
 
 The line to hold: **the gateway relays and does not authorise.** `Gateway.watch()` hands the viewer's token to `WorkerLiveEndpoint.open()`, and the *cluster's* `authorise(token, camera)` — signature against the key its Variables hold, then the cluster's grants (Lesson 4) — decides at the endpoint. A bad token is refused by the cluster's check, not the gateway's opinion, because a gateway that authorised on its own would be enforcement in a process that cannot survive the domain being down; and the worker itself knows nothing of tokens — the check runs in front of its tee, not inside its loop. And when a camera fails over, `reconnect()` asks the directory again and follows the endpoint; the viewers' queues survive the move.
 
@@ -142,7 +142,7 @@ The line to hold: **the gateway relays and does not authorise.** `Gateway.watch(
 | **Gateway** | live view and playback | recording |
 | **Worker** | its cameras go dark on the wall until Nomad brings it back; the console shows them from the last heartbeat, with the age | every other camera |
 
-In no case does a web problem reach a recorder, and in no case does a recorder's process host a viewer. Both jobs run in **every cluster** — a single-cluster customer gets a screen and a picture with no domain at all — and the domain cluster's console is the same code with every cluster's stores behind it, which is the read model's *directory of directories* again, now with a picture under each row.
+In no case does a web problem reach a worker, and in no case does a worker's process host a viewer. Both jobs run in **every cluster** — a single-cluster customer gets a screen and a picture with no domain at all — and the domain cluster's console is the same code with every cluster's stores behind it, which is the read model's *directory of directories* again, now with a picture under each row.
 
 **Deliverable:** the console showing two hundred cameras across four workers; kill a server; **one cause displayed.** And a browser watching one of them live through the gateway, with the worker's tee showing one subscriber — the gateway — and the browser count on the gateway.
 

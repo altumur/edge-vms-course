@@ -3,7 +3,7 @@
 A worker serves few, trusted, internal clients; the live gateway serves
 many, untrusted, external ones. The worker's pipeline carries a `tee` after
 the parser with a LEAKY queue on the live branch (М10 Lesson 4) — a stalled
-subscriber loses frames, the recorder behind it never stalls. The gateway
+subscriber loses frames, the worker behind it never stalls. The gateway
 subscribes to that tee ONCE per camera and fans out to N viewers, each with
 its own leaky queue. The gateway relays the viewer's token and the CLUSTER's
 authoriser — its grants, held in its own Variables, verified offline —

@@ -127,7 +127,7 @@ def test_gateway_fans_out_and_the_worker_sees_one_viewer():
     except Forbidden:
         pass
     for f in range(100):
-        tees[7].push(f"frame-{f}")                                       # the recorder's push never blocks
+        tees[7].push(f"frame-{f}")                                       # the worker's push never blocks
     assert gw.pump() == 30 and tees[7].subscribers["gw-1"].dropped == 70  # upstream leaky queue (30) leaked
     assert all(len(v.q) == 5 and v.dropped == 25 for v in viewers)       # every slow viewer leaked its own
     for i in range(50):

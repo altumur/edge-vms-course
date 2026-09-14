@@ -31,7 +31,7 @@ job "vmsworker" {
       operator  = "is_set"
     }
 
-    disconnect {                                     # Lesson 4: the defaults are wrong for a recorder
+    disconnect {                                     # Lesson 4: the defaults are wrong for a worker
       lost_after           = "45s"
       replace              = true
       stop_on_client_after = "25s"                   # the holder stops at TTL − margin on its own clock anyway

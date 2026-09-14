@@ -2,7 +2,7 @@
 
 [Module 11](../М11_ClusterVMS/README.md) built a cluster: servers close enough to share a network you would bet recording on, and workers that survive any of them dying — with nothing above it. This module is for the deployment that has more than one: three server rooms on a campus, a cluster rented in the customer's cloud, one customer, one directory, one signer. It is the top of the product, and it is allowed to be switched off.
 
-Eight lessons in which a layer is built that answers exactly three questions a cluster cannot — *where is camera 7* across clusters, *which cluster gets a new camera*, and *is that answer complete* — serves people without ever serving them from a recorder, issues and rotates its own trust with nobody above to re-issue anything, lets a box join with nobody typing a secret, and can vanish for a month without a camera noticing.
+Eight lessons in which a layer is built that answers exactly three questions a cluster cannot — *where is camera 7* across clusters, *which cluster gets a new camera*, and *is that answer complete* — serves people without ever serving them from a worker, issues and rotates its own trust with nobody above to re-issue anything, lets a box join with nobody typing a secret, and can vanish for a month without a camera noticing.
 
 The full design brief is in [`module-design.md`](module-design.md); the decision that removed the domain's database is in [`where-the-database-lives.md`](where-the-database-lives.md).
 

@@ -15,7 +15,7 @@ job "domain-signer" {
     constraint {
       attribute = "${meta.role}"
       operator  = "!="
-      value     = "recorder"     # not on a server carrying fifty cameras
+      value     = "worker"       # not on a server carrying fifty cameras (meta.role, set in client.hcl)
     }
 
     network { port "https" {} }

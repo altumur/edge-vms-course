@@ -17,14 +17,14 @@
 - `max = 12` — the comment: the servers' budget, B + n·I from М9 Lesson 7 — how many workers of `resources` below the three servers can carry.
 - `policy.cooldown = "5m"` — the comment: longer than a failover, so a reschedule (a replacement worker briefly reporting full load or none) is not read as demand.
 - `policy.evaluation_interval = "1m"` — how often the autoscaler evaluates.
-- `check "load" { source = "prometheus"  query = "avg(vms_worker_load)" }` — the metric is assigned ÷ capacity across live workers, from the heartbeats via the console's `/metrics` (the comment: never CPU — a recorder's CPU says nothing about how many cameras it still has room for). `source` names the `apm "prometheus"` plugin in `autoscaler.nomad.hcl`.
+- `check "load" { source = "prometheus"  query = "avg(vms_worker_load)" }` — the metric is assigned ÷ capacity across live workers, from the heartbeats via the console's `/metrics` (the comment: never CPU — a worker's CPU says nothing about how many cameras it still has room for). `source` names the `apm "prometheus"` plugin in `autoscaler.nomad.hcl`.
 - `strategy "target-value" { target = 0.9 }` — keep average load at 0.9: scale out when the fleet is fuller than 90 %, in when emptier; matches the `strategy "target-value"` plugin in the autoscaler config.
 
 ### `constraint`
 - `attribute = "${meta.archive}"  operator = "is_set"` — the comment: a worker records into the resource on its own server, so only servers that have one.
 
 ### `disconnect`
-Lesson 4 — the comment: the defaults are wrong for a recorder.
+Lesson 4 — the comment: the defaults are wrong for a worker.
 - `lost_after = "45s"` — how long a client may be unreachable before its allocations are considered lost and replaced. 45 s is the design's number: the worker's lease TTL is 30 s with a 5 s margin, so the holder has already stopped writing at 25 s on its own clock before Nomad starts a replacement (`test_the_lease_stops_writing_before_the_replacement_may_start`); the same 45 s is `lost_after` in `merged_timeline` and the platform's `Resource`.
 - `replace = true` — start a replacement allocation elsewhere once lost; that replacement, with the same index, claims `w-<n>` and reads the assignment — the failover of `test_the_power_pull` (48 s = 45 + a schedule).
 - `stop_on_client_after = "25s"` — a disconnected client stops the allocation itself after 25 s; the comment: the holder stops at TTL − margin on its own clock anyway, so this only makes Nomad agree with the worker.

@@ -34,7 +34,7 @@ That rule was chosen for archive locality, and it turns out to put the fencing e
 | **Server**   | a box with CPUs and disks: a replica of the cluster's stores, a **resource** (the platform's job on its disks), and whichever **workers** the scheduler places there                                                                                                                                                  | the scheduler, continuously |
 | **Site**     | where cameras physically are. The only one of the three an operator names                                                                                                                                                                                                                                             | the customer's building     |
 
-**A recorder is not a server**, and М9 builds exactly one without ever needing the distinction. It matters from М11 onward, where a server dying moves a *worker* — whose cameras are assigned to its name in the cluster's raft — rather than reassigning cameras, which is why failover rewrites nothing; what stays on the server is a *resource*.
+**A worker is not a server**, and М9 builds exactly one box without ever needing the distinction. It matters from М11 onward, where a server dying moves a *worker* — whose cameras are assigned to its name in the cluster's raft — rather than reassigning cameras, which is why failover rewrites nothing; what stays on the server is a *resource*.
 
 [**М8**](./М8_KVS_VMS) comes before the progression starts: it builds the product itself with no local truth at all, because Kinesis holds the configuration and the archive both. Everything after it is the consequence of the box having to hold its own.
 
@@ -46,11 +46,11 @@ That rule was chosen for archive locality, and it turns out to put the fencing e
 
 **DomainVMS is what is left once a cluster works alone — and it is less than expected.** A cluster fails over, restores from its own object store, and answers *where is camera 7* from one raft, strongly consistent, asking nothing above it. What only a domain can know is what stops being knowable with a second cluster: which cluster holds a camera, which cluster should get a new one, and **whether an answer is complete** — because across clusters there is no raft, only aggregation that is partial and bounded-stale. The domain is a directory *of directories* that cannot be consistent, and its honesty about that is the module.
 
-**Every layer is allowed to be unavailable to the layer beneath it**, and the layer beneath caches what it needs to carry on. recorders keep recording when the cluster's directory is down; recorders keep recording — and keep being edited — when the domain is unreachable; and **the domain keeps operating with the vendor gone**, which is where that rule stops being one decision among several and becomes a property a customer can be promised.
+**Every layer is allowed to be unavailable to the layer beneath it**, and the layer beneath caches what it needs to carry on. workers keep recording when the cluster's directory is down; clusters keep recording — and keep being edited — when the domain is unreachable; and **the domain keeps operating with the vendor gone**, which is where that rule stops being one decision among several and becomes a property a customer can be promised.
 
 **The domain is the top of the product.** One customer is one domain, and a domain can be as large as their whole estate — three server rooms, or one cloud cluster serving fifty shops. Earlier drafts had a layer above it holding a root CA, a federated identity, a vault and a fleet inventory; item by item, each turned out to be either something the domain does for itself or something the *vendor* does across customers. So М14 is not a fifth scope. It is the far side of a boundary — and the reason the design has no vendor-held root over any customer's trust domain is that a vendor who can sign your CA is a vendor who can impersonate you.
 
-The rule has a sharp edge, and it is the one worth carrying away: **anything a layer caches from above may keep recording forever, and must never delete anything.** Destructive operations expire; recording does not. A recorder owns its own retention policy, so it cannot go stale on that — but entitlement and placement come from above, and those can.
+The rule has a sharp edge, and it is the one worth carrying away: **anything a layer caches from above may keep recording forever, and must never delete anything.** Destructive operations expire; recording does not. A cluster owns its own retention policy, so it cannot go stale on that — but entitlement and placement come from above, and those can.
 
 **М13 adds no scope either, for the opposite reason.** Observability is how you see the four you already have — and it is domain-level: the remote observer is one more domain service, and its thesis (*a silent cluster is unreachable, not broken*) is М12's honesty about incomplete answers applied to metrics. It comes **before** the vendor, because the vendor module's demo — *the vendor disappears for thirty days* — can only be demonstrated with instrumentation in place, and its canary halt condition is an alert rule. It does not get a VMS name because it builds nothing new to name.
 
@@ -70,7 +70,7 @@ A shipped edge VMS is seven layers deep. One module per layer, each ending with 
 | [**М13** — Observability](./М13_Observability) | 6 · Prometheus + logs — collecting what М9–М12 emit, from the domain cluster | **Designed** · 4 lessons |
 | [**М14** — VendorVMS](./М14_VendorVMS) | *Not a layer.* MASA, the licence system, publishing, the hosting business — and what the vendor must never be able to do | **Designed** · 5 lessons |
 
-**[GLOSSARY.md](./GLOSSARY.md)** defines every term the course uses precisely — recorder versus Server, desired versus actual state, epoch and fencing, and the acronyms it would otherwise leave unexplained.
+**[GLOSSARY.md](./GLOSSARY.md)** defines every term the course uses precisely — worker versus server, desired versus actual state, epoch and fencing, and the acronyms it would otherwise leave unexplained.
 
 **[COURSE-PLAN.md](./COURSE-PLAN.md)** carries the full reasoning: why the modules run in this order, what each contains, and the two structural decisions that were taken along the way — the Nomad licence (BUSL, permitted for this use; version floor ≥ 1.8.0) and where secrets live once there is no secrets manager in the product.
 
@@ -98,12 +98,12 @@ Its spine is that a real edge product has **two independent update planes** — 
 
 The same lesson has the module's other sharp edge. **Pull the network cable for ten minutes and go looking for those ten minutes of video** — with `kvssink` publishing straight to AWS there is nothing behind it, so an uplink blink is data loss rather than a visibility problem. So the box spools segments to the data partition and uploads them separately, deleting only on acknowledgement. Those segments are the first thing in the course a later module *upgrades* rather than replaces: **М9 puts an index over the same files and they become the archive; М13 makes the upload conditional.**
 
-*The multi-node half of this module moved to М11, where recorders are scheduled across servers. A module called EdgeVMS should not build a raft cluster.*
+*The multi-node half of this module moved to М11, where workers are scheduled across servers. A module called EdgeVMS should not build a raft cluster.*
 
 - [Lesson index](./М9_EdgeVMS/README.md) — start here
 - [Module design](./М9_EdgeVMS/module-design.md) — both halves in one record: the two update planes, the partition layout and the ARM appendix; then the recorder's lesson plan, the Python shard model, and what the operator is never asked to decide
 - [RAUC alternatives](./М9_EdgeVMS/rauc-alternatives.md) — SWUpdate, Mender, bootc, systemd-sysupdate, and where each wins
-- [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's artifacts, whole: the bench, the PKI, RAUC config and bundle builder, the GRUB state machine, the health check (now reading the recorder's own signal), Quadlet units, the spool
+- [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's artifacts, whole: the bench, the PKI, RAUC config and bundle builder, the GRUB state machine, the health check (now reading the VMS's own signal — М10's worker and archive), Quadlet units, the spool
 - [One container per camera?](./М9_EdgeVMS/worker-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle
 
 Both reach the same shape of conclusion, as does the orchestrator record now filed with М11: the tool that teaches best is not always the tool that ships best, and the documents say which is which.

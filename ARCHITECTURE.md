@@ -6,7 +6,7 @@ This is the record to read when a module design says *"as decided earlier"* and 
 
 The short version, for orientation:
 
-> **A box records on its own. A recorder owns its own truth. A cluster survives any server in it. A domain is the top of the product and works with everything above it gone. The vendor is a counterparty across a one-way boundary, not a layer.**
+> **A box records on its own. A cluster owns its own truth. A cluster survives any server in it. A domain is the top of the product and works with everything above it gone. The vendor is a counterparty across a one-way boundary, not a layer.**
 
 Everything below is the long version of that sentence.
 
@@ -28,23 +28,23 @@ The design uses four nouns precisely, and most of its early mistakes were the re
 
 Two relationships carry most of the weight:
 
-- **A recorder is not a server.** A server dies; the recorder moves to another server *in the same cluster*, carrying its configuration, its cameras and its archive identity. Nothing is reassigned, because nothing was ever assigned to a server.
+- **A worker is not a server.** A server dies; the worker moves to another server *in the same cluster*, reads its assignment from the cluster's raft and takes a new epoch for each camera. Nothing is reassigned, because nothing was ever assigned to a server; the footage stays on the dead server's resource, unavailable rather than lost.
 - **A cluster is not a domain, and a domain is bigger.** A campus is one domain, three clusters, three sites. A cloud deployment is one domain, one cluster, fifty sites. Sites and clusters are many-to-many on purpose.
 
 And one rule that both of those rest on:
 
-> **A recorder fails over within its cluster and never across one.** Its footage is on that cluster's disks, and its fencing epoch comes from that cluster's raft. A whole cluster dying is not a failover; it is a larger event the domain reports honestly and does not try to heal.
+> **A worker fails over within its cluster and never across one.** Its footage is on that cluster's disks, and its fencing epoch comes from that cluster's raft. A whole cluster dying is not a failover; it is a larger event the domain reports honestly and does not try to heal.
 
 ### 1.2 The layers, bottom up
 
-| Layer | Built in | What it knows | Where truth lives | What can disagree |
-|---|---|---|---|---|
-| **The box** | М9 EdgeVMS | what it *is* | the image that booted | nothing — a box is whatever was flashed onto it |
-| **The recorder** (М9) | М9 Recorder | what it *should be* | a Postgres on the box | desired state and actual state, inside one process |
-| **The cluster** | М11 ClusterVMS | what it should be, *on whichever server survived* | each recorder, unchanged when a server dies | **two instances of the same recorder** |
-| **The domain** | М12 DomainVMS | what it should be, *and which cluster holds it* | each cluster's controller, with a directory across clusters | clusters, with the directory — and the directory with itself, because it cannot be consistent |
-| **Seeing it** | М13 Observability | whether any of the above is true right now | — | *broken* versus *unreachable* |
-| **The vendor** | М14 VendorVMS | *not a layer* | nowhere the product depends on | the customer, with the vendor |
+| Layer           | Built in          | What it knows                                     | Where truth lives                                           | What can disagree                                                                             |
+| --------------- | ----------------- | ------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **The box**     | М9 EdgeVMS        | what it *is*                                      | the image that booted                                       | nothing — a box is whatever was flashed onto it                                               |
+| **The server**  | М10 ServerVMS     | what it *should be*                               | the platform's stores on the box: Variables and objects, one controller writing placement | desired state and actual state — a row and a worker's heartbeat                              |
+| **The cluster** | М11 ClusterVMS    | what it should be, *on whichever server survived* | the cluster's raft, unchanged when a server dies            | **two instances of the same worker**                                                          |
+| **The domain**  | М12 DomainVMS     | what it should be, *and which cluster holds it*   | each cluster's controller, with a directory across clusters | clusters, with the directory — and the directory with itself, because it cannot be consistent |
+| **Seeing it**   | М13 Observability | whether any of the above is true right now        | —                                                           | *broken* versus *unreachable*                                                                 |
+| **The vendor**  | М14 VendorVMS     | *not a layer*                                     | nowhere the product depends on                              | the customer, with the vendor                                                                 |
 
 Every boundary between the first four is a network you stopped trusting — except the cluster/domain one, which is set by administration and spans machines that may well share a rack. The last boundary is not a network at all; it is an organisation.
 
@@ -52,21 +52,21 @@ Every boundary between the first four is a network you stopped trusting — exce
 
 > **Every layer is allowed to be unavailable to the layer beneath it, and the layer beneath caches what it needs to carry on.**
 
-Concretely: a camera keeps recording when its recorder's control loop is down; a recorder keeps recording *and keeps being edited* when its cluster's directory is down; a cluster fails over with the domain unreachable; a domain runs for thirty days — recording, renewing certificates, logging operators in, failing servers over — with the vendor gone.
+Concretely: a camera keeps recording when its controller is down; a worker keeps recording when its cluster's directory is down, and the cluster keeps being edited when the domain is unreachable; a cluster fails over with the domain unreachable; a domain runs for thirty days — recording, renewing certificates, logging operators in, failing servers over — with the vendor gone.
 
 The rule has one sharp edge, and it is the thing most worth carrying away:
 
 > **Anything cached from above may keep recording forever, and must never delete anything.** Destructive operations expire; recording does not.
 
-A recorder owns its own retention policy, so it cannot go stale on that. Entitlement and placement come from above, and those can — so a recorder that cannot confirm its entitlement keeps every camera it has and refuses to add one, and a recorder that cannot confirm its retention keeps footage and reports that it is doing so. Disks filling is a visible, recoverable problem. Deleted footage is neither.
+A cluster owns its own retention policy, so it cannot go stale on that. Entitlement and placement come from above, and those can — so a cluster that cannot confirm its entitlement keeps every camera it has and refuses to add one, and a resource that cannot confirm its retention keeps footage and reports that it is doing so. Disks filling is a visible, recoverable problem. Deleted footage is neither.
 
 ### 1.4 What runs where
 
 **On every box** (М9): an A/B root filesystem under RAUC, signed bundles, one-attempt rollback decided by a health check that reaches all the way to *is footage being written*; Podman under Quadlet; and a data partition holding everything that must outlive both an OS update and an application update — container storage, configuration, and the archive.
 
-**Per recorder** (М9): one Postgres holding configuration, the archive index and events; one worker running the reconcile loop and up to ~50 GStreamer pipelines in one Python process — in the product, the worker's own controller inside DriverPack, see §1.11; a `/metrics` endpoint exporting `camera_lag` and `camera_silent_seconds`.
+**Per server** (М10): the platform's stores (Variables and objects — on one box, files on the data partition; in a cluster, the cluster's raft and object store), the archive **resource** on its disks with its manifests and event buckets, and the **workers** placed there — each running the reconcile loop and up to ~50 GStreamer pipelines in one process (in the product, DriverPack, see §1.11), each heartbeating its status into an object; a console exporting `/metrics`. No database: М9's Postgres was retired in М10.
 
-**Per cluster** (М11): Nomad servers and clients — the cluster *is* a Nomad region; an object store on the cluster's own servers holding each recorder's restore point; the cluster directory, which is nothing more than each recorder's Nomad Variable, scanned; and, per subsystem, the three processes of §1.12 — workers (`count = N`), one controller, a console (`count = 2`) — plus the platform's resource job on every server.
+**Per cluster** (М11): Nomad servers and clients — the cluster *is* a Nomad region; an object store on the cluster's own servers holding every worker's heartbeat and the controller's snapshot; the cluster directory, which is nothing more than each worker's assignment Variable, scanned; and, per subsystem, the three processes of §1.12 — workers (`count = N`), one controller, a console (`count = 2`) — plus the platform's resource job on every server.
 
 **Per domain** (М12) — five services, hosted by one designated cluster — the **domain cluster**, Nomad choosing the server, no controller and no state that is not backed up beyond that cluster:
 
@@ -80,21 +80,21 @@ A recorder owns its own retention policy, so it cannot go stale on that. Entitle
 
 plus the **registrar**, the door a box knocks on to join the domain. Every outage in that column is bounded, and none of it is recording or recovery.
 
-**At the vendor** (М14): the MASA that vouches for its own hardware; the licence system — a customer database, one signing key, and a signed document naming a domain id that every recorder verifies offline, pulled through the domain's own update server and counted only at admission; the bundle signing key and the publishing pipeline; a support view of whatever inventory customers chose to report; and, optionally, a hosting business that rents clusters — the one place OpenBao appears, for a multi-tenant vendor holding many customers' secrets.
+**At the vendor** (М14): the MASA that vouches for its own hardware; the licence system — a customer database, one signing key, and a signed document naming a domain id that the domain verifies offline, pulled through the domain's own update server and counted only at admission; the bundle signing key and the publishing pipeline; a support view of whatever inventory customers chose to report; and, optionally, a hosting business that rents clusters — the one place OpenBao appears, for a multi-tenant vendor holding many customers' secrets.
 
 ### 1.5 The stores, chosen by shape
 
-There is exactly one database in the design, and it belongs to a recorder. Everything else is either the scheduler's store or an object store, and the rule for which is which turned out to be simple once found:
+There is no database in the design — М9's per-box Postgres was the last one, and М10 retired it. Everything is the scheduler's store, an object store, or files on a resource, and the rule for which is which turned out to be simple once found:
 
-> **Small and consistent goes in the scheduler's store. Large and queryable goes in a database. Large and opaque goes in an object store.**
+> **Small and consistent goes in the scheduler's store. Large and opaque goes in an object store. Bulk stays on the server's disks as a resource, and a question over it is a manifest, not a table.**
 
-| Store | Scope | Holds | Why not one of the others |
-|---|---|---|---|
-| **Postgres** | per recorder | configuration, archive index, events; camera credentials encrypted, key elsewhere | the only one that can answer a question — *what footage covers this window* is a `tstzrange && ` query over a GiST index |
-| **Nomad Variables** | per cluster (raft) | each recorder's identity and camera ids; the epoch; the signer's keys | raft is memory-resident and replicated to every server, so it must stay small; it is also the only store that offers **check-and-set** |
-| **Object store** | per cluster | each recorder's published configuration — the restore point | a blob nobody but its author parses, read once in the life of a failover; durability is the whole requirement |
+| Store               | Scope              | Holds                                                                             | Why not one of the others                                                                                                              |
+| ------------------- | ------------------ | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Nomad Variables** | per cluster (raft) | the operator's rows (`vms/cameras/*`), each worker's assignment and placement, slots, epochs, the signer's keys | raft is memory-resident and replicated to every server, so it must stay small; it is also the only store that offers **check-and-set** |
+| **Object store**    | per cluster        | every worker's heartbeat; the controller's snapshot — the only thing that leaves the cluster | a blob nobody but its author parses; durability and a timestamp are the whole requirement                                   |
+| **The resource**    | per server (disks) | segments, the manifest beside them, event buckets — mirrored to a peer resource   | bulk; *what footage covers this window* is the manifest, rebuilt from the files alone; it never moves because it cannot               |
 
-And a short list of things deliberately in no store: a boot-path assignment file on each recorder, so it can start recording while Postgres is still coming up; the domain root's backup, kept somewhere the domain cluster's death cannot reach.
+And one thing deliberately in no store: the domain root's backup, kept somewhere the domain cluster's death cannot reach.
 
 **The domain has no database.** Its directory is a federated read across each cluster's Variables. This was the sixth revision of that decision, and every revision moved in the same direction.
 
@@ -104,21 +104,21 @@ Everything that crosses a boundary in this design does so the same way:
 
 > **A one-way publication, with a stated recovery point.**
 
-| What | From | To | The RPO |
-|---|---|---|---|
-| **Footage** | a box's spool (М9) | its archive, or a cloud recorder | the spool bound — hours of uplink loss, sized from the partition |
-| **Configuration** | a recorder | its cluster's object store | the publication interval — the most recent edit a failover may lose |
-| **Status** | every recorder | the directory | the report interval |
+| What              | From               | To                               | The RPO                                                             |
+| ----------------- | ------------------ | -------------------------------- | ------------------------------------------------------------------- |
+| **Footage**       | a worker's spool   | the resource on its server, or a cloud archive (М8) | one segment — the open one, on a kill                            |
+| **Configuration** | a cluster's controller | its snapshot in the object store, read by the domain | the publication interval — the age the domain shows on every row |
+| **Status**        | every worker       | its heartbeat object; the console's read model | the heartbeat interval                                               |
 
-The acknowledgement rule is the same everywhere: **acknowledge on local commit, delete or promote only on acknowledgement from the far side, and show *saved · not yet replicated* in between.** Never acknowledge what you cannot vouch for; never block the write on it either.
+The acknowledgement rule is the same everywhere: **acknowledge only what is committed where it is safe, delete or promote only on acknowledgement from the far side, and show the age of every copy.** Inside a cluster that means after the CAS commit into raft — there is no *saved · not yet replicated*, the write is in raft or it was refused; across the uplink it means the snapshot's `ts`, printed on every row the domain shows. Never acknowledge what you cannot vouch for; never block the write on it either.
 
-Two things that look like flows and are not: **rights** — a recorder holds its own grants and enforces them locally, with an expiry that bounds the revocation window, renewed on the stream that already carries configuration; and **identity** — a recorder holds the signer's public key and verifies a token offline, holding nobody's password.
+Two things that look like flows and are not: **rights** — a cluster holds its own grants and enforces them at its console and gateway, with an expiry that bounds the revocation window, carried in by the domain agent; and **identity** — a cluster holds the signer's public key and verifies a token offline, holding nobody's password. A worker never learns a user exists.
 
 ### 1.7 Correctness: fencing, epochs, and CAS
 
-The one place a mistake corrupts customer footage rather than stopping a service is a server death: the old instance of a recorder may not be dead, only paused, and when it wakes it will try to keep writing to the same archive the replacement is now writing to. Two writers to one video stream cannot be merged, and nothing above can arbitrate after the fact.
+The one place a mistake corrupts customer footage rather than stopping a service is a server death: the old instance of a worker may not be dead, only paused, and when it wakes it will try to keep writing to the same archive the replacement is now writing to. Two writers to one video stream cannot be merged, and nothing above can arbitrate after the fact.
 
-The design's answer, from Kleppmann: a lock cannot stop a paused client writing, so **the resource must reject the stale token**. Every recorder instance carries an **epoch** — a monotonic integer issued by check-and-set against a Nomad Variable, whose `ModifyIndex` is raft-assigned and cannot go backwards — and the epoch is **part of the archive path**. The stale instance cannot name the files it would otherwise corrupt; its writes land where nobody reads.
+The design's answer, from Kleppmann: a lock cannot stop a paused client writing, so **the resource must reject the stale token**. Every worker instance carries an **epoch** per camera — a monotonic integer issued by check-and-set against a Nomad Variable, whose `ModifyIndex` is raft-assigned and cannot go backwards — and the epoch is **part of the archive path**. The stale instance cannot name the files it would otherwise corrupt; its writes land where nobody reads.
 
 The same principle, one level up, in a cheaper form: **at the domain, correctness comes from how a write is made, never from how many instances Nomad promises.** `count = 1` is not exactly-one during a reschedule; placement is safe against two instances because it writes with CAS and the second gets a 409, not because there is one of it.
 
@@ -126,26 +126,26 @@ What is **not** used for fencing, deliberately: Nomad's variable locks (an opaqu
 
 ### 1.8 Trust: who is what, and who says so
 
-| Subject | Proves itself with | Issued by | Verified by | Lifetime |
-|---|---|---|---|---|
-| **A box joining** | a factory IDevID, or an administrator's approval | the manufacturer / the domain's console | the domain's registrar | once |
-| **A recorder, on every stream** | an LDevID — mTLS, naming the *recorder* not the server | the domain signer | every peer, offline | hours to days |
-| **A person** | a signed token naming a subject | the domain signer, federated to the customer's IdP | every recorder, offline, against a public key | short; the grant it points at has its own expiry |
-| **The domain itself** | its self-signed root | itself — **there is nothing above** | — | years; rotated on a drill |
-| **The vendor's hardware** | a MASA voucher | the vendor | the registrar | once, at enrollment |
+| Subject                       | Proves itself with                                   | Issued by                                          | Verified by                                   | Lifetime                                         |
+| ----------------------------- | ---------------------------------------------------- | -------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| **A box joining**             | a factory IDevID, or an administrator's approval     | the manufacturer / the domain's console            | the domain's registrar                        | once                                             |
+| **A worker, on every stream** | an LDevID — mTLS, naming the *worker* not the server | the domain signer                                  | every peer, offline                           | hours to days                                    |
+| **A person**                  | a signed token naming a subject                      | the domain signer, federated to the customer's IdP | every cluster's console, offline, against a public key | short; the grant it points at has its own expiry |
+| **The domain itself**         | its self-signed root                                 | itself — **there is nothing above**                | —                                             | years; rotated on a drill                        |
+| **The vendor's hardware**     | a MASA voucher                                       | the vendor                                         | the registrar                                 | once, at enrollment                              |
 
 Two properties of that table are load-bearing.
 
-**The domain's root is the customer's, and nothing sits above it.** A vendor-held root that signs the customer's CA is a vendor who can impersonate the customer's whole trust domain. So recoverability comes from backup and rotation, not delegation, and losing the root means every recorder re-enrolls — the honest cost of the customer owning their own trust.
+**The domain's root is the customer's, and nothing sits above it.** A vendor-held root that signs the customer's CA is a vendor who can impersonate the customer's whole trust domain. So recoverability comes from backup and rotation, not delegation, and losing the root means every box re-enrolls — the honest cost of the customer owning their own trust.
 
-**Delegate an authority; never distribute a secret.** N recorders holding password hashes is N places to steal from; N recorders holding a public key is zero. Most of the secrets earlier drafts of the course wanted a vault for turned out to exist because something had not been given an identity.
+**Delegate an authority; never distribute a secret.** N clusters holding password hashes is N places to steal from; N clusters holding a public key is zero. Most of the secrets earlier drafts of the course wanted a vault for turned out to exist because something had not been given an identity.
 
 ### 1.9 The failure matrix
 
-| What dies | Recording | Editing at a recorder | Failover | Creating a camera | Logging in | What the console says |
+| What dies | Recording | Editing at a cluster | Failover | Creating a camera | Logging in | What the console says |
 |---|---|---|---|---|---|---|
 | A **camera** | that camera stops | — | — | — | — | `camera_silent_seconds` rises; the phase says why |
-| A **server** | ~one segment per recorder on it | continues | **yes, within the cluster** | continues | continues | one alert, naming the server |
+| A **server** | ~one segment per worker on it | continues | **yes, within the cluster** | continues | continues | one alert, naming the server |
 | The **cluster's directory** (Nomad servers) | continues | continues | **no** — no epoch, no Variable | not in that cluster | continues | *unreachable*, not broken |
 | A **whole cluster** | those cameras stop | — | no — nothing to fail over to | not there | continues elsewhere | *unreachable*; footage *unavailable*, not lost; **never rebalanced elsewhere** |
 | The **domain services** | continues | continues | **yes** — both dependencies are in the cluster | no | existing tokens to expiry; break-glass | the local cluster only |
@@ -161,7 +161,7 @@ The same software, three placements, and the difference is a number:
 50 cameras × 4 Mbit/s  =  200 Mbit/s sustained upstream, 24/7  ≈  2 TB/day
 ```
 
-| | recorders run | What crosses the uplink | Right for |
+| | workers run | What crosses the uplink | Right for |
 |---|---|---|---|
 | **Edge** | on hardware at the site | kilobytes of status and configuration | any site with more than a handful of cameras |
 | **Cloud** | on a cluster the domain rented from the customer's cloud account | **every camera's full bitrate**, continuously — and there is no spool, so the camera's own SD card is the buffer | a shop with six cameras and nobody to install hardware |
@@ -348,7 +348,7 @@ The module's own thesis is the one datacentre monitoring gets for free and this 
 | Removed | Reason |
 |---|---|
 | **Consul** | The product runs a PKI regardless (no mesh issues an identity to a device never on the network), so a mesh CA is a second hierarchy that buys nothing. Accepted cost: no health-check-filtered discovery. |
-| **A vault, from the product** | Most secrets existed because something had not been given an identity. The one that remains — camera credentials — must work with everything above the recorder unreachable. OpenBao survives only for a multi-tenant vendor. |
+| **A vault, from the product** | Most secrets existed because something had not been given an identity. The one that remains — camera credentials — must work with everything above the cluster unreachable. OpenBao survives only for a multi-tenant vendor. |
 | **The domain database** | Two jobs with nothing in common; a Variable and an object each did one better. |
 | **The domain controller** | Dissolved into five stateless-or-one-key services. |
 | **The root above the domain** | A vendor who can sign your CA can impersonate you. |

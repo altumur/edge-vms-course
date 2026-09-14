@@ -112,7 +112,7 @@ merged: e3, e3, e4  (resource A)  +  e5  (resource B)
 
 ## Step 5a — Events: buckets on the resource, recording or not
 
-Where do events go, now that there is no database on the recorder? Ask what an event *is*: an observation — a detector fired, the camera went silent, an operator marked a moment — made by the worker that holds the camera, keyed by camera and time, never updated. That is the manifest's shape, not a table's. The first draft of this step put events *beside the open segment*, and the question that broke it was: what if the camera is not being recorded? A live-only camera, an analytics-only camera, recording on motion — and the event that says *silent* has, by definition, no segment open.
+Where do events go, now that there is no database on the server? Ask what an event *is*: an observation — a detector fired, the camera went silent, an operator marked a moment — made by the worker that holds the camera, keyed by camera and time, never updated. That is the manifest's shape, not a table's. The first draft of this step put events *beside the open segment*, and the question that broke it was: what if the camera is not being recorded? A live-only camera, an analytics-only camera, recording on motion — and the event that says *silent* has, by definition, no segment open.
 
 So the archive's unit is corrected: it is a **time span under an epoch**, not a media file. A span may hold media (`archivesink` wrote it), events (the worker observed something), or both. The events half is a platform piece, `vmsplatform/events.py`, because nothing in it is about video:
 

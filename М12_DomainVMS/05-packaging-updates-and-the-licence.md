@@ -1,7 +1,7 @@
 # Lesson 5 — Packaging, Updates, and the Licence
 
 **Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** one pack for three clusters with per-cluster differences and no forks; an update path that works with the vendor unreachable; and an entitlement cache that degrades on a stated grace period without ever stopping a recorder.
+**You will build:** one pack for three clusters with per-cluster differences and no forks; an update path that works with the vendor unreachable; and an entitlement cache that degrades on a stated grace period without ever stopping a worker.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists

@@ -131,14 +131,14 @@ The only module where getting it wrong corrupts customer data rather than merely
 What is left once a cluster works alone: **everything that stops being knowable with more than one cluster** — and, since nothing above the domain belongs to the product, everything a domain must do for itself.
 
 - **A directory of directories, and it cannot be consistent.** Inside a cluster there is one raft; across clusters there is none, so the domain aggregates — partial, bounded-stale, and honest about incompleteness. The CAP boundary drawn by a network you stopped trusting
-- **Three-level placement, split by what each level knows:** Nomad picks the server, the cluster picks the recorder on capacity, the domain picks the cluster on **reachability**
+- **Three-level placement, split by what each level knows:** Nomad picks the server, the cluster picks the worker on capacity, the domain picks the cluster on **reachability**
 - **No domain controller.** One signer job, a stateless placement, a read view, an update server — hosted by one designated cluster — the **domain cluster**, Nomad choosing the server. The signer's key is the only state, a software key in raft on purpose, backed up beyond the cluster and rotated on a drill
 - **The domain is its own root.** A vendor-held root that signs the customer's CA can impersonate their whole trust domain; so the root is self-signed, permanent, and the customer's. Enrollment (registrar, LDevID, approval, TPM) is the domain's; only the MASA voucher is the vendor's
 - **Lifetimes against offline tolerance:** *tolerable outage = certificate lifetime − renewal margin*. Revocation at the edge is a lifetime problem, not a list problem
-- **Human identity:** recorders hold the signer's public key, never a password hash; the signer federates to the customer's own IdP. One domain, one Alice
-- **A cluster the domain rents for itself**, from the customer's cloud account — and proof the recorder cannot tell where it runs. The bandwidth arithmetic (fifty cameras at 4 Mbps is 200 Mbps up) makes *mixed* the default shape, and closes the arc with М8's rented cloud
+- **Human identity:** clusters hold the signer's public key, never a password hash; the signer federates to the customer's own IdP. One domain, one Alice
+- **A cluster the domain rents for itself**, from the customer's cloud account — and proof the worker cannot tell where it runs. The bandwidth arithmetic (fifty cameras at 4 Mbps is 200 Mbps up) makes *mixed* the default shape, and closes the arc with М8's rented cloud
 - **Its own update server and entitlement cache**, which is what lets it run with the vendor gone
-- **Who serves browsers: never a recorder.** A console and a live gateway as two cluster-level jobs — the recorder's only clients — with the failure arithmetic that keeps a web problem away from a recorder. Lesson 3 grows a section for it when the lessons are written
+- **Who serves browsers: never a worker.** A console and a live gateway as two cluster-level jobs — the worker's only clients — with the failure arithmetic that keeps a web problem away from a worker. Lesson 3 grows a section for it when the lessons are written
 
 ### М13 — Observability: Prometheus and logs · 4 lessons · [designed](./М13_Observability/module-design.md)
 
@@ -169,7 +169,7 @@ What is left for this module is what is genuinely *cross-cutting*:
 
 - **What the vendor may do, and must never be able to:** vouch for its hardware but never join a box to a domain alone; issue an entitlement but never stop recording by withholding one; publish a bundle but never push it to an appliance; rent a cluster but never hold the customer's root
 - **The MASA**, and the ten-year commitment running one implies; device → domain routing as the only reason enrollment touches the vendor
-- **The licence system** — the vendor's system of record and one signing key; a licence as a signed document bound to the domain id, pulled like a bundle, verified offline by every recorder, counted at admission and never at runtime; lifetimes instead of revocation, and the perpetual licence as the honest answer to *what if you are gone*
+- **The licence system** — the vendor's system of record and one signing key; a licence as a signed document bound to the domain id, pulled like a bundle, verified offline by the domain, counted at admission and never at runtime; lifetimes instead of revocation, and the perpetual licence as the honest answer to *what if you are gone*
 - **Publishing and rollout across customers** — a canary that halts itself, and version skew across the fleet as the normal state
 - **The hosting business** as a commercial option framed and not taken; **OpenBao's real scope** finally appearing — a multi-tenant vendor's secrets — after everything else once assigned to a vault was removed by giving machines identities
 ---
@@ -180,7 +180,7 @@ The order is dependency-driven, not layer-numbered:
 
 - **М9 before М9** — an appliance has to exist before it can be scheduled onto
 - **М9 before М11** — the loop has to work on one box before a scheduler above it, or contested ownership, means anything
-- **М11 before М12** — a recorder has to survive its server, inside one cluster, before a layer across several clusters means anything
+- **М11 before М12** — a worker has to survive its server, inside one cluster, before a layer across several clusters means anything
 - **М12 before М13** — observability collects what М9–М12 emit, and its remote observer is a domain service; there has to be a domain to host it
 - **М13 before М14** — the vendor module's demo is *the vendor disappears for thirty days*, which can only be demonstrated with instrumentation in place, and its canary halt condition is an alert rule
 
@@ -219,16 +219,16 @@ The order is dependency-driven, not layer-numbered:
 1. ~~**The BUSL decision, taken once.**~~ **Resolved** — the Additional Use Grant permits this product; the risk is the analytics-plugin roadmap, not the appliance. See the licensing section above. What remains open is a counsel review of that one question
 2. **Does the vendor run a MASA?** BRSKI is unimplementable without one, and it is a permanent operational commitment — a signing service that must outlive every appliance shipped
 3. ~~**Observability's position**~~ — resolved: domain-level, directly after М12. See the sequencing section
-4. **Does the product ship a database HA option?** [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) settles the architecture — each recorder owns its configuration, the domain keeps a directory — but whether HA is offered for the directory, and priced, is commercial
+4. **Does the product ship a database HA option?** [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) settles the architecture — each cluster owns its configuration in its raft, the domain keeps a directory — but whether HA is offered for the directory, and priced, is commercial
 
 **Resolved since the first version of this plan:**
 
 - ~~Where inference runs~~ — a deployment question, not a schema one. Opaque worker config means the controller is unchanged whether inference runs on the appliance, at the camera or in the cloud (М11)
-- ~~Where the write API belongs~~ — built on every recorder in М12 Lesson 3, unauthenticated and marked as such; authentication arrives one lesson later from the domain signer, and enrollment replaces the hand-provisioned credential in М12 Lesson 6
+- ~~Where the write API belongs~~ — built on every cluster's console in М12 Lesson 3, unauthenticated and marked as such; authentication arrives one lesson later from the domain signer, and enrollment replaces the hand-provisioned credential in М12 Lesson 6
 - ~~Lesson numbering~~ — **superseded four times by restructuring, and settled.** Each module numbers from 1: М8 is 1–8 (its first twelve original lessons merged into five multi-part ones), М9 1–4, М9 1–5, М11 1–5, М12 1–8, М13 1–4, М14 1–5. **39 in total.** Cross-module references carry the module name; a bare *Lesson N* always means this module's
 - ~~Consul in or out~~ — out, and for a better reason than licensing alone: the product runs a PKI regardless, so a mesh CA is a second hierarchy that buys nothing. The comparison record was retired when OpenBao left the product too
 - ~~Identity split across М12 and М14~~ — they were one layer; merged into М12
-- ~~Where the domain database lives, and whether hosts replicate it~~ — **there is no domain database.** Each **recorder** owns its configuration in its own Postgres and publishes one way upward; the domain's directory is a Nomad Variable per recorder plus an object per recorder; a **cluster** is the largest set of servers on a reliable network and a **domain** is the clusters under one directory ([`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md))
+- ~~Where the domain database lives, and whether hosts replicate it~~ — **there is no domain database.** Each **cluster** owns its configuration in its own raft (written by one controller) and publishes a snapshot one way upward; the domain's directory is that snapshot plus every worker's heartbeat, read and never written; a **cluster** is the largest set of servers on a reliable network and a **domain** is the clusters under one directory ([`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md))
 
 ---
 
