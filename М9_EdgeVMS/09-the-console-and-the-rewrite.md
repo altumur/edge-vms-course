@@ -216,17 +216,16 @@ That is the honest defence of building it in Python first, and it is not "Python
 
 ### The claim, measured
 
-That argument is cheap to make and cheap to check, so the module checks it. [`recorder-go/`](./recorder-go/README.md) ports Lesson 6's reconciler to Go — the same `>=`, the same stop loop over *actual*, the same jitter — and runs **the Python suite's seven tests plus the cap test against it, unchanged in meaning**. All eight pass. Then it puts a controller-shaped process in each language at idle — fifty converged cameras, a status map, a JSON encoder, an HTTP listener, no GStreamer in either — and reads PSS:
+That argument is cheap to make and cheap to check, and the course checks it two modules on, where the recorder has become a worker and a controller on a platform: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port the whole of М10 and М11 to Go — Lesson 6's loop with the same `>=`, the same stop loop over *actual*, the same jitter, and everything built on it since — and run **the Python suites' seventy tests against the Go code, unchanged in meaning**. All pass, under the race detector. Then they put a worker and a controller in each language at idle — fifty converged cameras, a heartbeat, the placement pass, no GStreamer in either — and read PSS:
 
 | | Go | Python |
 |---|---|---|
-| Controller at idle, 50 cameras | **6.0 MB** | **25.7 MB** |
-| Bare runtime | 1.9 MB | 6.2 MB |
-| Deployable artifact | one static binary, 5.5 MB; arm64 cross-compiled in one command, 5.1 MB | interpreter 55 MB + ≈ 28 MB of packages, in a rootfs М9 ships twice and signs |
+| Worker + controller at idle, 50 cameras | **8.9 MB** | **21.2 MB** |
+| Deployable artifact | one static binary, 6.8 MB; arm64 cross-compiled in one command, 6.4 MB | interpreter 55 MB + packages, in a rootfs М9 ships twice and signs |
 
-Four times the controller's share of `B`, and the thing М9's bundle carries shrinks by an interpreter. What the table does *not* show is the media worker, because GStreamer's 24 MB of libraries cost the same in every language and the per-frame rule from Lesson 7 survives in Go — which is why the worker is the C++ half of the split, not the Go half.
+Roughly two and a half times the controller's share of `B`, and the thing М9's bundle carries shrinks by an interpreter. What the table does *not* show is the media worker, because GStreamer's 24 MB of libraries cost the same in every language and the per-frame rule from Lesson 7 survives in Go — which is why the worker's pipeline is the C++ half of the split, not the Go half. Per operation the languages are within 2× of each other, and JSON goes the other way; the measurement and what it means are in `clustervms-go/README.md`.
 
-**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make. Then `go test ./reconciler/` in `recorder-go/` — and `measure.sh`, to produce the table above on your own hardware.
+**Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make. Then, when you reach М11, `measure.sh` in `clustervms-go/` — to produce the table above on your own hardware.
 
 ---
 

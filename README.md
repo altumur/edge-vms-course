@@ -115,7 +115,6 @@ Its organising rule is that **desired state is persisted and actual state is der
 - [recorder design](./М9_EdgeVMS/recorder-design.md) — lesson plan, the Python shard model, and what the operator is never asked to decide
 - [`reference/shard-memory-probe.py`](./М9_EdgeVMS/reference/shard-memory-probe.py) — measures what sharding actually saves, in PSS rather than RSS
 - [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's one project: the box (bench, PKI, RAUC, GRUB, health, Quadlet, spool) and, under [`edgevms/recorder/`](./М9_EdgeVMS/edgevms/recorder/README.md), the recorder that runs on it — migrations, reconciler, GStreamer actuator, retention, console, tests
-- [`recorder-go/`](./М9_EdgeVMS/recorder-go/README.md) — the reconciler ported to Go with the same tests, and the controller baseline measured in both languages
 
 ## М10 — ServerVMS
 

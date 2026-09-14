@@ -115,7 +115,7 @@ Two corrections worth knowing before you start, both found by running the thing 
 cd edgevms/recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
 ```
 
-[`recorder-go/`](./recorder-go/README.md) is Lesson 9's rewrite argument made into a number: the reconciler in Go, the same eight tests passing, and the two controllers measured at idle — 6.0 MB against 25.7 MB, one 5.5 MB static binary against an interpreter and its packages.
+Lesson 9's rewrite argument is made into a number two modules on, where the recorder has become a worker and a controller: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port М10 and М11 whole, the same seventy tests passing, and measure a worker and a controller at idle — 8.9 MB against 21.2 MB, one 6.8 MB static binary against an interpreter and its packages.
 
 ### The stand-ins, and where they get collected
 
