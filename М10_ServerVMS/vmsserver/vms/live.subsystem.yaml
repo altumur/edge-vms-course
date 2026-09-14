@@ -1,0 +1,24 @@
+# Live video, as the platform sees it: the THIRD subsystem. Its unit is a camera's
+# live fan-out — "camera 7 is being watched, from gateway g-2" — one per camera,
+# created by the console on the first viewer and deleted by the gateway a grace
+# period after the last one leaves. Its workers are gateways (vms/gateway.py):
+# stateless, count = N by demand, capacity in VIEWERS, not cameras. Same
+# controller class, same console class, same ACL shape as the VMS; nothing
+# about video in the platform.
+name: live
+unit:
+  rows: streams                      # live/streams/<cam>
+  id: cam                            # named by the camera it fans out, never numbered
+  fields:
+    cam:       {type: string, required: true}   # the VMS camera id, as the row's name
+    labels:    {type: list}                     # where the viewers are: "public-address" for outside the LAN
+    grace:     {type: int, default: 30}         # seconds a gateway keeps the subscription after the last viewer
+placement:
+  capacity:   {from: capacity, fallback: 100}   # viewers a gateway can carry — its own number, from its heartbeat
+  headroom:   {from: headroom}                  # what the autoscaler moves N on: viewers it could still take
+  constraint: labels-subset                     # a stream's labels ⊆ the gateway's server's labels
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+snapshot: [cam, labels]
+console:
+  running: streams_live                # live_streams_live: fan-outs with a subscription up

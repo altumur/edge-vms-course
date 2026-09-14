@@ -146,6 +146,13 @@ class FakeActuator:
         self.running.clear()
 
 
+# The live branch's RTP port for a camera on its worker's server: deterministic, so a gateway needs only the
+# heartbeat (server + this) to subscribe, and nobody keeps a port table.
+def live_port(cid: int) -> int:
+    from .config import LIVE_PORT_BASE
+    return LIVE_PORT_BASE + int(cid)
+
+
 # `WORKER_NAME` if set; else `w-<NOMAD_ALLOC_INDEX>`; else `None` — claim whatever is free, a lapsed slot
 # first.
 def slot_from_environment(env: dict) -> str | None:
@@ -252,6 +259,7 @@ class VmsWorker(Worker):
                 cam = dict(cam, epoch=self.epochs[unit])
             if not self.may_write(unit):
                 return False
+            cam = dict(cam, live_port=live_port(cam["id"]))     # the tee's live branch: RTP to the loopback, fire-and-forget
             return self.actuator(verb, cam)
         ok = self.actuator("stop", cam)
         self.release(unit)
@@ -367,7 +375,7 @@ class VmsWorker(Worker):
                                                                      ("failed" if cid in self.reconciler.failures else "pending"))
             out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam["name"], "enabled": cam["enabled"], "phase": phase, "position": pos,
                         "revision": cam["revision"], "observed_revision": self.reconciler.actual.get(cid, {}).get("revision", 0),
-                        "epoch": self.epochs.get(str(cid), 0)})
+                        "epoch": self.epochs.get(str(cid), 0), "live_port": live_port(cid)})   # where a gateway subscribes — never a viewer
         return out
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU

@@ -1,0 +1,29 @@
+# /etc/containers/systemd/vmsgateway@.container — a live gateway: the third
+# subsystem's worker. `systemctl start vmsgateway@g-1` — the instance name is
+# the slot. Stateless; count as many as the audience needs (in М11 a service
+# job scaled on live_worker_headroom, placed by constraint where a public
+# address or a GPU is). Its unit is a camera's live fan-out; its capacity is
+# viewers; its token writes its slot, its epochs and live/streams/* — so it can
+# delete the fan-out it holds once nobody has watched it for `grace` seconds.
+# Host networking: WHEP on GATEWAY_PORT, and the UDP ports ICE hands out.
+[Unit]
+Description=VMS live gateway %i — one subscription per camera, N viewers over WebRTC
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms gateway
+Environment=GATEWAY_NAME=%i
+Environment=GATEWAY_HOST=0.0.0.0
+Environment=GATEWAY_PORT=8082
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

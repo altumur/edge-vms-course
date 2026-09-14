@@ -48,7 +48,12 @@ from __future__ import annotations
 import os
 from http.server import ThreadingHTTPServer
 
-from vmsplatform.console import PAGE, SpecConsole, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+import json
+import urllib.error
+import urllib.request
+
+from vmsplatform.console import PAGE, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from vmsplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
 from .controller import VmsController
@@ -70,10 +75,93 @@ from .controller import VmsController
 #   here, so on one box no span is marked `fenced` by this route; the `Manifest.timeline` fencing is
 #   exercised directly in `test_lesson3_archive.py`.
 # - anything else — `None`, so the console answers 404.
-def vms_routes(archive: ArchiveResource | None):
-    """What the VMS adds to the generic console: the media. Returns None when
-    a route is not ours, so the console answers 404."""
+class LiveFront:
+    """The console's side of live video: the WHEP door. `POST /whep/<cam>`
+    creates the fan-out unit `live/streams/<cam>` if nobody is watching yet
+    (the console's token may write the operator's rows of the subsystem it
+    fronts), finds which gateway the live controller placed it on, and
+    proxies the offer there. Nothing here touches a worker, and the console
+    never carries media: the answer names the gateway, and the browser's
+    RTP goes gateway → browser from then on."""
+
+    def __init__(self, ctl: VmsController, live_ctl: SpecController):
+        self.ctl, self.live = ctl, live_ctl
+
+    # Every gateway's last heartbeat: url, capacity, headroom, per-stream status.
+    def gateways(self) -> dict:
+        return heartbeats(self.live.objects, "live/")
+
+    # (gateway name, its URL) for a stream, or (None, None) while unplaced or while the gateway has not heartbeaten.
+    def where(self, cam: str) -> tuple[str | None, str | None]:
+        pl = self.live.placement(cam)
+        if not pl:
+            return None, None
+        hb = self.gateways().get(pl.worker)
+        return pl.worker, (hb.extra.get("url") if hb else None)
+
+    # A viewer's offer. 404 for an unknown camera; the unit is created on the first viewer (a concurrent
+    # viewer's "exists" is fine); 503 with retry_after while the live controller has not placed it or the
+    # gateway has not heartbeaten; else the gateway's 201 + SDP answer, with Location rewritten to go back
+    # through this console (`/whep/session/<id>?gateway=<g>`).
+    def offer(self, cam: str, sdp: str, labels: list[str]):
+        if self.ctl.camera(int(cam)) is None:
+            return 404, {"error": f"no camera {cam}", "detail": f"no camera {cam}"}
+        if self.live.unit(cam) is None:
+            try:
+                self.live.create({"cam": str(cam), "labels": labels})
+            except Refused as e:
+                if "exists" not in str(e):
+                    return 400, {"error": str(e), "detail": str(e)}
+        g, url = self.where(cam)
+        if not g or not url:
+            return 503, {"error": "no gateway holds this stream yet — retry", "detail": "placed on the live controller's next pass", "retry_after": 2}
+        req = urllib.request.Request(f"{url}/whep/{cam}", data=sdp.encode(), method="POST", headers={"Content-Type": "application/sdp"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data, status, loc = r.read(), r.status, r.headers.get("Location", "")
+        except urllib.error.HTTPError as e:
+            return e.code, {"error": f"gateway {g} said {e.code}", "detail": e.read().decode(errors="replace")}
+        except OSError:
+            return 503, {"error": f"gateway {g} is not answering — unavailable, not lost", "detail": g}
+        sid = loc.rsplit("/", 1)[-1]
+        return status, data, [("Content-Type", "application/sdp"), ("Location", f"/whep/session/{sid}?gateway={g}")]
+
+    # The viewer hangs up: DELETE proxied to the gateway named in the session URL.
+    def hangup(self, sid: str, g: str):
+        hb = self.gateways().get(g)
+        if not hb or not hb.extra.get("url"):
+            return 404, {"error": f"no gateway {g}"}
+        req = urllib.request.Request(f"{hb.extra['url']}/whep/session/{sid}", method="DELETE")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, {"error": f"gateway {g} said {e.code}"}
+        except OSError:
+            return 503, {"error": f"gateway {g} is not answering"}
+
+    # `GET /live/<cam>`: the stream row, which gateway, and that gateway's status line for it — what the page shows.
+    def status(self, cam: str) -> dict:
+        g, url = self.where(cam)
+        hb = self.gateways().get(g) if g else None
+        st = next((s for s in (hb.status if hb else []) if str(s.get("id")) == str(cam)), None)
+        return {"cam": cam, "stream": self.live.unit(cam), "gateway": g, "url": url, "status": st}
+
+
+def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
+    """What the VMS adds to the generic console: the media — playback from
+    the archive, and the WHEP door to the live gateways. Returns None when a
+    route is not ours, so the console answers 404."""
     def extra(handler, method, path, q):
+        if live is not None and path.startswith("/whep/"):
+            if method == "POST" and not path.startswith("/whep/session/"):
+                sdp = handler.rfile.read(int(handler.headers.get("Content-Length", 0))).decode()
+                return live.offer(path[len("/whep/"):], sdp, [l for l in q.get("labels", "").split(",") if l])
+            if method == "DELETE" and path.startswith("/whep/session/"):
+                return live.hangup(path[len("/whep/session/"):], q.get("gateway", ""))
+            return None
+        if live is not None and method == "GET" and path.startswith("/live/"):
+            return 200, live.status(path[len("/live/"):])
         if method != "GET" or archive is None:
             return None
         if path.startswith("/segment/"):
@@ -93,11 +181,13 @@ def vms_routes(archive: ArchiveResource | None):
 # media=archive is not None)`. With an archive: operator marks (`POST /marks`) go into the console's own
 # event log under `console/<hostname:pid>/e1/` on this server's resource, and `/spec` reports `media: true`
 # so the page draws a timeline and a player. Without one: no marks (503) and no media.
-def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None) -> SpecConsole:
-    return SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive), media=archive is not None)
+def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None, live_ctl: SpecController | None = None) -> SpecConsole:
+    live = LiveFront(ctl, live_ctl) if live_ctl is not None else None      # with a live controller's token: the WHEP door opens
+    return SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None)
 
 
 # `make_console(...).serve(host, port)`: the server in a daemon thread, returned so the caller can
 # `shutdown()` it. `__main__.console` calls it with `$CONSOLE_HOST:$CONSOLE_PORT`; the tests with `port=0`.
-def serve(ctl: VmsController, archive: ArchiveResource | None, host: str = "127.0.0.1", port: int = 8080, wall=None) -> ThreadingHTTPServer:
-    return make_console(ctl, archive, wall).serve(host, port)
+def serve(ctl: VmsController, archive: ArchiveResource | None, host: str = "127.0.0.1", port: int = 8080, wall=None,
+          live_ctl: SpecController | None = None) -> ThreadingHTTPServer:
+    return make_console(ctl, archive, wall, live_ctl).serve(host, port)

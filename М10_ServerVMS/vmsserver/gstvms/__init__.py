@@ -5,6 +5,7 @@ tests skip this package when `gi` is absent; the logic it calls
 
     driverpacksrc   uri=driverpack://file/<name>: a file from MEDIA_DIR, looping, timestamps rebased
     archivesink     splitmuxsink into the spool; on fragment-closed, promote to the archive resource
+    webrtc          the gateway's media path: one udpsrc/tee per camera, one webrtcbin per viewer, WHEP
 """
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)

@@ -1,4 +1,4 @@
-"""python3 -m vms worker|controller|console|retain — the three processes on one box, and the archive policy pass.
+"""python3 -m vms worker|controller|console|retain|gateway|livecontroller — the box's processes.
 
     PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
     SPOOL=/data/spool  ARCHIVE=/data/archive  MEDIA_DIR=/data/media
@@ -6,6 +6,8 @@
                                      neither: the first free slot, a lapsed one first
     CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
+    GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the third subsystem's worker): WHEP on this port; the URL the console proxies to
+    GATEWAY_NAME=g-1                 its slot (systemd: %i); CAPACITY here is viewers
 """
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
@@ -127,19 +129,57 @@ def worker() -> None:
 #   (`vms/snapshot` in the object store). Any exception is logged and the loop continues; `stop.wait(5)`
 #   between passes. No port, no state: the process can be restarted at any moment, and two of them agree by
 #   CAS.
-def controller() -> None:
-    from .config import SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmscontroller", acl={"vmscontroller": SPEC.acl_controller()})
-    objects = FsObjectStore(os.path.join(root, "objects"))
-    ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
+def _controller_loop(ctl) -> None:
+    """One controller process per subsystem, the same loop: unplace what was deleted, place what is new onto the
+    workers it sees, move what a released slot left, publish the snapshot. Nothing else, ever."""
     while not stop.is_set():
         try:
-            ctl.ensure_placed()                       # deleted rows unplaced; new cameras onto the workers it sees
-            ctl.redistribute()                        # cameras of a RELEASED slot (scale-in) onto the rest; nothing else, ever
+            ctl.ensure_placed()                       # deleted rows unplaced; new units onto the workers it sees
+            ctl.redistribute()                        # units of a RELEASED slot (scale-in) onto the rest
             ctl.publish_snapshot()
         except Exception:                             # noqa: BLE001
             logging.exception("placement pass failed")
         stop.wait(5)
+
+
+def controller() -> None:
+    from .config import SPEC
+    vars_ = FileVariables(os.path.join(root, "config"), writer="vmscontroller", acl={"vmscontroller": SPEC.acl_controller()})
+    objects = FsObjectStore(os.path.join(root, "objects"))
+    _controller_loop(VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50"))))
+
+
+def livecontroller() -> None:
+    """The third subsystem's controller: the platform's class from live.subsystem.yaml, placing fan-outs on
+    gateways by viewer headroom. No code of its own."""
+    from vmsplatform.spec import SpecController
+    from .config import LIVE_SPEC
+    vars_ = FileVariables(os.path.join(root, "config"), writer="livecontroller", acl={"livecontroller": LIVE_SPEC.acl_controller()})
+    _controller_loop(SpecController(LIVE_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
+
+
+def gateway() -> None:
+    """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
+    and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
+    from vmsplatform.spec import SpecController
+    from .config import LIVE_SPEC
+    from .gateway import LiveGateway
+    vars_ = FileVariables(os.path.join(root, "config"), writer="livegateway",
+                          acl={"livegateway": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
+    objects = FsObjectStore(os.path.join(root, "objects"))
+    host, port = os.environ.get("GATEWAY_HOST", "127.0.0.1"), int(os.environ.get("GATEWAY_PORT", "8082"))
+    peer = None
+    try:
+        from gstvms.webrtc import GstPeer
+        peer = GstPeer
+    except ImportError:
+        logging.warning("no GStreamer webrtcbin: the fake peer answers SDP and carries no media")
+    gw = LiveGateway(None, vars_, objects, ctl=SpecController(LIVE_SPEC, vars_, objects), url=os.environ.get("GATEWAY_URL", f"http://{host}:{port}"),
+                     capacity=int(os.environ.get("CAPACITY", "100")), peer_factory=peer)
+    srv = gw.serve(host, port)
+    logging.info("gateway %s (instance %s) on %s", gw.name, gw.instance, srv.server_address)
+    gw.run(stop=stop)
+    srv.shutdown()
 
 
 # The screen and the API, as its own process ("count as many as you like"):
@@ -155,11 +195,15 @@ def console() -> None:
     token for the operator's rows and nothing else."""
     from .config import SPEC
     from .console import serve
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole", acl={"vmsconsole": SPEC.acl_console()})
+    from vmsplatform.spec import SpecController
+    from .config import LIVE_SPEC
+    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
+                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console()})   # the operator's rows of BOTH subsystems it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
-    srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")))
+    srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
+                live_ctl=SpecController(LIVE_SPEC, vars_, objects))
     logging.info("console on %s", srv.server_address)
     stop.wait()
     srv.shutdown()
@@ -206,4 +250,5 @@ def retain() -> None:
 
 
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "console": console, "retain": retain}[sys.argv[1]]()
+    {"worker": worker, "controller": controller, "console": console, "retain": retain,
+     "gateway": gateway, "livecontroller": livecontroller}[sys.argv[1]]()

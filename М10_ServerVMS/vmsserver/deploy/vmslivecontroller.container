@@ -1,0 +1,22 @@
+# /etc/containers/systemd/vmslivecontroller.container — the live subsystem's
+# controller: the platform's SpecController run from live.subsystem.yaml, one
+# per box (one per cluster in М11), no code of its own. Places fan-outs on the
+# gateway with the most viewer headroom; takes them back when a gateway deletes
+# them. No port; its token writes live/workers/*, live/placement/*, live/slots/*.
+[Unit]
+Description=VMS live controller — the only writer of live placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms livecontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

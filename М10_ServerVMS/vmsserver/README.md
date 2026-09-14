@@ -21,21 +21,27 @@ vmsserver/
     worker.py                  Lesson 4  vmsworker: N pipelines against an assignment; an epoch per camera; a lease; the heartbeat with server, labels and capacity — on a box or in an allocation
     vms.subsystem.yaml         Lesson 5  the VMS's controller, as a spec: cameras numbered, eight operator fields, vms/retention/<cam> derived, labels-subset placement, the snapshot
     controller.py              Lesson 5  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
-    console.py                 Lesson 5  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's two media routes, /timeline/<id> and /segment/<path>
+    console.py                 Lesson 5  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes —
+                               /timeline/<id>, /segment/<path>, and the WHEP door /whep/<cam> that creates a fan-out on the first viewer and proxies to its gateway
+    live.subsystem.yaml        Lesson 5  the THIRD subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
+    gateway.py                 Lesson 5  LiveGateway, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
+                               RTP tee per camera, N webrtcbin peers behind it, WHEP (POST /whep/<cam>, DELETE /whep/session/<id>), demand-created and demand-deleted units
     config.py                  the schema's Python view over the spec: row() and items()
-    __main__.py                python3 -m vms worker | controller | console
+    __main__.py                python3 -m vms worker | controller | console | retain | gateway | livecontroller
   gstvms/                      Track 2 — needs GStreamer
     uri.py                     Lesson 2  driverpack://file/<name> resolved and refused — pure, no GStreamer
+    webrtc.py                  Lesson 5  the gateway's media path (Track 2): udpsrc ! rtpjitterbuffer ! tee per camera, queue ! webrtcbin per viewer, WHEP without trickle
     driverpacksrc.py           Lesson 2  the element: looping, PTS rebased across the loop
     archivesink.py             Lesson 3  splitmuxsink into the spool; on fragment-closed, promote
     actuator.py                Lesson 4  driverpacksrc ! h264parse ! watchdog ! tee ! archivesink, per camera; the bus drained into (dead, posted)
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container,
-                               vmscontroller.container, vmsconsole.container, vms-archive-retain.container + .timer, vms.env.example, check-quadlet.sh
-  tests/                       47 tests, milliseconds, no GStreamer
+                               vmscontroller.container, vmsconsole.container, vms-archive-retain.container + .timer,
+                               vmsgateway@.container, vmslivecontroller.container, vms.env.example, check-quadlet.sh
+  tests/                       53 tests, milliseconds, no GStreamer
 ```
 
 ```bash
-python3 tests/run.py                                   # 47 tests
+python3 tests/run.py                                   # 53 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: records; without: the fake actuator
 python3 -m vms worker                                  # no name: claims the first free slot — a lapsed one first
@@ -49,7 +55,7 @@ python3 -m vms worker                                  # no name: claims the fir
 | 2 | `driverpacksrc` running for an hour with monotonic PTS; the refusal of a vendor URI | `test_lesson2_driverpacksrc.py` — the URI logic here; the element and the hour on a box with GStreamer |
 | 3 | kill the worker at minute seven: six promoted, one closed-but-not-promoted picked up on restart, the open one lost; rebuild the manifest from the files | `test_lesson3_archive.py` — the acknowledgement order, `closed_in_spool`, `repair()`, the fenced epoch on the timeline, two resources merged, retention per kind, event buckets recording or not — silent included — closed, counted onto media, fenced, rebuilt |
 | 4 | М9's four failures against the worker with its tests passing unchanged; the zombie on one box | `test_lesson4_worker.py` — М9 Lesson 6's seven, then the assignment, the epoch per camera, the restart with the controller stopped, a nameless replacement inheriting the lapsed slot, the zombie fenced at the slot, the reassignment that is not one |
-| 5 | one box, two subsystems, one console; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` and `test_second_subsystem.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic, the console over HTTP, a retry across two consoles, the counter subsystem and its console for free; `test_deploy_units.py` — the Quadlet units against the package |
+| 5 | one box, two subsystems, one console; the controller stopped, the worker killed, recording resumes | `test_lesson5_controller.py` and `test_second_subsystem.py` — refusals, stored placement by the capacity each worker reports, adding a worker moves nothing, two controllers agree, scale-in redistributed and a crash left alone, the failure arithmetic, the console over HTTP, a retry across two consoles, the counter subsystem and its console for free; `test_deploy_units.py` — the Quadlet units against the package; `test_lesson5_live.py` — the first viewer creates the fan-out and the controller places it, fifty viewers one subscription and the worker unchanged, the grace period and the gateway deleting its own unit, a dead gateway's fan-outs moved to the survivor, placement by label, two subsystems sharing the platform |
 
 ## The three lines the code holds
 
@@ -61,4 +67,4 @@ python3 -m vms worker                                  # no name: claims the fir
 
 ## Verified where
 
-The 47 tests ran in the authoring sandbox (Python 3.11) and on the author's machine (3.10). `gstvms/` — the two elements and the actuator — is written to GStreamer's Python binding and not exercised here; the logic it calls (`vms.archive.ArchiveResource.promote`, the URI resolution) is. The hour-long PTS run, `kill -9` mid-segment on real files, and the zombie with two real worker processes are the box's.
+The 53 tests ran in the authoring sandbox (Python 3.11) and on the author's machine (3.10). `gstvms/` — the two elements and the actuator — is written to GStreamer's Python binding and not exercised here; the logic it calls (`vms.archive.ArchiveResource.promote`, the URI resolution) is. The hour-long PTS run, `kill -9` mid-segment on real files, and the zombie with two real worker processes are the box's.

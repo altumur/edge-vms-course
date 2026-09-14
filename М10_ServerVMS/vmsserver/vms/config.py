@@ -58,6 +58,8 @@ import os
 from vmsplatform.spec import PLATFORM_FIELDS, SubsystemSpec
 
 SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vms.subsystem.yaml"))
+LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.subsystem.yaml"))   # the third subsystem: live fan-outs
+LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's server: LIVE_PORT_BASE + camera id (the heartbeat carries it)
 OPERATOR_FIELDS = tuple(SPEC.fields)
 FORBIDDEN_FIELDS = PLATFORM_FIELDS
 

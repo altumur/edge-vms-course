@@ -129,6 +129,19 @@ def heartbeats(objects, prefix: str) -> dict[str, Heartbeat]:
 # process: `<sub>/idem/<key>` is claimed by a create-only CAS before the write and filled with the reply
 # after it. A second instance that sees the claim waits for the reply and serves it; it never repeats the
 # write. Keys older than `ttl` are pruned on the way past, at most once a minute.
+# What every stdlib handler in the course needs: a JSON (or raw text) reply with the two headers, and the
+# JSON body of a request. Mixed into the console's handler and the gateway's.
+class SendMixin:
+    def _send(self, status, body, raw=False):
+        data = body.encode() if raw else json.dumps(body).encode()
+        self.send_response(status); self.send_header("Content-Type", "text/plain" if raw else "application/json")
+        self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(n) or b"{}")
+
+
 class IdempotencyKeys:
     """A retried POST must be the same POST whichever console answers it, so
     the key lives in the store, not in a process: `<sub>/idem/<key>` is
@@ -349,17 +362,8 @@ class SpecConsole:
         con, ctl, spec = self, self.ctl, self.spec
         rows_path = "/" + spec.rows
 
-        class H(BaseHTTPRequestHandler):
+        class H(SendMixin, BaseHTTPRequestHandler):
             def log_message(self, *a): pass
-
-            def _send(self, status, body, raw=False):
-                data = body.encode() if raw else json.dumps(body).encode()
-                self.send_response(status); self.send_header("Content-Type", "text/plain" if raw else "application/json")
-                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
-
-            def _body(self):
-                n = int(self.headers.get("Content-Length", 0))
-                return json.loads(self.rfile.read(n) or b"{}")
 
             def _uid(self):
                 return spec.parse_id(self.path.split("?")[0].rsplit("/", 1)[1])
@@ -428,7 +432,7 @@ class SpecConsole:
             def do_POST(self):
                 u = urlsplit(self.path)
                 if u.path not in (rows_path, "/marks"):
-                    if self._extra("POST", u.path, {}):
+                    if self._extra("POST", u.path, {k: v[0] for k, v in parse_qs(u.query).items()}):
                         return
                     return self._send(404, {"detail": "no such route", "error": "no such path"})
                 key = self._idem()
@@ -458,8 +462,10 @@ class SpecConsole:
                 self._send(*resp)
 
             def do_DELETE(self):
-                u = urlsplit(self.path)
+                u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 if not u.path.startswith(rows_path + "/"):
+                    if self._extra("DELETE", u.path, q):
+                        return
                     return self._send(404, {"detail": "no such route", "error": "no such path"})
                 self._send(*con.delete(self._uid()))
 

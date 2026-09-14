@@ -138,7 +138,7 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
   <div id="media">
     <div class="legend"><small><span style="background:var(--media)"></span>recorded <span style="background:var(--events)"></span>events only (watched, not recorded) <span style="background:var(--fenced)"></span>fenced — an older epoch</small></div>
     <div id="timeline"></div>
-    <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><span id="t1"></span></div>
+    <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><button id="live">Live</button><span id="t1"></span></div>
     <div id="note"></div>
     <video id="player" controls></video>
     <div id="playing"><small></small></div>
@@ -179,6 +179,7 @@ async function loadSpec() {
   $('#addnote').textContent = spec.id === 'numeric' ? 'the controller numbers it and places it on the next pass'
                                                     : `named by its ${spec.id}; placed on the controller's next pass`;
   $('#media').style.display = spec.media ? 'block' : 'none';
+  $('#live').style.display = spec.media ? '' : 'none';
   $('#addfields').innerHTML = spec.fields.filter(f => f.name !== 'enabled').map(f => input(f, true)).join('');
   $('#editfields').innerHTML = spec.fields.filter(f => f.name !== 'enabled' && f.name !== spec.id).map(f => input(f, false)).join('');
   $('#toggle').style.display = hasEnabled() ? '' : 'none';
@@ -222,6 +223,7 @@ async function loadUnits() {
 // Marks the unit current, clears the play queue, sets `#title`, fetches `/where/<id>` for the placement
 // reason, composes `#meta`, highlights the `li`, fills the edit form, and — if media — loads the timeline.
 async function select(id) {
+  stopLive();
   current = id; queue = [];
   const c = units.find(x => x.id === id) || {};
   $('#title').textContent = label(c);
@@ -351,12 +353,46 @@ function play(i) {
 // MSE playback of fragmented MP4 is the gateway's job (М12) — the console plays what the resource serves.
 function next() {
   if (!queue.length) return;
+  stopLive();
   const i = queue.shift(); const s = spans[i];
   [...$('#timeline').children].forEach((el, j) => el.classList.toggle('playing', j === i));
   $('#playing small').textContent = `${fmt(s.start)} – ${fmt(s.end)} · epoch ${s.epoch}${s.server ? ' · from ' + s.server : ''}`;
   const v = $('#player'); v.src = segmentURL(s); v.play().catch(() => {});
 }
 $('#player').onended = next;
+
+// -- live: WebRTC through the console's WHEP door. The browser makes an offer; the console creates the
+// fan-out unit on the first viewer, the live controller places it on a gateway, the console proxies the
+// offer there and the gateway answers. Media then flows gateway → browser; the console and the worker
+// carry none of it. A 503 means "not placed yet" — retry a few times, then say so.
+let live = null;                                                      // {pc, session} while watching
+async function startLive() {
+  stopLive();
+  const pc = new RTCPeerConnection();
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.ontrack = e => { const v = $('#player'); v.src = ''; v.srcObject = e.streams[0]; v.play().catch(() => {}); };
+  await pc.setLocalDescription(await pc.createOffer());
+  let r, tries = 0;
+  for (;;) {
+    r = await fetch(`/whep/${current}`, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+    if (r.status !== 503 || ++tries > 8) break;
+    $('#playing small').textContent = 'live: waiting for a gateway…';
+    await new Promise(res => setTimeout(res, 1500));                    // the live controller's next pass
+  }
+  if (r.status !== 201) { let d = {}; try { d = await r.json(); } catch (_) {} $('#playing small').textContent = 'live refused: ' + (d.detail || d.error || r.status); pc.close(); return; }
+  await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
+  live = { pc, session: r.headers.get('Location') };
+  [...$('#timeline').children].forEach(el => el.classList.remove('playing'));
+  $('#playing small').textContent = `live · via ${new URLSearchParams(live.session.split('?')[1]).get('gateway')}`;
+}
+function stopLive() {
+  if (!live) return;
+  fetch(live.session, { method: 'DELETE' }).catch(() => {});        // the viewer hangs up; the gateway drops the peer
+  live.pc.close(); live = null;
+  const v = $('#player'); v.srcObject = null;
+}
+$('#live').onclick = () => { if (current) startLive(); };
+window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
 loadSpec().then(() => { loadUnits(); setInterval(loadUnits, 10000); });

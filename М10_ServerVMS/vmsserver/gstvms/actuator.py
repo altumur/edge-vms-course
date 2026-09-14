@@ -52,7 +52,9 @@ Gst.init(None)
 
 DESC = ("driverpacksrc uri={uri} name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
         "t. ! queue ! archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg} "
-        "t. ! queue leaky=downstream max-size-buffers=30 ! fakesink sync=false")
+        "t. ! queue leaky=downstream max-size-buffers=30 ! {live}")
+LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} sync=false"   # the live branch: RTP to the loopback,
+IDLE = "fakesink sync=false"                                                                    # into nobody unless a gateway listens
 
 
 # State: `spool`, `archive`, `seg` (segment seconds), `watchdog` (ms), `pipelines` (`{camera id:
@@ -83,8 +85,9 @@ class GstActuator:
             p.set_state(Gst.State.NULL)
         if verb == "stop":
             return True
+        live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
         desc = DESC.format(uri=cam["source"], watchdog=self.watchdog, cam=cid, epoch=cam.get("epoch", 0),
-                           spool=self.spool, archive=self.archive, seg=self.seg)
+                           spool=self.spool, archive=self.archive, seg=self.seg, live=live)
         try:
             p = Gst.parse_launch(desc)
         except Exception as e:                        # noqa: BLE001

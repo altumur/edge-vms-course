@@ -4,7 +4,9 @@
     archive.py      the archive as a resource: spool → promote → manifest; retention as a policy
     worker.py       vmsworker — DriverPack as the worker: N pipelines against an assignment
     controller.py   vmscontroller — the only writer of vms/*: cameras, assignment, placement
-    console.py      the one-box console: the platform's SpecConsole over the VMS spec, plus /timeline and /segment
+    console.py      the one-box console: the platform's SpecConsole over the VMS spec, plus /timeline, /segment and the WHEP door
+    gateway.py      the live gateway — the third subsystem's worker: a camera's fan-out as the unit, viewers as the capacity
+    live.subsystem.yaml   the third subsystem, as a spec
 
 Nothing here imports from platform/ except through its public interfaces,
 and nothing in platform/ imports from here.

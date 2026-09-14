@@ -357,8 +357,15 @@ class SpecController(Controller):
             uid = str(fields.get(self.spec.id) or "")
             if not uid:
                 raise Refused(f"a {self.spec.name} unit needs a {self.spec.id}")
-            if self.vars.get(self._row_key(uid))[0]:
+            old, idx = self.vars.get(self._row_key(uid))
+            if old and old.get("deleted") != "true":
                 raise Refused(f"{self.spec.name} unit {uid} exists")
+            if old:                                                 # a named unit deleted earlier comes back under its name:
+                r = self.spec.new_row(uid, fields)                  # a fresh row, one revision on from the old one, by CAS on it
+                r["revision"] = int(old.get("revision", 0)) + 1
+                self.vars.put(self._row_key(uid), self.spec.items(r), cas=idx)
+                self._derived(r, uid)
+                return r
         r = self.spec.new_row(uid, fields)
         self.vars.put(self._row_key(uid), self.spec.items(r), cas=0)
         self._derived(r, uid)
