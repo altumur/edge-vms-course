@@ -3,8 +3,8 @@ listener at idle — recorder without GStreamer and without a database, so the
 two numbers compare like for like. Run from the recorder directory."""
 import asyncio, json, os, sys, time
 sys.path.insert(0, os.environ.get("RECORDER_PATH", "."))
-from apphost.reconciler import Reconciler          # noqa: E402
-from apphost.pipeline import FakeActuator            # noqa: E402
+from worker.reconciler import Reconciler          # noqa: E402
+from worker.pipeline import FakeActuator            # noqa: E402
 
 
 def pss_kb():

@@ -1,7 +1,7 @@
 # Lesson 6 — A Reconcile Loop with Nothing in It
 
 **Module:** EdgeVMS — the box owns its truth (Module 9)
-**You will build:** the AppHost's reconcile loop, complete with backoff, status vocabulary and a restart test — with `print()` where GStreamer will go.
+**You will build:** the worker's reconcile loop, complete with backoff, status vocabulary and a restart test — with `print()` where GStreamer will go.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists
@@ -17,7 +17,7 @@ You will also make both classic mistakes on purpose, because one of them produce
 ## Prerequisites
 
 - **Lesson 5** — the schema, `revision`, and the operator/controller column split.
-- **М8 Lesson 2** — process supervision, exponential backoff, and the self-matching `pkill` bug. The AppHost is what `looper.py` grows into.
+- **М8 Lesson 2** — process supervision, exponential backoff, and the self-matching `pkill` bug. The worker is what `looper.py` grows into.
 - Python 3.11+. No third-party packages are needed for this lesson.
 
 ## Learning objectives
@@ -35,21 +35,21 @@ You will also make both classic mistakes on purpose, because one of them produce
 
 | | Holds | Written by | Survives |
 |---|---|---|---|
-| **Desired state** | what the operator asked for | the operator, through the API | reboots, OS updates, the AppHost dying |
-| **Actual state** | what is running right now | the AppHost, by observation | **nothing** — it is re-derived every time |
+| **Desired state** | what the operator asked for | the operator, through the API | reboots, OS updates, the worker dying |
+| **Actual state** | what is running right now | the worker, by observation | **nothing** — it is re-derived every time |
 
 > **Desired state is persisted. Actual state is derived.**
 
 Break it in the first direction — forget to persist desired state — and you have built something that forgets its cameras on reboot. Annoying, obvious, fixed in an afternoon.
 
-Break it in the second — persist actual state — and you have built **a cache that lies**. The AppHost restarts, reads its own saved notes saying camera 7 is recording, believes them, and never starts camera 7. The console is green. Nothing is recording. Nothing in the system is aware of a problem, and the discovery happens when a customer asks for footage.
+Break it in the second — persist actual state — and you have built **a cache that lies**. The worker restarts, reads its own saved notes saying camera 7 is recording, believes them, and never starts camera 7. The console is green. Nothing is recording. Nothing in the system is aware of a problem, and the discovery happens when a customer asks for footage.
 
 The second bug is worse in every dimension: silent, plausible, and it survives restarts. Step 5 makes you build it.
 
 ## Step 2 — The loop
 
 ```python
-"""apphost.py — Lesson 6. No database, no GStreamer: the loop only."""
+"""worker.py — Lesson 6. No database, no GStreamer: the loop only."""
 import random
 
 CONVERGED, LAGGING, STALLED = "converged", "lagging", "stalled"
@@ -133,7 +133,7 @@ This same pairing returns in М11, where a recorder watching the domain has a st
 ## Step 4 — One task per concern, not one per camera
 
 ```
-AppHost (one process)
+Worker (one process)
   asyncio tasks
     reconcile()    every 2 s, and on NOTIFY    desired (Postgres) vs actual (dict)
     pump_buses()   every 200 ms                drain each pipeline's messages
@@ -236,7 +236,7 @@ The distinction that costs you if you skip it is **lagging versus stalled**. Bot
 
 And one thing to keep *out* of that list. `unreachable` is about the recorder; the other three are about a camera. **A camera that cannot converge because the disk is full is not a fourth phase** — it is `lagging` with a *reason*. Positions and reasons are different axes, and Lesson 9 keeps them apart properly. Kubernetes shipped a phase enum and then documented why it was a mistake; this is the cheap moment to not repeat it.
 
-**Deliverable:** an AppHost that converges a fake world, is silent once converged, spreads its retries, and passes a test that kills it mid-change and confirms it rebuilds from the store alone.
+**Deliverable:** a worker that converges a fake world, is silent once converged, spreads its retries, and passes a test that kills it mid-change and confirms it rebuilds from the store alone.
 
 ---
 

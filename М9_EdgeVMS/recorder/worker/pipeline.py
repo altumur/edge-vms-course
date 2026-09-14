@@ -22,7 +22,7 @@ from typing import Callable
 
 from .secrets import compose_rtsp_url, redact
 
-log = logging.getLogger("apphost.pipeline")
+log = logging.getLogger("worker.pipeline")
 
 IDLE, STARTING, RUNNING, FAILED = "idle", "starting", "running", "failed"
 

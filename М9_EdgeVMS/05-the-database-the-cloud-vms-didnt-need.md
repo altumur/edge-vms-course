@@ -49,7 +49,7 @@ The recorder holds three things. They share an engine and almost nothing else, a
 | | **Configuration** | **Archive index** | **Events** |
 |---|---|---|---|
 | Is | what an operator asked for | what this box observed | what this box noticed |
-| Written by | people, rarely | the AppHost, constantly | detectors and the AppHost |
+| Written by | people, rarely | the worker, constantly | detectors and the worker |
 | Rate | a few rows a day | ~100 rows/second at scale | bursty, high volume |
 | Read | on every reconcile | on every timeline query | rarely, and by search |
 | If lost | **the recorder is gone** | rebuildable by scanning segments | acceptable — they are observations |
@@ -63,7 +63,7 @@ The honest version of this argument, because "Postgres is more serious" is not o
 
 If the recorder held only configuration — a few hundred rows, one writer — SQLite would be plenty and would save you a service. But the index and the events are in the picture regardless, and they change the question:
 
-- **Concurrency.** SQLite permits one writer at a time; WAL lets readers run alongside a writer but does not change that. Twenty media workers writing index rows, an event stream, and the AppHost reading is real contention.
+- **Concurrency.** SQLite permits one writer at a time; WAL lets readers run alongside a writer but does not change that. Twenty media workers writing index rows, an event stream, and the worker reading is real contention.
 - **Partitioning is the deciding feature**, and Step 5 makes it concrete with numbers.
 - **Types that match the work.** `tstzrange` with a GiST index answers М8's timeline query directly; JSONB carries event payloads that differ per detector.
 - **One engine, one skillset.** The same `psql`, `pg_dump`, backup story and client library. Students learn one thing; whoever operates the appliance operates one thing.
@@ -167,7 +167,7 @@ CREATE TRIGGER cameras_bump BEFORE UPDATE ON cameras
     EXECUTE FUNCTION bump_revision();
 ```
 
-**The `WHEN` clause names the operator-owned columns, and that is not fussiness.** The first draft of this lesson wrote `WHEN (OLD.* IS DISTINCT FROM NEW.*)`, which reads well and is wrong: the AppHost's own status write — `observed_revision`, `phase`, `last_seen` — is an `UPDATE` too, so every report bumped `revision`. Measured: report `observed_revision = 2` and `revision` goes to 3; the lag is 1 forever and the recorder chases its own tail. The line through the middle of the table is enforced here, by the database, rather than remembered by whoever writes the next `UPDATE`.
+**The `WHEN` clause names the operator-owned columns, and that is not fussiness.** The first draft of this lesson wrote `WHEN (OLD.* IS DISTINCT FROM NEW.*)`, which reads well and is wrong: the worker's own status write — `observed_revision`, `phase`, `last_seen` — is an `UPDATE` too, so every report bumped `revision`. Measured: report `observed_revision = 2` and `revision` goes to 3; the lag is 1 forever and the recorder chases its own tail. The line through the middle of the table is enforced here, by the database, rather than remembered by whoever writes the next `UPDATE`.
 
 Monotonic, controller-assigned, one per object. Three candidates and only one survives:
 
@@ -346,7 +346,7 @@ Three constraints follow, and the third is the one people miss:
 
 **Idempotent.** The migration runner must be safe to run on every boot, because it will be. A recorded version table plus `IF NOT EXISTS` is the floor.
 
-**Never able to leave the box unbootable.** A migration that fails must leave the previous schema working and the box recording, because a migration failure that stops the VMS turns a schema bug into a site visit. Run migrations in a transaction where you can, and have the AppHost start read-only rather than not start, if it must.
+**Never able to leave the box unbootable.** A migration that fails must leave the previous schema working and the box recording, because a migration failure that stops the VMS turns a schema bug into a site visit. Run migrations in a transaction where you can, and have the worker start read-only rather than not start, if it must.
 
 **Forward-compatible with the running application, because of A/B.** This is the one the appliance shape forces on you. М9 Lesson 3's rollback means the *old* application may run again after the *new* schema is applied. So migrations must be **expand-only within a release**: add columns and tables, never drop or rename them in the same release that starts using them. Dropping happens a release later, once the rollback target no longer exists.
 

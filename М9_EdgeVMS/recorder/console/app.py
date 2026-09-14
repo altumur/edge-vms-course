@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
-from apphost.reconciler import CONVERGED, LAGGING, STALLED
+from worker.reconciler import CONVERGED, LAGGING, STALLED
 from console.auth import Sessions, verify_password
 
 UNREACHABLE = "unreachable"
@@ -72,7 +72,7 @@ class CameraPatch(BaseModel):
 
 
 def create_app(host) -> FastAPI:
-    """`host` is the AppHost: the console runs on its loop and reads its store."""
+    """`host` is the Worker: the console runs on its loop and reads its store."""
     settings, store = host.settings, host.store
     sessions = Sessions(settings.session_ttl)
     app = FastAPI(title="Recorder console", version="0.10")
@@ -204,7 +204,7 @@ def render_metrics(status: dict) -> str:
         "# HELP recorder_cameras_never_recorded Enabled cameras with no segment in the last two hours.",
         "# TYPE recorder_cameras_never_recorded gauge",
         f"recorder_cameras_never_recorded {never}",
-        "# HELP recorder_node_reporting 1 if the AppHost wrote status within the window.",
+        "# HELP recorder_node_reporting 1 if the Worker wrote status within the window.",
         "# TYPE recorder_node_reporting gauge",
         f"recorder_node_reporting {1 if status['node_reporting'] else 0}",
     ]

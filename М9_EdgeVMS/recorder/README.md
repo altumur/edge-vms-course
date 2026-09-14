@@ -7,22 +7,22 @@ segment and nothing else; an operator sees all of it behind a login.
 ```
 recorder/
   migrations/          Lesson 5 — schema, partitions, operators; Lesson 9 — conditions + camera_status
-  apphost/
+  worker/
     reconciler.py      Lesson 6 — the loop, with nothing in it (pure; survives the rewrite)
     pipeline.py        Lesson 7 — CameraPipeline state machine, GstActuator, FakeActuator
     retention.py       Lesson 8 — partitions ahead, detach+drop, the disk-full policy, orphan sweep
-    apphost.py         Lessons 6–9 — reconcile / pump_buses / report / retention, one process
+    worker.py         Lessons 6–9 — reconcile / pump_buses / report / retention, one process
     store.py           every SQL statement, in one file, so the column split is enforced in one place
     secrets.py         Lesson 5 — the credential that was hiding in rtsp_url
     config.py          settings from the environment (М8 Lesson 6)
   console/
     app.py             Lesson 9 — /login, /cameras, /status, /timeline, /events, /metrics
     auth.py            Lesson 9 — argon2, one account, marked temporary
-  tests/               Lesson 8, Step 6 — converge, offline, stall, diskfull, restart (+ apphost)
+  tests/               Lesson 8, Step 6 — converge, offline, stall, diskfull, restart (+ worker)
   tools/
     provision.py       key, operator, camera, migrate — the hand-provisioned things Lesson 5 counts
     fake_camera.py     an RTSP camera you can stall with a signal, socket held open
-  quadlet/             Lesson 5, Step 9 — postgres.container, apphost.container, env example
+  quadlet/             Lesson 5, Step 9 — postgres.container, worker.container, env example
   Containerfile
 ```
 
@@ -36,16 +36,16 @@ recorder/
 | Partition by time from day one; `DELETE` is not retention | `migrations/0002` (`PARTITION BY RANGE (lower(span))`), `retention.py` (`DETACH` then `DROP TABLE`, paths remembered first) |
 | The pruning trap | `store.timeline()` and the `camera_status` view both bound `lower(span)`, with the comment the lesson asks for |
 | Desired persisted, actual derived; `self.actual = {}` IN MEMORY ONLY | `reconciler.py` — and `tests/test_converge.py::test_5` keeps the lying `Persisted` class as a test, not a class |
-| The timer is correctness, the notification is latency | `apphost.reconcile()` waits on `wake` **or** `poll_interval`; `store.listen()` sets `wake` |
-| One task per concern, not per camera | `apphost.py` — four tasks, whatever the camera count |
+| The timer is correctness, the notification is latency | `worker.reconcile()` waits on `wake` **or** `poll_interval`; `store.listen()` sets `wake` |
+| One task per concern, not per camera | `worker.py` — four tasks, whatever the camera count |
 | Backoff with jitter | `reconciler._fail()`; `tests/test_offline.py` proves a 0.000 s spread without it |
 | Python touches control, never data | `pipeline.py` — no probes, no `appsink`; `watchdog` in the description; `format-location` once per segment; non-blocking `pop_filtered` |
-| The spool becomes the archive | `pipeline._closed()` → `AppHost._on_segment_closed()` queues → `report_once()` writes the index row |
+| The spool becomes the archive | `pipeline._closed()` → `Worker._on_segment_closed()` queues → `report_once()` writes the index row |
 | `epoch` in the path, 1 and unused | `pipeline.segment_dir()` → `/data/archive/<cam>/e1/` |
 | Drop the index before unlinking the files | `retention.py`, and `tests/test_diskfull.py` asserts the order from the operation log |
 | The recorder says which policy it applied | `retention.degraded` / `retention.stopped` events in the `events` table |
 | On restart, never resume the previous segment | segment names are the wall-clock start; `tests/test_restart.py` |
-| Positions and reasons on separate axes | `phase` column vs `camera_conditions` table; `apphost.phases()` never sets a phase from a condition |
+| Positions and reasons on separate axes | `phase` column vs `camera_conditions` table; `worker.phases()` never sets a phase from a condition |
 | One query | `camera_status` view, `migrations/0004` |
 | Two exported signals; `camera_lag` as a distribution | `console.render_metrics()` |
 | Same 401 for unknown user and wrong password | `console/app.py::login` |
@@ -75,7 +75,7 @@ python3 -m tools.provision operator admin
 python3 tools/fake_camera.py --port 8554 --count 50 &
 
 # 5. run the recorder
-python3 -m apphost
+python3 -m worker
 ```
 
 Then, in another shell:
@@ -105,7 +105,7 @@ NODEVMS_STALL_TEST=1 pytest tests/test_stall.py     # needs GStreamer + gst-rtsp
 
 Honest accounting, in the module's own convention:
 
-- **Run, output real:** `tests/` — 27 tests, plain Python, no database, no GStreamer (reconciler, backoff and jitter, retention order and all three disk-full policies, the AppHost glue, segment naming, the credential encryption and the URL validator). Every SQL statement in `store.py` and all four migrations were executed against **PostgreSQL 16.13**, twice (idempotency), including `DETACH`/`DROP`, the `camera_status` view and the `ON CONFLICT` upsert that keeps `since` still.
+- **Run, output real:** `tests/` — 27 tests, plain Python, no database, no GStreamer (reconciler, backoff and jitter, retention order and all three disk-full policies, the Worker glue, segment naming, the credential encryption and the URL validator). Every SQL statement in `store.py` and all four migrations were executed against **PostgreSQL 16.13**, twice (idempotency), including `DETACH`/`DROP`, the `camera_status` view and the `ON CONFLICT` upsert that keeps `since` still.
 - **Written to the documentation, not executed here:** the GStreamer path in `pipeline.py` (`splitmuxsink-fragment-closed` element messages, `format-location`, `pop_filtered`), `tools/fake_camera.py`, and the HTTP layer of `console/app.py`. They compile and import; they need a bench with GStreamer 1.18+ and a real `asyncpg`/`fastapi` install to run, which the authoring sandbox did not have. Run `tests/test_stall.py` first when you have one.
 
 ## One correction to Lesson 5, found by running it
@@ -118,7 +118,7 @@ CREATE TRIGGER cameras_bump BEFORE UPDATE ON cameras
     EXECUTE FUNCTION bump_revision();
 ```
 
-Whole-row comparison means the AppHost's own `report()` — writing
+Whole-row comparison means the Worker's own `report()` — writing
 `observed_revision`, `phase`, `last_seen` — bumps `revision`. Measured:
 report `observed_revision = 2` and `revision` goes to 3; the lag is 1
 forever and the recorder chases its own tail. `migrations/0001` names the

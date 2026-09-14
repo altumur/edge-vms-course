@@ -1,17 +1,17 @@
-"""The AppHost's glue: three tasks per concern, controller-owned writes only,
+"""The Worker's glue: three tasks per concern, controller-owned writes only,
 segment rows queued from a streaming thread and written on the loop."""
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
 
-from apphost.apphost import AppHost
-from apphost.pipeline import FakeActuator
+from worker.worker import Worker
+from worker.pipeline import FakeActuator
 from tests.conftest import cam, settings
 
 
 class FakeAsyncStore:
-    """The async surface of PgStore that AppHost touches."""
+    """The async surface of PgStore that Worker touches."""
 
     def __init__(self, rows):
         self.rows = rows
@@ -38,7 +38,7 @@ class FakeAsyncStore:
 
 async def test_reconcile_and_report_write_only_controller_columns():
     store = FakeAsyncStore([cam(1), cam(2, enabled=False), cam(3)])
-    host = AppHost(settings(), store, actuator=FakeActuator(failing={3}))
+    host = Worker(settings(), store, actuator=FakeActuator(failing={3}))
     actions = await host.reconcile_once()
     assert set(actions) == {("start", 1), ("failed", 3)}
     await host.report_once()
@@ -55,7 +55,7 @@ async def test_reconcile_and_report_write_only_controller_columns():
 
 async def test_segment_closed_is_queued_then_indexed_on_the_loop():
     store = FakeAsyncStore([cam(1)])
-    host = AppHost(settings(epoch=1), store, actuator=FakeActuator())
+    host = Worker(settings(epoch=1), store, actuator=FakeActuator())
     await host.reconcile_once()
     t0 = datetime(2026, 9, 14, 9, 0, tzinfo=timezone.utc)
     t1 = datetime(2026, 9, 14, 9, 10, tzinfo=timezone.utc)
@@ -69,7 +69,7 @@ async def test_segment_closed_is_queued_then_indexed_on_the_loop():
 async def test_storage_unavailable_is_a_reason_not_a_phase():
     store = FakeAsyncStore([cam(1)])
     act = FakeActuator()
-    host = AppHost(settings(), store, actuator=act)
+    host = Worker(settings(), store, actuator=act)
     host.recording_allowed = False               # the stop_recording policy fired
     assert await host.reconcile_once() == [("failed", 1)]
     assert act.running == set()
@@ -85,7 +85,7 @@ async def test_storage_unavailable_is_a_reason_not_a_phase():
 async def test_dead_pipeline_is_forgotten_and_restarted():
     store = FakeAsyncStore([cam(1)])
     act = FakeActuator()
-    host = AppHost(settings(), store, actuator=act)
+    host = Worker(settings(), store, actuator=act)
     await host.reconcile_once()
     dead = [1]
     act.pump = lambda: dead.pop() and [1] if dead else []     # one bus error, once

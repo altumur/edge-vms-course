@@ -1,4 +1,4 @@
-"""Lesson 8, Steps 4–5 — the AppHost dies mid-change; and the fencing rule
+"""Lesson 8, Steps 4–5 — the Worker dies mid-change; and the fencing rule
 in its smallest form: on restart, never resume the previous segment."""
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import os
 import tempfile
 from datetime import datetime, timezone
 
-from apphost.pipeline import CameraPipeline, FakeActuator
-from apphost.reconciler import Reconciler
+from worker.pipeline import CameraPipeline, FakeActuator
+from worker.reconciler import Reconciler
 from tests.conftest import FakeStore, cam, settings
 
 
@@ -24,7 +24,7 @@ def test_kill_mid_change_converges():
 
 
 def test_restart_opens_a_new_segment_never_resumes():
-    """Two AppHost instances naming a segment file for the same camera must
+    """Two Worker instances naming a segment file for the same camera must
     never pick the same path — the restarted one opens a NEW segment."""
     s = settings(archive_dir=tempfile.mkdtemp())
     p1 = CameraPipeline(cam(7), s, None, on_segment_closed=lambda *a: None)

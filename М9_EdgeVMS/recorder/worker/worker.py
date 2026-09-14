@@ -1,4 +1,4 @@
-"""The AppHost: one process, three tasks per concern — not one per camera.
+"""The Worker: one process, three tasks per concern — not one per camera.
 
     reconcile()    every POLL_INTERVAL, and on NOTIFY   desired (Postgres) vs actual (dict)
     pump_buses()   every BUS_TICK                        non-blocking pop on each pipeline's bus
@@ -23,11 +23,11 @@ from .retention import RealFs, enforce_retention
 from .secrets import ColumnKey
 from .store import Desired, PgStore
 
-log = logging.getLogger("apphost")
+log = logging.getLogger("worker")
 MIGRATIONS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations")
 
 
-class AppHost:
+class Worker:
     def __init__(self, settings: Settings, store: PgStore, actuator=None, key: ColumnKey | None = None):
         self.settings = settings
         self.store = store
@@ -196,6 +196,6 @@ async def main() -> None:
         log.warning("no column key at %s; cameras with credentials will not start", settings.column_key_file)
     store = await PgStore.connect(settings.database_url)
     try:
-        await AppHost(settings, store, key=key).run()
+        await Worker(settings, store, key=key).run()
     finally:
         await store.close()

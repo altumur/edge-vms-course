@@ -1,6 +1,6 @@
 # Module 10 — NodeVMS: The Platform's Shape on One Node
 
-[Module 9](../М9_EdgeVMS/README.md) ends with a box that owns its OS and its truth: an A/B root under RAUC, and a Node whose Postgres holds what it should be while an AppHost makes it so. This module takes that Node apart and rebuilds it on the shape the course arrived at last — **a controller, workers, and resources** — on one box, so that every piece can be seen running before [М11](../М11_ClusterVMS/README.md) spreads it across servers.
+[Module 9](../М9_EdgeVMS/README.md) ends with a box that owns its OS and its truth: an A/B root under RAUC, and a Node whose Postgres holds what it should be while a worker makes it so. This module takes that Node apart and rebuilds it on the shape the course arrived at last — **a controller, workers, and resources** — on one box, so that every piece can be seen running before [М11](../М11_ClusterVMS/README.md) spreads it across servers.
 
 Five lessons, each building one artifact: a GStreamer source that plays files as if they were cameras; an archive that is a resource, on the spool's discipline, with a manifest instead of an index; the worker — DriverPack itself — running М9's loop over an assignment; the controller that is the only writer of configuration; and a second, trivial subsystem that proves the platform knows nothing about video. No scheduler, no KVS, no database.
 
@@ -17,7 +17,7 @@ The design brief is [`module-design.md`](module-design.md); the first NodeVMS de
 
 > **The controller writes, the platform stores, the worker reads its share.** The platform — a config store with check-and-set, an object store, an epoch issuer, a lease, and slots that give `count = N` processes stable names by claim — knows the shape of a subsystem and nothing about a camera. `vmsplatform/` has no import from `vms/`, and a test greps it for the word.
 
-**What changed since М9's Node**, and what did not. KVS is gone — the archive is ours. The per-Node Postgres is gone — configuration lives in the platform's store and has one writer. The AppHost is gone — the thing that holds the pipeline supervises itself. What is kept, and enforced by the same tests: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons, the epoch in the path, commit-then-publish, the heartbeat carrying its status.
+**What changed since М9's Node**, and what did not. KVS is gone — the archive is ours. The per-Node Postgres is gone — configuration lives in the platform's store and has one writer. The worker is gone — the thing that holds the pipeline supervises itself. What is kept, and enforced by the same tests: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons, the epoch in the path, commit-then-publish, the heartbeat carrying its status.
 
 ## Lessons
 

@@ -506,6 +506,6 @@ Two things went back down for it, both operator fields rather than mechanism: `r
 - [Nomad Pack](https://developer.hashicorp.com/nomad/tools/nomad-pack) · [Nomad LICENSE](https://raw.githubusercontent.com/hashicorp/nomad/main/LICENSE)
 - [Eliminate Phase and simplify Conditions](https://github.com/kubernetes/kubernetes/issues/7856) — why phase enums were a mistake
 - [`where-the-database-lives.md`](where-the-database-lives.md) — five revisions ending with one database in the whole design, and a sixth note on what 2c did to that one
-- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · [`apphost-and-process-model.md`](../М9_EdgeVMS/apphost-and-process-model.md)
+- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · [`worker-and-process-model.md`](../М9_EdgeVMS/worker-and-process-model.md)
 
 *Written 5 September 2026. Split from the combined DomainVMS module on 7 September 2026. Rewritten to the 2c shape (workers, resources, one controller per cluster; Node retired) on 12 September 2026.*

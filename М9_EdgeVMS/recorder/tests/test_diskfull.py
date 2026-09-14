@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from apphost.retention import enforce_retention, ensure_partitions, RetentionReport
+from worker.retention import enforce_retention, ensure_partitions, RetentionReport
 from tests.conftest import FakeDb, FakeFs, LoggingFs, settings
 
 UTC = timezone.utc

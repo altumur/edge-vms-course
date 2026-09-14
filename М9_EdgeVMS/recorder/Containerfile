@@ -7,8 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY pyproject.toml .
 RUN pip3 install --break-system-packages --no-cache-dir asyncpg fastapi uvicorn argon2-cffi cryptography
-COPY apphost apphost
+COPY worker worker
 COPY console console
 COPY migrations migrations
 COPY tools tools
-CMD ["python3", "-m", "apphost"]
+CMD ["python3", "-m", "worker"]

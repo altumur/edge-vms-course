@@ -68,10 +68,10 @@ job "node-3" {
       resources { cpu = 500  memory = 512 }
     }
 
-    task "apphost" {
+    task "worker" {
       driver = "podman"
       config {
-        image        = "localhost/recorder-apphost:latest"
+        image        = "localhost/recorder-worker:latest"
         network_mode = "host"
         volumes = [
           "/data/nodes/node-3/archive:/data/archive:z",   # recordings stay LOCAL

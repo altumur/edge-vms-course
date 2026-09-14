@@ -16,8 +16,8 @@ Every layer so far has had a single source of truth that lived somewhere else. N
 
 | | Holds | Written by | Survives |
 |---|---|---|---|
-| **Desired state** | What the operator asked for | The operator, through the API | Reboots, OS updates, the AppHost dying |
-| **Actual state** | What is running right now | The AppHost, by observation | Nothing — it is re-derived every time |
+| **Desired state** | What the operator asked for | The operator, through the API | Reboots, OS updates, the worker dying |
+| **Actual state** | What is running right now | The worker, by observation | Nothing — it is re-derived every time |
 
 > **The rule that organises the whole module: desired state is persisted, actual state is derived.**
 
@@ -40,7 +40,7 @@ INSERT INTO cameras (name, rtsp_url, site_id, enabled)
 VALUES ('front-door', 'rtsp://10.0.0.41/stream1', 'store-14', true);
 ```
 
-Within a few seconds, without anyone restarting anything: a pipeline is running, segments are landing on the data partition, and `SELECT name, phase, observed_revision FROM camera_status` says so. `UPDATE ... SET enabled = false` stops it. `systemctl kill apphost` loses nothing but the open segment, and the box converges again on restart.
+Within a few seconds, without anyone restarting anything: a pipeline is running, segments are landing on the data partition, and `SELECT name, phase, observed_revision FROM camera_status` says so. `UPDATE ... SET enabled = false` stops it. `systemctl kill worker` loses nothing but the open segment, and the box converges again on restart.
 
 If a lesson does not move that demo forward, it does not belong in this module.
 
@@ -51,8 +51,8 @@ If a lesson does not move that demo forward, it does not belong in this module.
 | Decision | Choice | Why |
 |---|---|---|
 | Scope | **One recorder, one server, end to end** | The loop is the lesson, and it is far easier to see when both ends are in one terminal. Scheduling recorders across servers is М11's. |
-| Worker model | **N pipelines in one Python process** | The conclusion of [`apphost-and-process-model.md`](apphost-and-process-model.md), now built. Container-per-camera is М9's world and stops being right near fifty. |
-| Actual state | **Derived, never persisted** | Kill the AppHost and it must rebuild its picture from Postgres plus observation. Anything it remembers across a restart is a bug. |
+| Worker model | **N pipelines in one Python process** | The conclusion of [`worker-and-process-model.md`](worker-and-process-model.md), now built. Container-per-camera is М9's world and stops being right near fifty. |
+| Actual state | **Derived, never persisted** | Kill the worker and it must rebuild its picture from Postgres plus observation. Anything it remembers across a restart is a bug. |
 | Change notification | **Poll on a timer, `LISTEN/NOTIFY` for latency** | NOTIFY is not durable — a listener that was disconnected misses it forever. Notify for speed, poll for correctness. Teaching only NOTIFY produces a system that silently stops converging. |
 | recorder visibility | **Decided for the operator, never by them** | See below. The `cameras` table has no recorder column a client may write. |
 | Language | **Python for the course; Go + C++ for the product** | Python teaches the loop and makes the language boundary visible. The product splits it — Go for the controller, C++ for the media worker — and Lesson 9 says why that split costs almost nothing. |
@@ -67,7 +67,7 @@ If a lesson does not move that demo forward, it does not belong in this module.
 
 ## Prerequisites
 
-- **М8 Lesson 2** — process supervision, signals, and the self-matching `pkill` bug. The AppHost is what `looper.py` grows into.
+- **М8 Lesson 2** — process supervision, signals, and the self-matching `pkill` bug. The worker is what `looper.py` grows into.
 - **М8 Lesson 4** — GStreamer pipelines and what each element does. Lesson 7 builds them from Python instead of a shell string.
 - **М9 Lesson 4** — Quadlet, and the OS/app/data boundary that decides where `PGDATA` goes.
 - **М8 Lesson 6** — configuration is read from the environment; credentials are never in the image.
@@ -105,11 +105,11 @@ The obvious way to notice a camera that has stopped sending while its TCP socket
 rtspsrc ! rtph264depay ! h264parse ! watchdog timeout=8000 ! splitmuxsink
 ```
 
-Zero Python in the data path, and the failure arrives on the bus the AppHost is already reading. This one element is worth a section of Lesson 7 on its own, because it is the model for the whole design: push the per-frame concern into C, keep Python at control rate.
+Zero Python in the data path, and the failure arrives on the bus the worker is already reading. This one element is worth a section of Lesson 7 on its own, because it is the model for the whole design: push the per-frame concern into C, keep Python at control rate.
 
 ### The event loop, and not having two of them
 
-The AppHost speaks asyncio to Postgres and to its API. Running a `GLib.MainLoop` alongside it gives the process two schedulers and two notions of "later".
+The worker speaks asyncio to Postgres and to its API. Running a `GLib.MainLoop` alongside it gives the process two schedulers and two notions of "later".
 
 Don't. Each pipeline has its own bus; one asyncio task drains all of them with the **non-blocking** `bus.pop_filtered(...)` on a short tick:
 
@@ -211,7 +211,7 @@ The `camera_sim.py` move, applied to control: build the loop before the thing it
 - asyncio structure: one task per *concern*, not one task per camera
 - **Deliberate mistake, then fix:** persist actual state, restart the process, and watch it confidently report pipelines that are not running
 
-**Deliverable:** an AppHost that converges a fake world, and passes a test that kills it mid-change.
+**Deliverable:** a worker that converges a fake world, and passes a test that kills it mid-change.
 
 ---
 
@@ -238,7 +238,7 @@ Each failure mode reproduced on purpose, then handled.
 - **Camera offline** → exponential backoff **with jitter**. Two hundred cameras reconnecting in lockstep after a switch reboot is a self-inflicted outage, and the jitter is the whole fix
 - **Stalled stream, socket still open** → `watchdog` fires, that one pipeline restarts, the other forty-nine never notice
 - **Disk full** → retention enforcement degrades by policy, and this is М9's spool-bound question returning with the answer changed: there, a full disk meant choosing between dropping the oldest and stopping recording, because the footage was in transit. Here it is *the archive*, so retention decides and the choice is the customer's, written down. The deletion loop must be conservative: never delete what it cannot prove is superseded. With Lesson 5's partitioning this is a partition detach-and-drop plus a segment unlink, not a scan — which is what makes it fast enough to run under pressure. Order matters: drop the index rows *before* unlinking, so a crash leaves orphaned files rather than index rows pointing at nothing
-- **The AppHost dies** → systemd restarts it, state is re-derived, and the segment discipline bounds the loss
+- **The worker dies** → systemd restarts it, state is re-derived, and the segment discipline bounds the loss
 - **The fencing rule, introduced small:** on restart, never resume the previous segment — open a new one. Leases and epochs are М11's problem; the rule that makes them necessary lands here
 
 **Deliverable:** a test suite that kills, fills, stalls and unplugs, and asserts convergence after each.
@@ -291,6 +291,6 @@ Every lesson marks which of its claims were run and which are documentation-deri
 - [GStreamer bindings](https://gstreamer.freedesktop.org/bindings/) — which bindings are officially maintained
 - [`go-gst`](https://github.com/go-gst/go-gst) — the live Go binding, successor to `tinyzimmer/go-gst`
 - [`gstreamermm`](https://github.com/GNOME/gstreamermm) — archived, which is why C++ uses the C API directly
-- [`apphost-and-process-model.md`](apphost-and-process-model.md) — the process model this module implements
+- [`worker-and-process-model.md`](worker-and-process-model.md) — the process model this module implements
 
 *Written 4 September 2026.*

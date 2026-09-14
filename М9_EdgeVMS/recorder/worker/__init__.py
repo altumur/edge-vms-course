@@ -1,4 +1,4 @@
-"""Recorder AppHost — М9.
+"""Recorder Worker — М9.
 
 One process, one shard: a reconcile loop (Lesson 6), fifty GStreamer
 pipelines (Lesson 7), failure handling and retention (Lesson 8), and the

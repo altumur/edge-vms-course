@@ -64,7 +64,7 @@ A recorder owns its own retention policy, so it cannot go stale on that. Entitle
 
 **On every box** (М9): an A/B root filesystem under RAUC, signed bundles, one-attempt rollback decided by a health check that reaches all the way to *is footage being written*; Podman under Quadlet; and a data partition holding everything that must outlive both an OS update and an application update — container storage, configuration, and the archive.
 
-**Per recorder** (М9): one Postgres holding configuration, the archive index and events; one AppHost running the reconcile loop and up to ~50 GStreamer pipelines in one Python process — in the product, the worker's own controller inside DriverPack, see §1.11; a `/metrics` endpoint exporting `camera_lag` and `camera_silent_seconds`.
+**Per recorder** (М9): one Postgres holding configuration, the archive index and events; one worker running the reconcile loop and up to ~50 GStreamer pipelines in one Python process — in the product, the worker's own controller inside DriverPack, see §1.11; a `/metrics` endpoint exporting `camera_lag` and `camera_silent_seconds`.
 
 **Per cluster** (М11): Nomad servers and clients — the cluster *is* a Nomad region; an object store on the cluster's own servers holding each recorder's restore point; and the cluster directory, which is nothing more than each recorder's Nomad Variable, scanned.
 
@@ -175,9 +175,9 @@ A rented cluster is a cluster. A worker cannot tell where it is running, and М1
 
 Most of what Part 1 describes knows nothing about a camera. A scheduler that places processes by constraint, an object store, a small consistent config store, a signer and an agent that carry trust, a web gateway, an observer — that is a **platform**, and it would host any fleet of stateless shards writing bulk data. The **VMS** is what is specific to video: the worker that holds the pipeline (DriverPack), the detectors, the schema of cameras, sites and grants, and the UI. The boundary decides which team owns what and which invariants travel across it.
 
-The course's **AppHost was a stand-in for the worker's own controller.** It exists because the course had no DriverPack and needed something to supervise pipelines, reconcile them against desired state and report positions — in Python, so the design could be built and tested. It is not the platform's job (Nomad supervises processes, not the threads inside one; nobody but the VMS turns *camera 7, revision 12* into a running pipeline) and it is not a separate process in the product: the thing that holds the source owns everything that happens to the stream, including where its branches go. Row by row:
+М9's **worker process was a stand-in for the worker's own controller.** It exists because the course had no DriverPack and needed something to supervise pipelines, reconcile them against desired state and report positions — in Python, so the design could be built and tested. It is not the platform's job (Nomad supervises processes, not the threads inside one; nobody but the VMS turns *camera 7, revision 12* into a running pipeline) and it is not a separate process in the product: the thing that holds the source owns everything that happens to the stream, including where its branches go. Row by row:
 
-| AppHost today | Product | Why |
+| М9's worker | Product | Why |
 |---|---|---|
 | start/stop/restart pipelines; backoff with jitter; bus pumping; watchdog | **DriverPack** | only the holder of the source knows a pipeline died |
 | reconcile desired cameras against running pipelines; `>=` on the revision | **DriverPack** | *make the running set equal the assigned set* is the worker's loop |
@@ -349,9 +349,9 @@ The module's own thesis is the one datacentre monitoring gets for free and this 
 
 ---
 
-### Step 14 — The AppHost was a stand-in, and the boundary it stood on
+### Step 14 — М9's worker was a stand-in, and the boundary it stood on
 
-The last question asked of the design was the one an engineer asks first: *why is there a controller process at all, when Nomad supervises processes and DriverPack holds the pipeline?* The answer split. Half of the AppHost — supervision inside a process, the reconcile against desired state, the routing, the reporting — is the worker's and always was; the course built it in Python because it had no worker, and it moves into DriverPack as a contract carried by the tests. The other half — config distribution, fencing tokens, retention, serving people — was never VMS-specific and is the platform's. §1.11 is the row-by-row assignment; the modules keep their invariants and lose a process. The archive's location is the decision that follows from it and is not yet taken.
+The last question asked of the design was the one an engineer asks first: *why is there a controller process at all, when Nomad supervises processes and DriverPack holds the pipeline?* The answer split. Half of the worker — supervision inside a process, the reconcile against desired state, the routing, the reporting — is the worker's and always was; the course built it in Python because it had no worker, and it moves into DriverPack as a contract carried by the tests. The other half — config distribution, fencing tokens, retention, serving people — was never VMS-specific and is the platform's. §1.11 is the row-by-row assignment; the modules keep their invariants and lose a process. The archive's location is the decision that follows from it and is not yet taken.
 
 ## What the sequence teaches
 

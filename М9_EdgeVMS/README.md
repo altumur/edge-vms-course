@@ -33,10 +33,10 @@ And a third thing that belongs to neither: **the data**. It must outlive both pl
 
 Every lesson ends with something you can see working, and each one is the input to the next.
 
-- **16** → one disk, two complete systems, either bootable, chosen by hand at a menu.
-- **17** → that menu replaced by a signed artifact, and three refusals proving the signature check is real.
-- **18** → the choice made automatically, with a broken update rolling itself back and nobody in the room.
-- **19** → the VMS running under systemd across reboots and OS updates, recording through a ten-minute uplink outage with nothing lost.
+- **01** → one disk, two complete systems, either bootable, chosen by hand at a menu.
+- **02** → that menu replaced by a signed artifact, and three refusals proving the signature check is real.
+- **03** → the choice made automatically, with a broken update rolling itself back and nobody in the room.
+- **04** → the VMS running under systemd across reboots and OS updates, recording through a ten-minute uplink outage with nothing lost.
 
 ## What you can verify without hardware
 
@@ -61,7 +61,7 @@ One correction worth knowing before you try it: **`systemd-analyze verify` canno
 Written alongside the module, with their costs attached rather than quietly omitted:
 
 - [RAUC alternatives](rauc-alternatives.md) — SWUpdate, Mender, bootc, systemd-sysupdate, and where each wins. RAUC is taught because A/B slots are legible and its signature verification is unconditional; **bootc may well be the better choice for a product shipping on x86-64 UEFI**, and the document says so.
-- [One container per camera?](apphost-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle. Lesson 4's second sidebar sets this up; М11 Lesson 1 breaks the pattern deliberately.
+- [One container per camera?](worker-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle. Lesson 4's second sidebar sets this up; М11 Lesson 1 breaks the pattern deliberately.
 
 The multi-node half of this module moved to [М11](../М11_ClusterVMS/module-design.md), where recorders are scheduled across servers. A module called EdgeVMS should not build a raft cluster. The orchestrator comparison that shaped it is recorded in [Kubernetes vs Nomad](../М11_ClusterVMS/kubernetes-vs-nomad.md).
 
@@ -89,7 +89,7 @@ INSERT INTO cameras (name, rtsp_url, site_id, enabled)
 VALUES ('front-door', 'rtsp://10.0.0.41/stream1', 'store-14', true);
 ```
 
-Within a few seconds, with nobody restarting anything: a pipeline is running, segments are landing on the data partition, and `SELECT name, phase, observed_revision FROM camera_status` says so. `UPDATE ... SET enabled = false` stops it. `systemctl kill apphost` loses nothing but the open segment.
+Within a few seconds, with nobody restarting anything: a pipeline is running, segments are landing on the data partition, and `SELECT name, phase, observed_revision FROM camera_status` says so. `UPDATE ... SET enabled = false` stops it. `systemctl kill worker` loses nothing but the open segment.
 
 If a lesson does not move that demo forward, it does not belong here.
 
@@ -105,11 +105,11 @@ Two corrections worth knowing before you start, both found by running the thing 
 
 - **PostgreSQL has no `DROP PARTITION` statement** — that is Oracle and MySQL. It is `ALTER TABLE … DETACH PARTITION` then `DROP TABLE`.
 - **Partition pruning needs a predicate on the partition key.** `span && …` alone opens every partition's index; the bound on `lower(span)` is what prunes.
-- **The `revision` trigger must name the operator-owned columns.** `WHEN (OLD.* IS DISTINCT FROM NEW.*)` bumps `revision` on the AppHost's own status write, and the lag never clears. Found when the code was assembled; Lesson 5 now carries the corrected trigger.
+- **The `revision` trigger must name the operator-owned columns.** `WHEN (OLD.* IS DISTINCT FROM NEW.*)` bumps `revision` on the worker's own status write, and the lag never clears. Found when the code was assembled; Lesson 5 now carries the corrected trigger.
 
 ### The code, whole (Lessons 5–9)
 
-[`recorder/`](./recorder/README.md) is the five lessons assembled into one runnable recorder: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, AppHost glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
+[`recorder/`](./recorder/README.md) is the five lessons assembled into one runnable recorder: the migrations, the reconciler, the GStreamer actuator, retention with all three disk-full policies, the console, the commissioning tools, the Quadlet units, and the test suite Lesson 8 lays out. Its README maps every sentence in the lessons to the line that implements it, and says exactly what was executed where — the reconciler, retention, worker glue and every SQL statement ran; the GStreamer path and the HTTP layer need a bench with `python3-gi` and `asyncpg`.
 
 ```bash
 cd recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
@@ -128,11 +128,11 @@ The course names its temporary things where they appear rather than discovering 
 
 М12 collects them all — four replaced, one promoted. The `valid_until` column in Lesson 5's `grants` table is the mirror image: dead code here, present so that М12 *populates* rather than *migrates*.
 
-**And the AppHost itself is a stand-in of a different kind.** It is the worker's own controller, built in Python because the course has no media worker of its own; in the product that controller lives inside DriverPack, the process that holds the pipeline, and the platform supplies the rest — assignment, fencing tokens, storage, the web tier. What survives the move is the contract this module's tests define: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons. [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md) draws the boundary row by row; `recorder/` is the reference implementation the worker's tests are ported from.
+**And the worker itself is a stand-in of a different kind.** It is the worker's own controller, built in Python because the course has no media worker of its own; in the product that controller lives inside DriverPack, the process that holds the pipeline, and the platform supplies the rest — assignment, fencing tokens, storage, the web tier. What survives the move is the contract this module's tests define: desired persisted and actual derived, `>=` on the revision, backoff with jitter, positions apart from reasons. [`ARCHITECTURE.md` §1.11](../ARCHITECTURE.md) draws the boundary row by row; `recorder/` is the reference implementation the worker's tests are ported from.
 
 ### Where the recorder goes
 
-Everything in this module holds because there is exactly one box — one writer, one AppHost, a convention where М11 needs a fencing token, and one API surface to protect.
+Everything in this module holds because there is exactly one box — one writer, one worker, a convention where М11 needs a fencing token, and one API surface to protect.
 
 [**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box. A recorder becomes a scheduler allocation that moves between servers, and nothing built here changes — that is the design working. But two instances of one recorder can briefly exist during a failover, and Lesson 8's one-line rule (*on restart, never resume the previous segment*) has to become an epoch the archive itself enforces.
 

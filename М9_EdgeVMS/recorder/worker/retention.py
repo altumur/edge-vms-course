@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Protocol
 
-log = logging.getLogger("apphost.retention")
+log = logging.getLogger("worker.retention")
 
 STOP_RECORDING, DEGRADE_RETENTION, BY_PRIORITY = "stop_recording", "degrade_retention", "by_priority"
 

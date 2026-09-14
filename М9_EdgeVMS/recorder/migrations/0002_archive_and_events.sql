@@ -28,7 +28,7 @@ CREATE INDEX IF NOT EXISTS events_payload_gin ON events USING gin (payload);
 CREATE INDEX IF NOT EXISTS events_kind_at     ON events (kind, at);
 
 -- Partitions are created AHEAD of time by the retention job
--- (apphost/retention.py: ensure_partitions). The migration only guarantees
+-- (worker/retention.py: ensure_partitions). The migration only guarantees
 -- the current month exists so a fresh recorder can record before the job's
 -- first pass. A missing partition is a recording outage, not an error.
 CREATE OR REPLACE FUNCTION ensure_month_partition(parent regclass, month date)

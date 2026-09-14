@@ -105,7 +105,7 @@ Then the vocabulary from Lesson 6, now with a home on the screen:
 | **stalled** | behind, repeated failures | red, **with the failing condition** |
 | **unreachable** | no status write within the window | grey — the *recorder*, not the camera |
 
-That last row is about the recorder, and greying it out is deliberate: when the AppHost is not reporting, you do not know what the cameras are doing. Showing them green because they were green four minutes ago is precisely the lie Lesson 6's persisted-actual bug produced, arriving through the interface instead of the data model.
+That last row is about the recorder, and greying it out is deliberate: when the worker is not reporting, you do not know what the cameras are doing. Showing them green because they were green four minutes ago is precisely the lie Lesson 6's persisted-actual bug produced, arriving through the interface instead of the data model.
 
 ### The recorder's two exported signals
 
@@ -238,7 +238,7 @@ Four times the controller's share of `B`, and the thing М9's bundle carries shr
 | Everything shows amber | `lagging` and `stalled` collapsed into one state. Split them on failure count, and show the lag number. |
 | A camera shows green but records nothing | You are reading control-plane fields only. `silent_for` is the column that catches this. |
 | Conditions and phase disagree | Something is writing `phase` from a condition. They are separate axes — a condition never sets a phase. |
-| The console shows stale green during an AppHost outage | Not handling `unreachable`. When the recorder stops reporting, you do not know — say so, do not imply health. |
+| The console shows stale green during a worker outage | Not handling `unreachable`. When the recorder stops reporting, you do not know — say so, do not imply health. |
 | Login works with any password | `argon2.verify` argument order, or an exception being swallowed. Test the negative case explicitly. |
 | The operator asks which recorder a camera is on | The UI leaked a controller-owned field. Step 4. |
 
@@ -266,6 +266,6 @@ Four times the controller's share of `B`, and the thing М9's bundle carries shr
 
 The module is complete. `INSERT INTO cameras` starts a recording, `DELETE` stops it, four kinds of failure are survived and asserted, and an operator can see all of it behind a login.
 
-**And there is exactly one box.** Every claim here — one writer, one AppHost, a convention instead of a fencing token, one API to protect — holds only because there is nothing to disagree with.
+**And there is exactly one box.** Every claim here — one writer, one worker, a convention instead of a fencing token, one API to protect — holds only because there is nothing to disagree with.
 
 [**М11 — ClusterVMS**](../М11_ClusterVMS/module-design.md) adds the second box, and everything gets harder in one specific way: a recorder becomes a scheduler allocation that **moves between servers**, carrying its cameras with it. Nothing you built here changes — that is the design working — but two instances of the same recorder can briefly exist during a failover, and Lesson 8's one-line convention has to become a fencing token that the archive itself enforces.

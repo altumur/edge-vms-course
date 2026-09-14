@@ -2,7 +2,7 @@
 
 **From cloud service to a box a customer plugs in and forgets about.**
 
-Modules 1–7 built a VMS that runs when you type `make serve`. Four lessons turn it into an appliance: an operating system that can be replaced atomically and rolled back with nobody on site, and an application that survives that replacement.
+Module built a VMS that runs when you type `make serve`. Four lessons turn it into an appliance: an operating system that can be replaced atomically and rolled back with nobody on site, and an application that survives that replacement.
 
 > **Revision note.** This module originally ran to nine lessons and carried a Part B on multi-node scheduling. That work moved to [М11](../М11_ClusterVMS/module-design.md), where recorders are scheduled across servers and made to survive one dying. What is left here is one box, which is what the name promises. The orchestrator comparison that shaped Part B is still recorded in [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md), and its verdict now applies to М9.
 
@@ -135,7 +135,7 @@ capture ──▶ splitmuxsink ──▶ /data/spool/<camera>/<ts>.mp4
 
 **Sidebar (context, not taught):** RAUC is not the only atomic-update approach, and for a product shipping on x86-64 UEFI it may not be the best one — **bootc** ships the OS itself as an OCI image, through the same registry and signing chain as the containers above. RAUC is kept here because A/B slots are legible, its signature verification is unconditional, and its bootloader coverage means these lessons port to ARM. Alternatives compared in [`rauc-alternatives.md`](rauc-alternatives.md).
 
-**Second sidebar (setting up М11 Lesson 1):** one container per camera is correct at this scale and stops being correct somewhere near fifty. Say so here rather than letting students generalise the pattern silently; М11 Lesson 1 breaks it deliberately. Reasoning in [`apphost-and-process-model.md`](apphost-and-process-model.md).
+**Second sidebar (setting up М11 Lesson 1):** one container per camera is correct at this scale and stops being correct somewhere near fifty. Say so here rather than letting students generalise the pattern silently; М11 Lesson 1 breaks it deliberately. Reasoning in [`worker-and-process-model.md`](worker-and-process-model.md).
 
 ---
 

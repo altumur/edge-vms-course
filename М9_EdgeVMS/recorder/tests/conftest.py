@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from apphost.config import Settings  # noqa: E402
+from worker.config import Settings  # noqa: E402
 
 
 def cam(i: int, revision: int = 1, enabled: bool = True, **kw) -> dict:

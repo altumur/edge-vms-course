@@ -22,7 +22,7 @@ go test ./reconciler/ -v          # 8 tests
 
 ## The port
 
-`reconciler.go` is `apphost/reconciler.py` with types. Read them side by side: the same `>=` on the revision, the same stop loop over *actual* rather than *desired*, the same `base * (0.5 + rand*0.5)` jitter, the same `lost()` for a pipeline that died, the same `converged | lagging | stalled` vocabulary with reasons kept off it. `SetActual` exists only so Test 5 can make the persisted-actual mistake on purpose, exactly as the Python `Persisted` subclass does.
+`reconciler.go` is `worker/reconciler.py` with types. Read them side by side: the same `>=` on the revision, the same stop loop over *actual* rather than *desired*, the same `base * (0.5 + rand*0.5)` jitter, the same `lost()` for a pipeline that died, the same `converged | lagging | stalled` vocabulary with reasons kept off it. `SetActual` exists only so Test 5 can make the persisted-actual mistake on purpose, exactly as the Python `Persisted` subclass does.
 
 The tests are the point. They were written against the Python loop, they pass against the Go loop without a change of meaning, and nothing in them mentions a language — which is what *the risky part was the design, not the code* looks like when it is true.
 
@@ -44,5 +44,5 @@ What the table does **not** say: that the media worker should be Go. Lesson 7's 
 
 | Survives as-is | Ported mechanically | Rewritten |
 |---|---|---|
-| the schema and migrations (SQL) | `apphost.py`'s four tasks → goroutines and a ticker; `store.py` → `pgx`; `retention.py`; `console/app.py` → `net/http` | the actuator (`pipeline.py`) — and it becomes a **client** of a C++ worker, not a host of pipelines |
+| the schema and migrations (SQL) | `worker.py`'s four tasks → goroutines and a ticker; `store.py` → `pgx`; `retention.py`; `console/app.py` → `net/http` | the actuator (`pipeline.py`) — and it becomes a **client** of a C++ worker, not a host of pipelines |
 | the tests' meaning | `vmsserver/` and `clustervms/` — done: [`vmsserver-go/`](../../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../../М11_ClusterVMS/clustervms-go/README.md) port the whole of М10 and М11 with their 70 tests, in the standard library (`net/http` to Nomad rather than `github.com/hashicorp/nomad/api`, which is MPL-2.0), and measure a server's worker and controller in both languages | |

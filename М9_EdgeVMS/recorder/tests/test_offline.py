@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import random
 
-from apphost.pipeline import FakeActuator
-from apphost.reconciler import Reconciler
+from worker.pipeline import FakeActuator
+from worker.reconciler import Reconciler
 from tests.conftest import FakeStore, cam
 
 

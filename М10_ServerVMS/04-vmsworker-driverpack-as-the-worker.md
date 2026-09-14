@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-The AppHost is gone and this is what replaced it. Not a new supervisor beside DriverPack — **DriverPack is the worker**. There is no process called "the worker" that hosts it; `vmsworker` is what DriverPack is called when it runs as a shard of the VMS subsystem, with its own loop, over its own assignment, publishing its own status. Nomad (or `systemd`, on one box) supervises the process; the process supervises its pipelines; nothing supervises the loop, because the loop is the process.
+М9's worker process — the Python `Worker` that hosted the reconcile loop and fifty pipelines — is gone and this is what replaced it. Not a new supervisor beside DriverPack — **DriverPack is the worker**. There is no process called "the worker" that hosts it; `vmsworker` is what DriverPack is called when it runs as a shard of the VMS subsystem, with its own loop, over its own assignment, publishing its own status. Nomad (or `systemd`, on one box) supervises the process; the process supervises its pipelines; nothing supervises the loop, because the loop is the process.
 
 What did not change is the loop. `vms/reconciler.py` is М9 Lesson 6's file, copied, and М9's seven tests run against it in this lesson without a change of meaning — because those tests were written against a design, and the design is what a rewrite keeps. What changed is where desired state comes from (an assignment in the platform's store, not a table in the worker's database) and what a start costs (an epoch, by CAS, and a lease).
 
@@ -166,7 +166,7 @@ def lease_pass(self):
 
 ## Step 7 — One supervisor, and what crash isolation costs
 
-The worker's `run()` is М9's AppHost's task list as one loop: reconcile, pump the buses, renew the slot and the leases every `(TTL − margin)/3`, heartbeat every ten seconds — and on an orderly stop, `release_slot()`, which is the one word that tells the controller *scale-in* rather than *crash*. There is no controller thread, no second process, no supervisor of the loop. `systemd` restarts the process if it dies, and a crash releases nothing: the slot lapses, and the restart claims it back.
+The worker's `run()` is М9's worker's task list as one loop: reconcile, pump the buses, renew the slot and the leases every `(TTL − margin)/3`, heartbeat every ten seconds — and on an orderly stop, `release_slot()`, which is the one word that tells the controller *scale-in* rather than *crash*. There is no controller thread, no second process, no supervisor of the loop. `systemd` restarts the process if it dies, and a crash releases nothing: the slot lapses, and the restart claims it back.
 
 Which means a vendor SDK that segfaults inside a pipeline takes the loop with it — the thing М9 Lesson 9 separated controller from worker to avoid. It is acceptable here *only because* the state is outside: the store holds the assignment, the resource holds the footage, the epoch and the lease make the restart harmless, and Step 5 is the proof. Keep that dependency explicit: the day someone caches the assignment in the worker "to survive the store being slow", crash isolation is gone and nobody will notice until a restart records nothing. The per-frame rule is the other line: the prototype's `_rebase` in Lesson 2 runs in Python, and the product's does not.
 

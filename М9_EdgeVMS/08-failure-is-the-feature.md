@@ -6,7 +6,7 @@
 
 ## Why this lesson exists
 
-Everything up to now assumed things work. Cameras answer, disks have room, the AppHost keeps running.
+Everything up to now assumed things work. Cameras answer, disks have room, the worker keeps running.
 
 None of that is true for more than a few days at a time, and on an appliance nobody visits, the difference between a product and a demo is entirely in what happens when it stops being true. So this lesson does not add a feature. It induces four failures on purpose, handles each one, and — this is the part that makes it stick — **asserts each one in a test that runs on every commit.**
 
@@ -78,7 +78,7 @@ async def test_one_stall_does_not_disturb_the_others():
         assert worker.segments_written(i) > 0   # still recording, not merely "up"
 ```
 
-That last assertion is the one worth copying into your own work. Checking that the other pipelines are in state `RUNNING` proves the AppHost's bookkeeping is intact; checking that they are still **writing segments** proves the actual job is still happening. A worker whose state machine says RUNNING while every pipeline is wedged passes the first assertion and fails the customer.
+That last assertion is the one worth copying into your own work. Checking that the other pipelines are in state `RUNNING` proves the worker's bookkeeping is intact; checking that they are still **writing segments** proves the actual job is still happening. A worker whose state machine says RUNNING while every pipeline is wedged passes the first assertion and fails the customer.
 
 To stall a camera without hardware: point `rtspsrc` at a simulated source you control and stop feeding it while keeping the connection open. `nc -l` holding an accepted socket is the crude version and is enough to trip the watchdog.
 
@@ -156,10 +156,10 @@ def test_disk_full_degrades_by_policy_and_says_so():
     assert oldest_segment_age() < configured_retention
 ```
 
-## Step 4 — The AppHost dies
+## Step 4 — The worker dies
 
 ```bash
-systemctl kill --signal=SIGKILL apphost
+systemctl kill --signal=SIGKILL worker
 ```
 
 No cleanup, no handlers, no chance to write anything. systemd restarts it, and the requirement is Lesson 6's rule made physical: **it must rebuild its picture from Postgres plus observation, remembering nothing.**
@@ -167,8 +167,8 @@ No cleanup, no handlers, no chance to write anything. systemd restarts it, and t
 ```python
 def test_kill_mid_change_converges():
     insert_camera(id=9)
-    kill_apphost_after(0.2)                # mid-reconcile
-    restart_apphost()
+    kill_worker_after(0.2)                # mid-reconcile
+    restart_worker()
     assert converged(9, within=10)
 ```
 
@@ -191,11 +191,11 @@ One line, and it looks like a detail:
 
 Resuming looks strictly better — you would recover those truncated seconds. Here is why it is forbidden.
 
-The AppHost was killed. It did not necessarily *stop*. `SIGKILL` reaches the process; it does not reach a pipeline that has already handed a file descriptor to a kernel thread, and on a box under memory pressure a process can be stopped for seconds and then continue. If the restarted AppHost opens the same file and the old one is still writing to it, **two writers are appending to one video file.** The result is not a merge. It is a file that is neither, and the corruption is silent — you find out when someone asks to play it back.
+The worker was killed. It did not necessarily *stop*. `SIGKILL` reaches the process; it does not reach a pipeline that has already handed a file descriptor to a kernel thread, and on a box under memory pressure a process can be stopped for seconds and then continue. If the restarted worker opens the same file and the old one is still writing to it, **two writers are appending to one video file.** The result is not a merge. It is a file that is neither, and the corruption is silent — you find out when someone asks to play it back.
 
 So the restarted instance opens a *new* segment. The truncated one stays as it is: complete up to its last valid frame, indexed as such, and never touched again.
 
-**On one recorder this is a convention.** Nothing enforces it; nothing needs to, because there is only one AppHost and systemd starts one at a time.
+**On one recorder this is a convention.** Nothing enforces it; nothing needs to, because there is only one worker and systemd starts one at a time.
 
 In М11 there are two instances of the same recorder during a failover — the new one on a healthy server, and the old one on a server everybody believes is dead and which is actually just slow. Both believe they own camera 7. A convention is worthless against that, and the mechanism that replaces it is a **fencing token**: the `epoch` you put in the path in Lesson 7, issued by a single authority, checked *at the archive* so the stale writer's files land where nobody reads them.
 
@@ -242,7 +242,7 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 - Drop the index **before** unlinking files: a crash then leaves orphaned files (wasteful, recoverable by a scan) rather than index rows pointing at nothing (a lie to the operator).
 - Disk-full is М9's question with a new answer — retention decides, but a full disk still needs a stated degradation policy, and the recorder must **log an event saying which it did**.
 - A hard kill loses **the open segment and nothing else**, so segment length is a product decision. Measure the number; customers ask for it.
-- **On restart, never resume the previous segment.** A convention here, because there is one AppHost; a fencing token in М11, because there will briefly be two.
+- **On restart, never resume the previous segment.** A convention here, because there is one worker; a fencing token in М11, because there will briefly be two.
 
 ## Exercises
 
@@ -250,7 +250,7 @@ Two properties make this suite worth having rather than a box-ticking exercise.
 2. Implement all three disk-full policies behind a config flag and write the datasheet sentence for each. They should read like different products.
 3. Measure the real cost of a hard kill at 1-minute, 10-minute and 30-minute segments: footage lost, index rows written per day, and files per directory after a year. Recommend a length and defend it.
 4. Write the orphan sweep — files on disk with no index row — and decide how often it runs and what it does when it finds one. Deleting immediately is one answer and not obviously the right one.
-5. Break the fencing rule: make the AppHost resume the previous segment on restart. Then simulate the slow-process case with `SIGSTOP`, `SIGCONT` and a restarted instance writing to the same path. Describe the resulting file. This is М11's central problem, met early and cheaply.
+5. Break the fencing rule: make the worker resume the previous segment on restart. Then simulate the slow-process case with `SIGSTOP`, `SIGCONT` and a restarted instance writing to the same path. Describe the resulting file. This is М11's central problem, met early and cheaply.
 
 ## Where this is going
 

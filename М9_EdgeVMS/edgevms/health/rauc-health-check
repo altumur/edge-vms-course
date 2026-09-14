@@ -43,7 +43,7 @@ if METRICS="$(curl -fsS --max-time 5 "$NODE_METRICS" 2>/dev/null)"; then
     for v in "$reporting" "$cameras" "$silent" "$never"; do
         [ "$v" = "MISSING" ] && fail "recorder metrics answered but are missing a required series"
     done
-    [ "$reporting" = "1" ] || fail "recorder console answers but the AppHost is not reporting"
+    [ "$reporting" = "1" ] || fail "recorder console answers but the Worker is not reporting"
     if [ "$cameras" -eq 0 ]; then
         # A product decision, stated rather than hidden: a box with no cameras
         # configured cannot prove footage, so the OS update is judged on rows

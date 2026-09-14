@@ -1,8 +1,8 @@
 """Lesson 6's seven — still passing, unchanged (Lesson 8, Step 6)."""
 from __future__ import annotations
 
-from apphost.pipeline import FakeActuator
-from apphost.reconciler import CONVERGED, LAGGING, STALLED, Reconciler
+from worker.pipeline import FakeActuator
+from worker.reconciler import CONVERGED, LAGGING, STALLED, Reconciler
 from tests.conftest import FakeStore, cam
 
 

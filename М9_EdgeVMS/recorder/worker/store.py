@@ -1,4 +1,4 @@
-"""The recorder's database, through asyncpg. Every SQL statement the AppHost and
+"""The recorder's database, through asyncpg. Every SQL statement the Worker and
 the console run lives here, so the operator/controller column split
 (Lesson 5, Step 3) is enforced in exactly one file:
 
@@ -22,7 +22,7 @@ try:
 except ImportError:                      # the millisecond test suite runs without it
     asyncpg = None                       # type: ignore[assignment]
 
-log = logging.getLogger("apphost.store")
+log = logging.getLogger("worker.store")
 
 OPERATOR_COLUMNS = ("site_id", "name", "rtsp_url", "cred_username", "cred_secret",
                     "enabled", "retention_days", "priority")
@@ -31,7 +31,7 @@ DESIRED_SQL = ("SELECT id, site_id, name, rtsp_url, cred_username, cred_secret, 
 
 
 class Desired:
-    """What the Reconciler reads. The AppHost refreshes `rows` from Postgres
+    """What the Reconciler reads. The Worker refreshes `rows` from Postgres
     on every pass; the reconciler's own state stays in memory."""
 
     def __init__(self) -> None:
@@ -56,7 +56,7 @@ class PgStore:
     # -- migrations (Lesson 5, Step 8) -----------------------------------
     async def migrate(self, migrations_dir: str) -> bool:
         """Idempotent, one transaction per file, never leaves the box
-        unbootable: a failing migration is logged and the AppHost carries on
+        unbootable: a failing migration is logged and the Worker carries on
         with the schema it has. Expand-only within a release is a rule for
         the author of the .sql files, not something code can check."""
         async with self.pool.acquire() as conn:

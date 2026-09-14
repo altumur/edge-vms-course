@@ -2,7 +2,7 @@
 """
 shard-memory-probe.py — measure what sharding actually saves.
 
-The claim in apphost-and-process-model.md is that a recording pipeline costs
+The claim in worker-and-process-model.md is that a recording pipeline costs
 far less as the Nth pipeline inside a running process than as the 1st pipeline
 inside a new one, because the GStreamer plugin registry, the GLib type system
 and the thread pools are paid once per PROCESS, not once per camera.

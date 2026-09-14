@@ -305,6 +305,6 @@ group "vmsworker" {
 - [CSI volumes do not recover from client failure without human intervention](https://github.com/hashicorp/nomad/issues/12118)
 - [Nomad Variables HTTP API](https://developer.hashicorp.com/nomad/api-docs/variables/variables) — `cas` against `ModifyIndex`, 409 on conflict, the 64 KiB item limit · [Variable Locks](https://developer.hashicorp.com/nomad/api-docs/variables/locks) — an opaque lock ID rather than a fencing token
 - [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)
-- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) · [`apphost-and-process-model.md`](../М9_EdgeVMS/apphost-and-process-model.md) · [М10's design](../М10_ServerVMS/module-design.md) · [ARCHITECTURE §1.11](../ARCHITECTURE.md)
+- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) · [`worker-and-process-model.md`](../М9_EdgeVMS/worker-and-process-model.md) · [М10's design](../М10_ServerVMS/module-design.md) · [ARCHITECTURE §1.11](../ARCHITECTURE.md)
 
 *Written 5 September 2026 for the recorder model; lessons written 8 September. Rewritten 12 September 2026 to workers, resources and one controller (*2c*), after the fold of the М9's recorder design into М9 and the new М10 design. The lessons and the code still describe the recorder until they are rewritten to this record.*

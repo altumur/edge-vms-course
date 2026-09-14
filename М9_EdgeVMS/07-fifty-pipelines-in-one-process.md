@@ -141,11 +141,11 @@ gst-inspect-1.0 watchdog
 
 The default `timeout` is 1000 ms, which is too tight for cameras — a keyframe interval plus a hiccup will trip it. A few seconds is right; 8000 is a reasonable start and worth tuning against your actual hardware.
 
-Zero Python in the data path, and the failure arrives **on the bus the AppHost is already reading**. One element, and it is the model for the whole design: push the per-frame concern into C, keep Python at control rate.
+Zero Python in the data path, and the failure arrives **on the bus the worker is already reading**. One element, and it is the model for the whole design: push the per-frame concern into C, keep Python at control rate.
 
 ## Step 5 — Draining buses without a second event loop
 
-The AppHost speaks asyncio — to Postgres, to its API. GStreamer's own idiom is a `GLib.MainLoop`. Running both gives your process two schedulers and two notions of "later", and every bug after that is a scheduling bug.
+The worker speaks asyncio — to Postgres, to its API. GStreamer's own idiom is a `GLib.MainLoop`. Running both gives your process two schedulers and two notions of "later", and every bug after that is a scheduling bug.
 
 Don't. Each pipeline has its own bus, and one asyncio task drains all of them with the **non-blocking** `pop_filtered` on a short tick:
 
@@ -283,4 +283,4 @@ That is the price paid for the per-process baseline, and it is bounded rather th
 
 You can start and stop cameras from SQL, and fifty of them run in one process. Everything so far has assumed things mostly work.
 
-**Lesson 8 assumes nothing works.** Cameras go offline, streams stall with the socket open, the disk fills, and the AppHost is killed mid-segment — each induced on purpose, each handled, each asserted by a test. It is also where Lesson 5's partitioning earns its place, because retention has to run *while* the disk is full, and where the fencing rule arrives in its smallest form: on restart, never resume the previous segment.
+**Lesson 8 assumes nothing works.** Cameras go offline, streams stall with the socket open, the disk fills, and the worker is killed mid-segment — each induced on purpose, each handled, each asserted by a test. It is also where Lesson 5's partitioning earns its place, because retention has to run *while* the disk is full, and where the fencing rule arrives in its smallest form: on restart, never resume the previous segment.

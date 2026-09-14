@@ -94,7 +94,7 @@ This is deliberate and follows the course's existing discipline — `camera_sim.
 
 ## The modules
 
-### М9 — EdgeVMS, Lessons 5–9: Postgres and the AppHost · [written](./М9_EdgeVMS/README.md)
+### М9 — EdgeVMS, Lessons 5–9: Postgres and the worker · [written](./М9_EdgeVMS/README.md)
 
 *Folded into М9 on 12 September 2026: the recorder's five lessons follow the appliance's four, so one module carries the box from an A/B root to a database that owns what the box should be. The design brief is [`recorder-design.md`](./М9_EdgeVMS/recorder-design.md).*
 

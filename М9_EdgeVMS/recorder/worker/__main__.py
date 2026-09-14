@@ -1,4 +1,4 @@
 import asyncio
-from .apphost import main
+from .worker import main
 
 asyncio.run(main())

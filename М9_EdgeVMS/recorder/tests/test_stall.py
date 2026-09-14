@@ -31,8 +31,8 @@ COUNT = int(os.environ.get("NODEVMS_STALL_CAMERAS", "50"))
 
 
 async def test_one_stall_does_not_disturb_the_others():
-    from apphost.pipeline import FAILED, RUNNING, STARTING, GstActuator
-    from apphost.reconciler import Reconciler
+    from worker.pipeline import FAILED, RUNNING, STARTING, GstActuator
+    from worker.reconciler import Reconciler
     from tests.conftest import FakeStore
 
     fake = subprocess.Popen([sys.executable, os.path.join("tools", "fake_camera.py"),

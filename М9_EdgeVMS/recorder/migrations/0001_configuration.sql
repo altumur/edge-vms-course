@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS cameras (
 );
 
 -- revision is an integer, not a hash and not a timestamp. It bumps when an
--- OPERATOR-OWNED column changes. It must NOT bump when the AppHost writes
+-- OPERATOR-OWNED column changes. It must NOT bump when the Worker writes
 -- observed_revision / phase / last_seen back, or the recorder chases its own tail
 -- and never converges. So the WHEN clause names the operator-owned columns
 -- explicitly instead of comparing whole rows.
@@ -49,7 +49,7 @@ CREATE OR REPLACE TRIGGER cameras_bump BEFORE UPDATE ON cameras
     )
     EXECUTE FUNCTION bump_revision();
 
--- Lesson 6, Step 3: NOTIFY is latency, never correctness. The AppHost polls.
+-- Lesson 6, Step 3: NOTIFY is latency, never correctness. The Worker polls.
 CREATE OR REPLACE FUNCTION notify_cameras() RETURNS trigger AS $$
 BEGIN
     PERFORM pg_notify('cameras', COALESCE(NEW.id, OLD.id)::text);

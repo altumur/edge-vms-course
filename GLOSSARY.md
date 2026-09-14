@@ -40,7 +40,8 @@ Two more that are easy to blur:
 |---|---|
 | **Desired state** | What an operator asked for. Persisted. |
 | **Actual state** | What is running right now. Observed, never persisted — anything a system remembers about actual state across a restart is a bug. |
-| **Reconciliation** | The loop that closes the gap between the two. A Nomad jobspec plus its scheduler is one; М9's AppHost is another. |
+| **Reconciliation** | The loop that closes the gap between the two. A Nomad jobspec plus its scheduler is one; М9's worker is another. |
+| ~~**worker**~~ | *Retired (14 September 2026).* М9's name for its worker process — the `Worker` class in `recorder/worker/`: one process, the reconcile loop and up to fifty pipelines. Renamed so that М9's word and М10's (`vmsworker`) are the same word for the same thing. |
 | **Revision** | A monotonic, controller-assigned integer per object. *Applied* means `observed_revision >= revision`. |
 | **Epoch** | A fencing token: increments on every ownership change, never decreases, issued by exactly one authority. Part of the archive path, so a stale writer cannot name the files it would otherwise corrupt. |
 | **Fencing** | Making a stale writer's writes harmless rather than trying to stop them. You cannot stop a zombie from writing. |

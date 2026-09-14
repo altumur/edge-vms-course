@@ -4,17 +4,17 @@ Course material for building a video management system, shipping it as an applia
 
 ---
 
-## Edge → recorder → Cluster → Domain — and then the vendor
+## Edge → Server → Cluster → Domain — and then the vendor
 
 The module names are not decoration. They mark one idea getting harder three times, and the course is arranged around it: **where the truth about the system lives, and how many things are able to disagree about it.**
 
-|                        | The box knows                   | Truth lives                             | What can disagree                               | The new hard problem                                                               |
-| ---------------------- | ------------------------------- | --------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| **М9 · EdgeVMS**       | what it *is*                    | in the image that booted                | nothing — a box is whatever was flashed onto it | replacing the OS underneath a running product without destroying the recordings    |
-| **М9 · Recorder** | what it *should be* | in a database on the box | desired state and actual state, inside one process | closing the gap — and never persisting the half that must be re-derived |
-| **М11 · ClusterVMS** | what it should be, *in the cluster's raft, written by one controller* | in each worker's heartbeat, from whichever server it runs on | **two instances of the same worker** | surviving a server's death without two writers reaching one archive |
-| **М12 · DomainVMS** | what it should be, *and which cluster holds it* | in each cluster's raft, with a directory across clusters | clusters, with the directory | a layer that must stay useful while it is allowed to be down — and honest when a whole cluster is unreachable |
-| **М14 · VendorVMS** | *— not a scope of the product —* | nowhere the product depends on | the customer, with the vendor | **working with the vendor unreachable, or gone** |
+|                      | The box knows                                                         | Truth lives                                                  | What can disagree                                  | The new hard problem                                                                                          |
+| -------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **М9 · EdgeVMS**     | what it *is*                                                          | in the image that booted                                     | nothing — a box is whatever was flashed onto it    | replacing the OS underneath a running product without destroying the recordings                               |
+| **М10 · ServerVMS**  | what it *should be*                                                   | in a database on the box                                     | desired state and actual state, inside one process | closing the gap — and never persisting the half that must be re-derived                                       |
+| **М11 · ClusterVMS** | what it should be, *in the cluster's raft, written by one controller* | in each worker's heartbeat, from whichever server it runs on | **two instances of the same worker**               | surviving a server's death without two writers reaching one archive                                           |
+| **М12 · DomainVMS**  | what it should be, *and which cluster holds it*                       | in each cluster's raft, with a directory across clusters     | clusters, with the directory                       | a layer that must stay useful while it is allowed to be down — and honest when a whole cluster is unreachable |
+| **М14 · VendorVMS**  | *— not a scope of the product —*                                      | nowhere the product depends on                               | the customer, with the vendor                      | **working with the vendor unreachable, or gone**                                                              |
 
 **Every boundary in that table is a network you stopped trusting — except one, and it is set by administration instead.**
 
@@ -28,11 +28,11 @@ That rule was chosen for archive locality, and it turns out to put the fencing e
 
 ### Three words the course keeps apart
 
-| | What it is | Who decides |
-|---|---|---|
-| ~~**Node**~~ | *retired (12 September 2026).* М9's recorder — a process with its own database and disk, distinct from the box. Under М10's shape nothing on a server needs a fifth word: the platform's stores, a **resource** on its disks, and the **workers** the scheduler placed there. М9 Lessons 5–9 keep the word as history | — |
-| **Server** | a box with CPUs and disks: a replica of the cluster's stores, a **resource** (the platform's job on its disks), and whichever **workers** the scheduler places there | the scheduler, continuously |
-| **Site** | where cameras physically are. The only one of the three an operator names | the customer's building |
+|              | What it is                                                                                                                                                                                                                                                                                                            | Who decides                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| ~~**Node**~~ | *retired (12 September 2026).* М9's recorder — a process with its own database and disk, distinct from the box. Under М10's shape nothing on a server needs a fifth word: the platform's stores, a **resource** on its disks, and the **workers** the scheduler placed there. М9 Lessons 5–9 keep the word as history | —                           |
+| **Server**   | a box with CPUs and disks: a replica of the cluster's stores, a **resource** (the platform's job on its disks), and whichever **workers** the scheduler places there                                                                                                                                                  | the scheduler, continuously |
+| **Site**     | where cameras physically are. The only one of the three an operator names                                                                                                                                                                                                                                             | the customer's building     |
 
 **A recorder is not a server**, and М9 builds exactly one without ever needing the distinction. It matters from М11 onward, where a server dying moves a *worker* — whose cameras are assigned to its name in the cluster's raft — rather than reassigning cameras, which is why failover rewrites nothing; what stays on the server is a *resource*.
 
@@ -63,7 +63,7 @@ A shipped edge VMS is seven layers deep. One module per layer, each ending with 
 | Module | Layer it builds | State |
 |---|---|---|
 | [**М8** — Cloud VMS](./М8_KVS_VMS) | The product itself, against a cloud archive | **Complete** · 8 lessons |
-| [**М9** — EdgeVMS](./М9_EdgeVMS) | 1 · RAUC — OS, atomic, rollback<br>3 · Postgres — the recorder's own state<br>4 · AppHost — the loop that acts on it | **Written** · 9 lessons |
+| [**М9** — EdgeVMS](./М9_EdgeVMS) | 1 · RAUC — OS, atomic, rollback<br>3 · Postgres — the recorder's own state<br>4 · The worker — the loop that acts on it | **Written** · 9 lessons |
 | [**М10** — ServerVMS](./М10_ServerVMS) | The platform's shape on one server: `driverpacksrc`, `archivesink`, a controller and a worker — the subsystem contract, prototyped without a scheduler | **Written** · 5 lessons |
 | [**М11** — ClusterVMS](./М11_ClusterVMS) | 2 · Nomad + Podman — workers that outlive their server, resources that stay, one controller<br>4 · The cluster's own directory | **Written** · 5 lessons · rewritten to *2c* with `clustervms/` on М10's `vmsserver/`, 29 tests |
 | [**М12** — DomainVMS](./М12_DomainVMS) | 4 · Several clusters, one directory of directories<br>5 · The domain as its own root: enrollment, lifetimes, identity<br>7 · Its own update server, and clusters it rents for itself | **Written** · 8 lessons |
@@ -92,7 +92,7 @@ Fifteen lessons take a student who knows Python but has never built a web applic
 
 ## М9 — EdgeVMS
 
-Nine lessons in two halves. **Lessons 1–4** turn that cloud VMS into an appliance: A/B partitions, signed update bundles, rollback proven by shipping a deliberately broken update, and then Podman and Quadlet. **Lessons 5–9** make the box own its truth: `INSERT INTO cameras` causes a camera to start recording, `DELETE` stops it, and killing the AppHost loses nothing but the open segment.
+Nine lessons in two halves. **Lessons 1–4** turn that cloud VMS into an appliance: A/B partitions, signed update bundles, rollback proven by shipping a deliberately broken update, and then Podman and Quadlet. **Lessons 5–9** make the box own its truth: `INSERT INTO cameras` causes a camera to start recording, `DELETE` stops it, and killing the worker loses nothing but the open segment.
 
 Its spine is that a real edge product has **two independent update planes** — the operating system underneath, the workload on top — and both are visible on one box. М9 Lesson 4 is where it bites: Podman's storage must be redirected to the data partition, because images and volumes left in a rootfs slot are destroyed by the next OS update. Conflate the planes and you build systems where a config change requires an OS flash.
 
@@ -104,11 +104,11 @@ The same lesson has the module's other sharp edge. **Pull the network cable for 
 - [Module design](./М9_EdgeVMS/module-design.md) — lesson plan, partition layout, verification strategy, ARM porting appendix
 - [RAUC alternatives](./М9_EdgeVMS/rauc-alternatives.md) — SWUpdate, Mender, bootc, systemd-sysupdate, and where each wins
 - [`edgevms/`](./М9_EdgeVMS/edgevms/README.md) — the module's artifacts, whole: the bench, the PKI, RAUC config and bundle builder, the GRUB state machine, the health check (now reading the recorder's own signal), Quadlet units, the spool
-- [One container per camera?](./М9_EdgeVMS/apphost-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle
+- [One container per camera?](./М9_EdgeVMS/worker-and-process-model.md) — the process model at 1000 cameras, and why the orchestrator must not own camera lifecycle
 
 Both reach the same shape of conclusion, as does the orchestrator record now filed with М11: the tool that teaches best is not always the tool that ships best, and the documents say which is which.
 
-**The recorder half (Lessons 5–9).** Five lessons in which one box starts owning its own truth. `INSERT INTO cameras` causes a camera to start recording; `DELETE` stops it; killing the AppHost loses nothing but the open segment. Between the row and the pipeline there is only a loop the student wrote.
+**The recorder half (Lessons 5–9).** Five lessons in which one box starts owning its own truth. `INSERT INTO cameras` causes a camera to start recording; `DELETE` stops it; killing the worker loses nothing but the open segment. Between the row and the pipeline there is only a loop the student wrote.
 
 Its organising rule is that **desired state is persisted and actual state is derived** — persist the second and you have built a cache that lies. It is also where the process model from М9's decision record gets built: fifty GStreamer pipelines in one Python process, with the GIL boundary demonstrated rather than asserted.
 

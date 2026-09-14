@@ -50,7 +50,7 @@ uplink down, and decides:
 
 | recorder says | Verdict |
 |---|---|
-| AppHost not reporting | fail — the console is up and nobody is home |
+| Worker not reporting | fail — the console is up and nobody is home |
 | cameras configured, none has ever written a segment | fail — boots perfectly, records nothing (Lesson 3, failure two) |
 | newest segment older than `2 × SEGMENT_SECONDS + 60` | fail |
 | no cameras configured | pass, and says so — a stated product decision, not a hidden one |
@@ -100,7 +100,7 @@ slot.
 
 ## What was verified where
 
-- **Run, output real:** `pki/make-ca.sh` and `pki/verify-chain.sh` against OpenSSL 3.0.13 (the three refusals come out exactly as Lesson 2 prints them; note `openssl cms -verify` exits 4 on a refusal, which is why the script judges by message). `spool/test_spool.py`, six tests. `health/rauc-health-check` against a fake recorder serving seven `/metrics` scenarios — healthy, silent 45 min, never recorded, AppHost not reporting, no cameras, no recorder and no agent, agent-plus-spool — each giving the verdict in the table above.
+- **Run, output real:** `pki/make-ca.sh` and `pki/verify-chain.sh` against OpenSSL 3.0.13 (the three refusals come out exactly as Lesson 2 prints them; note `openssl cms -verify` exits 4 on a refusal, which is why the script judges by message). `spool/test_spool.py`, six tests. `health/rauc-health-check` against a fake recorder serving seven `/metrics` scenarios — healthy, silent 45 min, never recorded, Worker not reporting, no cameras, no recorder and no agent, agent-plus-spool — each giving the verdict in the table above.
 - **Written to the documentation, not executed here:** `bench/build-disk.sh` (needs KVM/nbd/debootstrap and root), `rauc/build-bundle.sh` (needs `rauc`), `boot/grub.cfg` (RAUC's reference logic, copied from Lesson 3), the Quadlet units (need Podman's generator — `quadlet/check-quadlet.sh` is the check). They pass `bash -n`; the first run belongs on your bench.
 
 ## Known gaps, named

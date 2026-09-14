@@ -5,7 +5,7 @@
     python3 -m tools.provision operator admin           # prompts for a password
     python3 -m tools.provision camera --name lobby --url rtsp://10.0.0.41/stream1 \
             --site hq --user admin                       # prompts for the camera password
-    python3 -m tools.provision migrate                  # apply migrations without starting the AppHost
+    python3 -m tools.provision migrate                  # apply migrations without starting the Worker
 
 Everything here is superseded in М11/М12 (key delivery, the operator account);
 none of it is the product's design, all of it is what a first recorder needs.
@@ -20,10 +20,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from apphost.apphost import MIGRATIONS          # noqa: E402
-from apphost.config import Settings             # noqa: E402
-from apphost.secrets import ColumnKey           # noqa: E402
-from apphost.store import PgStore               # noqa: E402
+from worker.worker import MIGRATIONS          # noqa: E402
+from worker.config import Settings             # noqa: E402
+from worker.secrets import ColumnKey           # noqa: E402
+from worker.store import PgStore               # noqa: E402
 
 
 async def _store(s: Settings) -> PgStore:

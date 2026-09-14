@@ -105,7 +105,7 @@ The middle tier is **demand-driven, not camera-driven** — sized by concurrent 
 
 ---
 
-## 5. The AppHost: two supervisors, not one
+## 5. The worker: two supervisors, not one
 
 The instinct to put a supervisor in front of the camera processes is right. The trap is building *one* of them.
 
