@@ -1,5 +1,4 @@
-"""The platform, on one box. It is not the VMS: the name says so — PSIM, the product's whole family, of which
-video is one subsystem (and Python owns the bare name `platform`). Everything here would host any fleet of
+"""The platform, on one box (the package is `psimplatform` only because Python owns the name `platform`). Everything here would host any fleet of
 stateless shards writing bulk data; nothing here knows what a camera is.
 
     variables.py   a small, consistent config store with ModifyIndex and check-and-set (file-backed)

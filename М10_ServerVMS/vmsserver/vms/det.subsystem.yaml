@@ -1,0 +1,27 @@
+# Detectors, as the platform sees them: the FOURTH subsystem. Its unit is one
+# model on one camera — "line-crossing on camera 7" — named by the operator
+# from the camera's page (`7-linecross`); its workers are detector workers
+# (vms/detector.py) on GPU-labelled servers, capacity in STREAMS a GPU can
+# decode and infer on; its events are buckets under det/<unit>/e<epoch>/ on
+# the resource, on the camera's timeline like any other subsystem's. Same
+# controller class, same console class, same ACL shape as the VMS.
+name: det
+unit:
+  rows: units                        # det/units/<name>
+  id: name                           # "<cam>-<kind>", the operator's name for the pair
+  fields:
+    name:      {type: string, required: true}
+    cam:       {type: string, required: true}      # the VMS camera id whose stream the model runs on
+    kind:      {type: string, required: true}      # which model: motion | linecross | lpr | …
+    params:    {type: string}                      # the model's settings, opaque to the platform
+    enabled:   {type: bool,   default: true}
+    labels:    {type: list,   default: ["gpu"]}    # where it may run: a worker whose server has these labels
+placement:
+  capacity:   {from: capacity, fallback: 8}        # streams per worker — its own number, from its heartbeat
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+snapshot: [name, cam, kind, enabled]
+console:
+  running: units_running               # det_units_running

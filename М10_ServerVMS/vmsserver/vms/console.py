@@ -52,7 +52,7 @@ import json
 import urllib.error
 import urllib.request
 
-from psimplatform.console import PAGE, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
 from psimplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest
@@ -140,7 +140,7 @@ class LiveFront:
         except OSError:
             return 503, {"error": f"gateway {g} is not answering"}
 
-    # `GET /live/<cam>`: the stream row, which gateway, and that gateway's status line for it — what the page shows.
+    # `GET /whep/<cam>`: the stream row, which gateway, and that gateway's status line for it — what the page shows.
     def status(self, cam: str) -> dict:
         g, url = self.where(cam)
         hb = self.gateways().get(g) if g else None
@@ -159,9 +159,9 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
                 return live.offer(path[len("/whep/"):], sdp, [l for l in q.get("labels", "").split(",") if l])
             if method == "DELETE" and path.startswith("/whep/session/"):
                 return live.hangup(path[len("/whep/session/"):], q.get("gateway", ""))
+            if method == "GET" and not path.startswith("/whep/session/"):
+                return 200, live.status(path[len("/whep/"):])           # GET /whep/<cam>: the stream, its gateway, that gateway's word
             return None
-        if live is not None and method == "GET" and path.startswith("/live/"):
-            return 200, live.status(path[len("/live/"):])
         if method != "GET" or archive is None:
             return None
         if path.startswith("/segment/"):
@@ -181,13 +181,24 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
 # media=archive is not None)`. With an archive: operator marks (`POST /marks`) go into the console's own
 # event log under `console/<hostname:pid>/e1/` on this server's resource, and `/spec` reports `media: true`
 # so the page draws a timeline and a player. Without one: no marks (503) and no media.
-def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None, live_ctl: SpecController | None = None) -> SpecConsole:
-    live = LiveFront(ctl, live_ctl) if live_ctl is not None else None      # with a live controller's token: the WHEP door opens
-    return SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None)
+def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None, live_ctl: SpecController | None = None,
+                 mounts: dict[str, SpecController] | None = None) -> Mount:
+    """One console process for the box: the VMS at `/` (the page, /cameras, the media routes, the WHEP door),
+    and every other subsystem the console fronts under its name — `/live/…`, `/det/…` — each a SpecConsole over
+    that subsystem's spec with the console's token. `live_ctl` opens the WHEP door and is mounted at /live;
+    `mounts` adds the rest by name."""
+    live = LiveFront(ctl, live_ctl) if live_ctl is not None else None
+    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None)
+    m = Mount(root)
+    if live_ctl is not None:
+        m.mount("live", SpecConsole(live_ctl, wall=wall))
+    for name, c in (mounts or {}).items():
+        m.mount(name, SpecConsole(c, wall=wall))
+    return m
 
 
 # `make_console(...).serve(host, port)`: the server in a daemon thread, returned so the caller can
 # `shutdown()` it. `__main__.console` calls it with `$CONSOLE_HOST:$CONSOLE_PORT`; the tests with `port=0`.
 def serve(ctl: VmsController, archive: ArchiveResource | None, host: str = "127.0.0.1", port: int = 8080, wall=None,
-          live_ctl: SpecController | None = None) -> ThreadingHTTPServer:
-    return make_console(ctl, archive, wall, live_ctl).serve(host, port)
+          live_ctl: SpecController | None = None, mounts: dict[str, SpecController] | None = None) -> ThreadingHTTPServer:
+    return make_console(ctl, archive, wall, live_ctl, mounts).serve(host, port)

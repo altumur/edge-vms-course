@@ -359,119 +359,166 @@ class SpecConsole:
     #         - `DELETE /<rows>/<id>` — `delete(uid)`; no idempotency key (a second delete is 404, "gone is
     #       gone"). Any other path is 404.
     def handler(self):
+        """The request handler class for this console alone — a Mount with no other subsystems."""
+        return Mount(self).handler()
+
+    # -- one request, already stripped of any mount prefix: the routes above -----------------------------
+    def _uid(self, path):
+        return self.spec.parse_id(path.rsplit("/", 1)[1])
+
+    def _extra(self, h, method, path, q):
+        r = self.extra(h, method, path, q) if self.extra else None
+        if r is None:
+            return False
+        if r == ():                                                  # the extra wrote the reply itself (send_file)
+            return True
+        if len(r) == 2 and isinstance(r[1], (dict, list)):
+            h._send(*r)
+        elif len(r) == 2:
+            h.send_response(r[0]); h.send_header("Content-Length", str(len(r[1]))); h.end_headers(); h.wfile.write(r[1])
+        else:
+            status, data, headers = r
+            h.send_response(status); h.send_header("Content-Length", str(len(data)))
+            for k, v in headers: h.send_header(k, v)
+            h.end_headers(); h.wfile.write(data)
+        return True
+
+    def _idem(self, h):
+        key = h.headers.get("Idempotency-Key")
+        if not key:
+            h._send(400, {"detail": "Idempotency-Key header is required", "error": "Idempotency-Key required"}); return None
+        try:
+            prior = self.seen.claim(key)
+        except Refused as e:
+            h._send(400, {"detail": str(e), "error": str(e)}); return None
+        if prior is not None:
+            h._send(*prior); return None
+        return key
+
+    def dispatch(self, h, method: str, path: str, q: dict) -> None:
+        """Answer one request for this subsystem. `path` is the route (`/<rows>`, `/where/7`), the mount
+        prefix already removed; `h` is the handler (its `_send`, `_body`, `headers`, `rfile`)."""
         con, ctl, spec = self, self.ctl, self.spec
         rows_path = "/" + spec.rows
+        if method == "GET":
+            if path in ("/", "/index.html"):
+                return send_file(h, PAGE, "text/html; charset=utf-8")
+            if path == "/spec":
+                return h._send(200, con.describe())
+            if path == rows_path:
+                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": ctl.units()})
+            if path.startswith("/where/"):
+                uid = self._uid(path); pl = ctl.placement(uid)
+                return h._send(200 if pl else 404, {"worker": pl.worker if pl else None, "reason": pl.reason if pl else None,
+                                                    "directory": con.where(uid), "scans": con.scans})
+            if path == "/resources":
+                now = con.wall()
+                return h._send(200, {s: {**hb, "state": "live" if now - float(hb["ts"]) <= con.lost_after else "silent"}
+                                     for s, hb in resources_seen(ctl.objects).items()})
+            if path == "/unplaceable":
+                return h._send(200, ctl.unplaceable())
+            if path == "/events":
+                if con.index is None:
+                    return h._send(503, {"error": "no eventindex behind this console"})
+                cur = {(spec.name, p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list(spec.name + "/epoch/")}
+                cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
+                return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
+                                                    int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
+                                                    q.get("unit") if not cam else None, cur))
+            if path == "/metrics":
+                return h._send(200, con.metrics_text(), raw=True)
+            if self._extra(h, "GET", path, q):
+                return
+            return h._send(404, {"detail": "no such route", "error": "no such path"})
+        if method == "POST":
+            if path not in (rows_path, "/marks"):
+                if self._extra(h, "POST", path, q):
+                    return
+                return h._send(404, {"detail": "no such route", "error": "no such path"})
+            key = self._idem(h)
+            if key is None:
+                return
+            if path == "/marks":
+                resp = con.mark(h._body(), h.headers.get("X-User", "operator"))
+            else:
+                resp = con.create(h._body())
+            con.seen.store(key, resp); return h._send(*resp)
+        if method == "PUT":
+            if not path.startswith(rows_path + "/"):
+                if self._extra(h, "PUT", path, q):
+                    return
+                return h._send(404, {"detail": "no such route", "error": "no such path"})
+            key = h.headers.get("Idempotency-Key")
+            if key:
+                try:
+                    prior = con.seen.claim(key)
+                except Refused as e:
+                    return h._send(400, {"detail": str(e), "error": str(e)})
+                if prior is not None:
+                    return h._send(*prior)
+            resp = con.update(self._uid(path), h._body())
+            if key:
+                con.seen.store(key, resp)
+            return h._send(*resp)
+        if method == "DELETE":
+            if not path.startswith(rows_path + "/"):
+                if self._extra(h, "DELETE", path, q):
+                    return
+                return h._send(404, {"detail": "no such route", "error": "no such path"})
+            return h._send(*con.delete(self._uid(path)))
+        h._send(405, {"detail": "method", "error": "method"})
+
+    # Starts the server in a daemon thread and returns it (tests use `port=0` and read `server_address`).
+    def serve(self, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
+        srv = ThreadingHTTPServer((host, port), self.handler())
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+
+class Mount:
+    """One console process, several subsystems. The root console answers at `/`
+    (the page, `/<rows>`, its extras); every other subsystem is a path: `/live/spec`,
+    `/det/units`, `/det/where/7-motion` — the same SpecConsole class, its routes
+    under its name, its own token-scoped controller. A person opens one page;
+    the machines (the autoscaler, М12's read model) find every subsystem on one
+    port; a new subsystem is a YAML, a worker, and a path."""
+
+    def __init__(self, root: SpecConsole, mounts: dict[str, SpecConsole] | None = None):
+        self.root, self.mounts = root, dict(mounts or {})
+
+    def mount(self, name: str, console: SpecConsole) -> "Mount":
+        self.mounts[name] = console
+        return self
+
+    def resolve(self, path: str) -> tuple[SpecConsole, str]:
+        head = path.split("/", 2)
+        if len(head) >= 2 and head[1] in self.mounts:
+            return self.mounts[head[1]], "/" + (head[2] if len(head) > 2 else "")
+        return self.root, path
+
+    def describe(self) -> dict:
+        return {"root": self.root.spec.name, "mounts": {n: c.describe() for n, c in self.mounts.items()}}
+
+    def handler(self):
+        mnt = self
 
         class H(SendMixin, BaseHTTPRequestHandler):
             def log_message(self, *a): pass
 
-            def _uid(self):
-                return spec.parse_id(self.path.split("?")[0].rsplit("/", 1)[1])
-
-            def _extra(self, method, path, q):
-                r = con.extra(self, method, path, q) if con.extra else None
-                if r is None:
-                    return False
-                if r == ():                                              # the extra wrote the reply itself (send_file)
-                    return True
-                if len(r) == 2 and isinstance(r[1], (dict, list)):
-                    self._send(*r)
-                elif len(r) == 2:
-                    self.send_response(r[0]); self.send_header("Content-Length", str(len(r[1]))); self.end_headers(); self.wfile.write(r[1])
-                else:
-                    status, data, headers = r
-                    self.send_response(status); self.send_header("Content-Length", str(len(data)))
-                    for k, v in headers: self.send_header(k, v)
-                    self.end_headers(); self.wfile.write(data)
-                return True
-
-            def do_GET(self):
+            def _route(self, method):
                 u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
-                if u.path in ("/", "/index.html"):
-                    return send_file(self, PAGE, "text/html; charset=utf-8")
-                if u.path == "/spec":
-                    return self._send(200, con.describe())
-                if u.path == rows_path:
-                    return self._send(200, {"rows": ctl.read_model(con.lost_after), "configured": ctl.units()})
-                if u.path.startswith("/where/"):
-                    uid = self._uid(); pl = ctl.placement(uid)
-                    return self._send(200 if pl else 404, {"worker": pl.worker if pl else None, "reason": pl.reason if pl else None,
-                                                           "directory": con.where(uid), "scans": con.scans})
-                if u.path == "/resources":
-                    now = con.wall()
-                    return self._send(200, {s: {**hb, "state": "live" if now - float(hb["ts"]) <= con.lost_after else "silent"}
-                                            for s, hb in resources_seen(ctl.objects).items()})
-                if u.path == "/unplaceable":
-                    return self._send(200, ctl.unplaceable())
-                if u.path == "/events":
-                    if con.index is None:
-                        return self._send(503, {"error": "no eventindex behind this console"})
-                    cur = {(spec.name, p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list(spec.name + "/epoch/")}
-                    cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
-                    return self._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
-                                                           int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
-                                                           q.get("unit") if not cam else None, cur))
-                if u.path == "/metrics":
-                    return self._send(200, con.metrics_text(), raw=True)
-                if self._extra("GET", u.path, q):
-                    return
-                self._send(404, {"detail": "no such route", "error": "no such path"})
+                if u.path == "/mounts":
+                    return self._send(200, mnt.describe())
+                con, path = mnt.resolve(u.path)
+                con.dispatch(self, method, path, q)
 
-            def _idem(self):
-                key = self.headers.get("Idempotency-Key")
-                if not key:
-                    self._send(400, {"detail": "Idempotency-Key header is required", "error": "Idempotency-Key required"}); return None
-                try:
-                    prior = con.seen.claim(key)
-                except Refused as e:
-                    self._send(400, {"detail": str(e), "error": str(e)}); return None
-                if prior is not None:
-                    self._send(*prior); return None
-                return key
-
-            def do_POST(self):
-                u = urlsplit(self.path)
-                if u.path not in (rows_path, "/marks"):
-                    if self._extra("POST", u.path, {k: v[0] for k, v in parse_qs(u.query).items()}):
-                        return
-                    return self._send(404, {"detail": "no such route", "error": "no such path"})
-                key = self._idem()
-                if key is None:
-                    return
-                if u.path == "/marks":
-                    resp = con.mark(self._body(), self.headers.get("X-User", "operator"))
-                else:
-                    resp = con.create(self._body())
-                con.seen.store(key, resp); self._send(*resp)
-
-            def do_PUT(self):
-                u = urlsplit(self.path)
-                if not u.path.startswith(rows_path + "/"):
-                    return self._send(404, {"detail": "no such route", "error": "no such path"})
-                key = self.headers.get("Idempotency-Key")
-                if key:
-                    try:
-                        prior = con.seen.claim(key)
-                    except Refused as e:
-                        return self._send(400, {"detail": str(e), "error": str(e)})
-                    if prior is not None:
-                        return self._send(*prior)
-                resp = con.update(self._uid(), self._body())
-                if key:
-                    con.seen.store(key, resp)
-                self._send(*resp)
-
-            def do_DELETE(self):
-                u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
-                if not u.path.startswith(rows_path + "/"):
-                    if self._extra("DELETE", u.path, q):
-                        return
-                    return self._send(404, {"detail": "no such route", "error": "no such path"})
-                self._send(*con.delete(self._uid()))
+            def do_GET(self): self._route("GET")
+            def do_POST(self): self._route("POST")
+            def do_PUT(self): self._route("PUT")
+            def do_DELETE(self): self._route("DELETE")
 
         return H
 
-    # Starts the server in a daemon thread and returns it (tests use `port=0` and read `server_address`).
     def serve(self, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
         srv = ThreadingHTTPServer((host, port), self.handler())
         threading.Thread(target=srv.serve_forever, daemon=True).start()

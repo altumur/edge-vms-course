@@ -76,7 +76,7 @@ def test_the_first_viewer_creates_the_stream_and_the_controller_places_it():
         code, answer, loc = _whep(base, 1)
         assert code == 201 and "m=video" in answer and "a=sendonly" in answer and loc.startswith("/whep/session/") and loc.endswith("?gateway=g-1")
         g.heartbeat_once()                                                               # what the page reads: the gateway's word, from its heartbeat
-        st = json.loads(urllib.request.urlopen(f"{base}/live/1").read())
+        st = json.loads(urllib.request.urlopen(f"{base}/whep/1").read())
         assert st["gateway"] == "g-1" and st["status"]["phase"] == "live" and st["status"]["sessions"] == 1
         # unknown camera: 404, no unit created
         assert _whep(base, 9)[0] == 404 and live_ctl.unit("9") is None

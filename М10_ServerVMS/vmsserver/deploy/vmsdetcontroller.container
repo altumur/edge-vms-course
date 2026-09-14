@@ -1,0 +1,22 @@
+# /etc/containers/systemd/vmsdetcontroller.container — the det subsystem's
+# controller: the platform's SpecController run from det.subsystem.yaml, one
+# per box (one per cluster in М11), no code of its own. Places models on the
+# GPU-labelled detector worker with the most stream headroom; takes them back when the console deletes
+# them. No port; its token writes det/workers/*, det/placement/*, det/slots/*.
+[Unit]
+Description=VMS det controller — the only writer of det placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms detcontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

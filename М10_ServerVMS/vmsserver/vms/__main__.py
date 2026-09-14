@@ -1,4 +1,4 @@
-"""python3 -m vms worker|controller|console|retain|gateway|livecontroller — the box's processes.
+"""python3 -m vms worker|controller|console|retain|gateway|livecontroller|detworker|detcontroller — the box's processes.
 
     PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
     SPOOL=/data/spool  ARCHIVE=/data/archive  MEDIA_DIR=/data/media
@@ -8,6 +8,7 @@
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
     GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the third subsystem's worker): WHEP on this port; the URL the console proxies to
     GATEWAY_NAME=g-1                 its slot (systemd: %i); CAPACITY here is viewers
+    DET_NAME=d-1                     a detector worker's slot; CAPACITY here is streams; NOMAD_META_labels=gpu says where it is
 """
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
@@ -158,6 +159,26 @@ def livecontroller() -> None:
     _controller_loop(SpecController(LIVE_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
 
 
+def detcontroller() -> None:
+    """The fourth subsystem's controller: the platform's class from det.subsystem.yaml, placing models on
+    GPU-labelled detector workers by stream headroom. No code of its own."""
+    from psimplatform.spec import SpecController
+    from .config import DET_SPEC
+    vars_ = FileVariables(os.path.join(root, "config"), writer="detcontroller", acl={"detcontroller": DET_SPEC.acl_controller()})
+    _controller_loop(SpecController(DET_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
+
+
+def detworker() -> None:
+    """A detector worker: a worker of the `det` subsystem. Its token writes its slot, its epochs and its
+    heartbeat; its events go into det/<unit>/e<epoch>/ on this server's resource."""
+    from .detector import DetWorker
+    vars_ = FileVariables(os.path.join(root, "config"), writer="detworker", acl={"detworker": ["det/epoch/*", "det/slots/*"]})
+    d = DetWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")), capacity=int(os.environ.get("CAPACITY", "8")),
+                  archive_root=os.environ.get("ARCHIVE", "/data/archive"))
+    logging.info("detector %s (instance %s) claimed its slot; models: %s", d.name, d.instance, ",".join(d.models))
+    d.run(stop=stop)
+
+
 def gateway() -> None:
     """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
@@ -196,14 +217,14 @@ def console() -> None:
     from .config import SPEC
     from .console import serve
     from psimplatform.spec import SpecController
-    from .config import LIVE_SPEC
+    from .config import DET_SPEC, LIVE_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
-                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console()})   # the operator's rows of BOTH subsystems it fronts
+                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
-                live_ctl=SpecController(LIVE_SPEC, vars_, objects))
+                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)})
     logging.info("console on %s", srv.server_address)
     stop.wait()
     srv.shutdown()
@@ -251,4 +272,4 @@ def retain() -> None:
 
 if __name__ == "__main__":
     {"worker": worker, "controller": controller, "console": console, "retain": retain,
-     "gateway": gateway, "livecontroller": livecontroller}[sys.argv[1]]()
+     "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller}[sys.argv[1]]()

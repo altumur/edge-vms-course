@@ -1,0 +1,29 @@
+# /etc/containers/systemd/vmsdetworker@.container — a detector worker: the
+# fourth subsystem's worker. `systemctl start vmsdetworker@d-1` — the instance
+# name is the slot. Its unit is one model on one camera; its capacity is streams
+# a GPU can decode and infer on; it runs where its labels say (NOMAD_META_labels
+# or DET_LABELS=gpu in vms.env). Its events go into det/<unit>/e<epoch>/ on this
+# server's resource, under the epoch it holds. Its token writes its slot, its
+# epochs and its heartbeat — never a row. In М11 a service job placed by
+# constraint on GPU servers, scaled on det_worker_headroom.
+[Unit]
+Description=VMS detector worker %i — models on GPU-labelled servers, events into the resource
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms detworker
+Environment=DET_NAME=%i
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Volume=/data/archive:/data/archive:z
+AddDevice=/dev/dri
+Network=host
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

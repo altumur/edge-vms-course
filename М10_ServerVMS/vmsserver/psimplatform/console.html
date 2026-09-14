@@ -143,6 +143,18 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
     <video id="player" controls></video>
     <div id="playing"><small></small></div>
   </div>
+  <div id="dets" style="display:none">
+    <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Detectors</strong><small>models on this unit — the det subsystem, when the console mounts it: placed on GPU-labelled workers, its events on the timeline</small></div>
+    <ul id="detlist"></ul>
+    <form id="detadd" style="margin-top:6px;padding-top:0;border-top:0">
+      <div class="row">
+        <label>kind <input type="text" name="kind" placeholder="motion | linecross | lpr" required style="width:12em"></label>
+        <label>params <input type="text" name="params" placeholder="line=10,20;30,40"></label>
+        <button type="submit">Add detector</button>
+        <div class="err" id="deterr"></div>
+      </div>
+    </form>
+  </div>
   <form id="edit">
     <div class="row"><strong>Edit</strong><small>every save is a new revision; the worker restarts what it runs for this unit</small></div>
     <div class="row" id="editfields"></div>
@@ -233,6 +245,7 @@ async function select(id) {
                             c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
   for (const li of $('#units').children) li.classList.toggle('on', li.dataset.id === String(id));
   fillEdit(c);
+  loadDets();
   if (spec.media) await loadTimeline();
 }
 
@@ -392,8 +405,38 @@ function stopLive() {
   const v = $('#player'); v.srcObject = null;
 }
 $('#live').onclick = () => { if (current) startLive(); };
+
+// -- detectors: the `det` subsystem, mounted by the console at /det. A det unit is one model on this unit,
+// named `<cam>-<kind>` here, created with the console's token; placement is the det controller's pass,
+// and the row's phase (running / waiting / pending / unsupported) is the worker's word from its heartbeat.
+let dets = null;                                                      // the /det/spec reply, or null when the console mounts no det
+async function loadDets() {
+  if (dets === null) { try { const r = await fetch('/det/spec'); dets = r.ok ? await r.json() : false; } catch (_) { dets = false; } }
+  $('#dets').style.display = dets && current != null ? 'block' : 'none';
+  if (!dets || current == null) return;
+  const d = await (await fetch('/det/units')).json();
+  const byId = {};
+  for (const u of d.configured || []) if (String(u.cam) === String(current)) byId[u.id] = { ...u, phase: 'silent' };
+  for (const r of d.rows || []) if (String(r.cam) === String(current)) byId[r.id] = { ...byId[r.id], ...r };
+  const ul = $('#detlist'); ul.innerHTML = '';
+  for (const u of Object.values(byId)) {
+    const li = document.createElement('li'); li.className = u.phase === 'running' ? 'running' : (u.phase === 'unsupported' ? 'failed' : '');
+    li.innerHTML = `<span><span class="dot"></span>${u.kind} <small>${u.id}${u.params ? ' · ' + u.params : ''}</small></span>` +
+                   `<small>${u.phase}${u.why ? ' · ' + u.why : ''}${u.worker ? ' · ' + u.worker : ' · unplaced'}${u.events != null ? ' · ' + u.events + ' events' : ''}` +
+                   ` <a href="#" data-act="toggle">${u.enabled === false ? 'enable' : 'disable'}</a> <a href="#" data-act="del">delete</a></small>`;
+    li.querySelector('[data-act=toggle]').onclick = async e => { e.preventDefault(); try { await send('PUT', `/det/units/${u.id}`, { enabled: u.enabled === false }); } catch (err) { $('#deterr').textContent = 'refused: ' + err.message; } loadDets(); };
+    li.querySelector('[data-act=del]').onclick = async e => { e.preventDefault(); try { await send('DELETE', `/det/units/${u.id}`); } catch (err) { $('#deterr').textContent = 'refused: ' + err.message; } loadDets(); };
+    ul.appendChild(li);
+  }
+}
+$('#detadd').onsubmit = async e => {
+  e.preventDefault(); $('#deterr').textContent = '';
+  const f = Object.fromEntries(new FormData(e.target));
+  try { await send('POST', '/det/units', { name: `${current}-${f.kind}`, cam: String(current), kind: f.kind, params: f.params || '' }); e.target.reset(); loadDets(); }
+  catch (err) { $('#deterr').textContent = 'refused: ' + err.message; }
+};
 window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
-loadSpec().then(() => { loadUnits(); setInterval(loadUnits, 10000); });
+loadSpec().then(() => { loadUnits(); setInterval(() => { loadUnits(); loadDets(); }, 10000); });
 </script>
