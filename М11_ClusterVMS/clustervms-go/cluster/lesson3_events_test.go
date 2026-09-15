@@ -128,9 +128,12 @@ func TestTheResourcePolicyRetainsEachSubsystemsBucketsByItsOwnRow(t *testing.T) 
 	c := newCluster()
 	ctl := c.controller(0, "")
 	srv := c.Servers["srv-a"]
-	c.create(t, ctl, map[string]any{"source": "driverpack://file/7.mp4", "retention_days": 1, "events_retention_days": 30})
+	c.create(t, ctl, map[string]any{"source": "driverpack://file/7.mp4", "events_retention_days": 30}) // the camera's events: the VMS row's knob
 	rt, _, _ := c.Vars.Get("vms/retention/1")
-	eq(t, rt, cluster.Items{"days": "30"}) // the VMS's policy for its unit, as a row the platform reads
+	eq(t, rt, cluster.Items{"days": "30"})                     // the VMS's policy for its unit, as a row the platform reads
+	if rr, _, _ := c.Vars.Get("rec/recordings/1"); rr != nil { // no recording: the camera is watched, its footage nobody's
+		t.Fatal(rr)
+	}
 	now := c.Wall.Now()
 	p1 := observe(c, "srv-a", "vms", "1", 1, now-40*86400, "motion", nil)    // older than the VMS's policy
 	p2 := observe(c, "srv-a", "vms", "1", 1, now-3600, "motion", nil)        // recent
@@ -143,12 +146,14 @@ func TestTheResourcePolicyRetainsEachSubsystemsBucketsByItsOwnRow(t *testing.T) 
 	_, e1 := os.Stat(p1)
 	_, e2 := os.Stat(p2)
 	_, e3 := os.Stat(p3)
-	if rep["vms.added"] != 2 || rep["removed"] != 2 || e2 != nil || e1 == nil || e3 == nil {
+	if rep["removed"] != 2 || e2 != nil || e1 == nil || e3 == nil {
 		t.Fatal(rep)
 	}
-	eq(t, len(vms.NewManifest(srv.Archive, 1).Buckets()), 2)                                   // the VMS's lines: its pass ran before the platform removed the file...
-	if res.Pass()["vms.dropped"] != 1 || len(vms.NewManifest(srv.Archive, 1).Buckets()) != 1 { // ...and drops it on the next pass
-		t.Fatal("dropped")
+	if rep["rec.added"] != 0 || rep["rec.media_removed"] != 0 || len(vms.NewManifest(srv.Archive, 1).Read()) != 0 { // the recorder's pass: no footage here, nothing to do
+		t.Fatal(rep)
+	}
+	if _, err := os.Stat(filepath.Join(srv.Archive, "rec")); err == nil { // events are the worker's tree (vms/); footage would be the recorder's (rec/)
+		t.Fatal("a rec/ tree with no recorder")
 	}
 }
 
@@ -219,7 +224,7 @@ func TestTheEventsKnobIsAPeerCopyAndTheOwnerRestores(t *testing.T) {
 	pol["srv-a"].Heartbeat()
 	r = pol["srv-a"].Restore()
 	eq(t, r["pulled"], 2)    // its two closed buckets are home;
-	eq(t, r["vms.added"], 1) // the vms manifest line rebuilt
+	eq(t, r["rec.added"], 0) // no footage was ever here (rec/ is the recorder's)
 	bs := p.BucketsUnder(c.Servers["srv-a"].Archive, "vms", "7", bucketSeconds)
 	if len(bs) != 1 || bs[0].Path != ev[0].Bucket {
 		t.Fatal(bs)

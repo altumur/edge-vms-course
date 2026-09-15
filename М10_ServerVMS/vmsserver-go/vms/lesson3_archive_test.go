@@ -42,15 +42,15 @@ func touch(pth string, mtime float64) {
 }
 
 func TestParseAndPaths(t *testing.T) {
-	cam, epoch, start, ok := vms.Parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a")
+	cam, epoch, start, ok := vms.Parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a")
 	if !ok || cam != 7 || epoch != 5 || !start.Equal(utc("2026-09-12T10:10:00")) {
 		t.Fatal(cam, epoch, start, ok)
 	}
-	if _, _, _, ok := vms.Parse("/a/vms/7/e5/manifest.jsonl", "/a"); ok {
+	if _, _, _, ok := vms.Parse("/a/rec/7/e5/manifest.jsonl", "/a"); ok {
 		t.Fatal("manifest is not a segment")
 	}
-	if _, _, _, ok := vms.Parse("/a/7/e5/20260912T101000Z.mp4", "/a"); ok {
-		t.Fatal("not under vms/")
+	if _, _, _, ok := vms.Parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a"); ok {
+		t.Fatal("not under rec/ — vms/ is the worker's events tree")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestRetentionIsAPolicyOnTheResource(t *testing.T) {
 		t.Fatal("retain")
 	}
 	left := vms.NewManifest(box.Archive, 7).Read()
-	if _, err := os.Stat(filepath.Join(box.Archive, "vms", "7", "e3", "20261001T100000Z.mp4")); len(left) != 1 || err == nil {
+	if _, err := os.Stat(filepath.Join(box.Archive, "rec", "7", "e3", "20261001T100000Z.mp4")); len(left) != 1 || err == nil {
 		t.Fatal(left)
 	}
 	if res.Usage() != 1000 {
@@ -171,62 +171,85 @@ func TestRetentionIsAPolicyOnTheResource(t *testing.T) {
 }
 
 func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
-	// The archive's unit is a time span under an epoch, not a media file.
+	// An event is an observation, written by the WORKER holding the camera's epoch, into the camera's
+	// bucket on the worker's server's resource — vms/<cam>/e<epoch>/ — recorded or not. Footage is the
+	// RECORDER's, under its own epoch in rec/<cam>/e<epoch>/, indexed by the manifest beside it. Two trees,
+	// two writers, one camera: a camera that is watched and never recorded has buckets and no rec/ tree;
+	// the manifest indexes media only, the resource's event database indexes the buckets; each is retained
+	// by its own policy. No controller wrote any of it.
 	box := testbox.NewBox()
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, box.Wall.Now)
 	t0 := ts("2026-09-12T10:00:00")
-	box.Wall.Set(t0 + 2000)                                                 // the resource's clock: every bucket below is over
+	box.Wall.Set(t0 + 2000)
 	log := vms.EventLogFor(box.Archive, 7, 3, 600)                          // the worker holds epoch 3 for camera 7
-	pth, _ := log.Append(t0+12.5, "motion", map[string]any{"zone": "gate"}) // not recording: still an event
+	pth, _ := log.Append(t0+12.5, "motion", map[string]any{"zone": "gate"}) // not recorded: still an event
 	if sub, unit, epoch, start, ok := p.ParseBucket(pth, box.Archive); !ok || sub != "vms" || unit != "7" || epoch != 3 || start != t0 || p.ReadBucket(pth)[0]["zone"] != "gate" {
 		t.Fatal(pth)
 	}
-	log.Append(t0+40.0, "silent", nil)                                    // the event with no segment, by definition
-	p2, _ := log.Append(t0+700.0, "person", map[string]any{"score": 0.9}) // the next bucket: rolled by the clock
-	for _, f := range []string{pth, p2} {
-		touch(f, t0+1250) // quiet for the grace (the test's clock is not the disk's)
+	log.Append(t0+40.0, "silent", nil)                                                                                 // the event with no segment, by definition
+	p2, _ := log.Append(t0+700.0, "person", map[string]any{"score": 0.9})                                              // the next bucket: rolled by the clock
+	if under := p.SubsystemsUnder(box.Archive); len(under) != 1 || len(under["vms"]) != 1 || len(res.Cameras()) != 0 { // watched, not recorded: buckets, no rec/ tree
+		t.Fatal(under)
 	}
-	if len(vms.NewManifest(box.Archive, 7).Buckets()) != 0 { // durable already; not yet indexed
-		t.Fatal("indexed early")
-	}
-	closed := res.CloseBuckets(t0+1300, 30)
-	if len(closed) != 2 || closed[0].Events != 2 || closed[1].Events != 1 { // both spans over and quiet: indexed
-		t.Fatal(closed)
-	}
-	if len(res.CloseBuckets(t0+1300, 30)) != 0 { // idempotent
-		t.Fatal("twice")
-	}
-	tl := vms.NewManifest(box.Archive, 7).Timeline(t0, t0+1200, 4)
-	if len(tl) != 2 || tl[0].Media != "" || tl[0].Events != 2 || !tl[0].Fenced || tl[1].Events != 1 || !tl[1].Fenced { // watched, not recorded; fenced
+	if tl := vms.NewManifest(box.Archive, 7).Timeline(t0, t0+1200, 0); len(tl) != 0 { // the manifest indexes media, and there is none
 		t.Fatal(tl)
 	}
-	// now the camera IS recorded for the second span: the events count onto the media
-	res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, t0+1200), 0)
-	p4, _ := vms.EventLogFor(box.Archive, 7, 4, 600).Append(t0+650.0, "motion", nil)
-	touch(p4, t0+1900)
-	res.CloseBuckets(t0+2000, 30)
-	tl = vms.NewManifest(box.Archive, 7).Timeline(t0+600, t0+1200, 4)
-	if len(tl) != 2 || tl[0].Media != "" || tl[0].Epoch != 3 || tl[0].Events != 1 || !tl[0].Fenced ||
-		tl[1].Media == "" || tl[1].Epoch != 4 || tl[1].Events != 1 || tl[1].Fenced {
-		t.Fatal(tl)
-	}
-	// repair rebuilds both kinds from the files; media retention is the VMS's, bucket retention the platform's
-	os.Remove(vms.NewManifest(box.Archive, 7).Path)
-	if rep := res.Repair(); rep != (vms.RepairReport{4, 0}) {
+	db := p.NewEventDatabase(box.Archive, "box", box.Wall.Now, 600)
+	if rep := db.Rebuild(); rep.Added != 3 {
 		t.Fatal(rep)
 	}
-	if res.Retain(7, 1, t0+3*86400) != 1 || len(vms.NewManifest(box.Archive, 7).Buckets()) != 3 {
+	kinds := []string{}
+	for _, e := range db.Query(p.Query{T0: t0, T1: t0 + 1200, Cam: p.IntPtr(7)}).Events {
+		kinds = append(kinds, e.Kind)
+	}
+	eqs(t, kinds, []string{"motion", "silent", "person"})
+	// now a recorder records the camera under ITS epoch, into rec/: the timeline has a span, the events are still the worker's
+	seg, _ := res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, t0+1200), 0)
+	if seg.Path != "rec/7/e4/20260912T101000Z.mp4" || len(res.Cameras()) != 1 {
+		t.Fatal(seg)
+	}
+	tl := vms.NewManifest(box.Archive, 7).Timeline(t0, t0+1200, 4)
+	if len(tl) != 1 || tl[0].Media == "" || tl[0].Epoch != 4 || tl[0].Fenced {
+		t.Fatal(tl)
+	}
+	if under := p.SubsystemsUnder(box.Archive); len(under) != 2 || under["rec"][0] != "7" || under["vms"][0] != "7" { // two trees, two writers, one camera
+		t.Fatal(under)
+	}
+	// repair rebuilds the manifest from the files; media retention is the recorder's, bucket retention the platform's
+	os.Remove(vms.NewManifest(box.Archive, 7).Path)
+	if rep := res.Repair(); rep != (vms.RepairReport{1, 0}) {
+		t.Fatal(rep)
+	}
+	if res.Retain(7, 1, t0+3*86400) != 1 || len(vms.NewManifest(box.Archive, 7).Read()) != 0 {
 		t.Fatal("retain")
 	}
-	box.Vars.Put("vms/retention/7", p.Items{"days": "30"}, p.NoCAS) // what the controller writes for a camera's events
+	for _, f := range []string{pth, p2} { // the recorder's retention never touches the worker's buckets
+		if _, err := os.Stat(f); err != nil {
+			t.Fatal(f)
+		}
+	}
+	box.Vars.Put("vms/retention/7", p.Items{"days": "30"}, p.NoCAS) // what the VMS controller writes for a camera's events
 	platform := p.NewResource(box.Archive, "box", "http://box", box.Vars, box.Objects, 600, func() float64 { return t0 + 40*86400 }, nil)
-	if platform.Retain() != 3 { // files, by the platform...
+	platform.Database = db
+	if platform.Retain() != 2 { // files, by the platform — and the database forgets
 		t.Fatal("platform retain")
 	}
 	if _, err := os.Stat(pth); err == nil {
 		t.Fatal("bucket still there")
 	}
-	if rep := res.Repair(); rep != (vms.RepairReport{0, 3}) { // ...lines, by the VMS's own pass
-		t.Fatal(rep)
+	if len(db.Query(p.Query{T0: t0, T1: t0 + 1200, Cam: p.IntPtr(7)}).Events) != 0 {
+		t.Fatal("the database remembers a removed bucket")
+	}
+}
+
+func eqs(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatal(got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatal(got, want)
+		}
 	}
 }

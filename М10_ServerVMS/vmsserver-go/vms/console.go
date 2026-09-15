@@ -8,9 +8,11 @@ package vms
 //
 // Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the
 // POST/PUT/DELETE of a camera — is psimplatform.SpecConsole reading
-// vms.subsystem.yaml; nothing here knows what a camera's fields are. Its own
-// process (`vms console`), with its own token: the operator's rows — cameras,
-// next_id, retention — and never placement.
+// vms.subsystem.yaml; nothing here knows what a camera's fields are. The
+// recorder is mounted under its name — /rec/spec, /rec/recordings (the
+// page's Record toggle), /rec/metrics — the same class over rec.subsystem.yaml.
+// Its own process (`vms console`), with its own token: the operator's rows —
+// cameras, recordings, next_id, retention, the policy knobs — and never placement.
 
 import (
 	"net"
@@ -52,20 +54,26 @@ func VmsRoutes(archive *ArchiveResource) p.Extra {
 	}
 }
 
-func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock) *p.SpecConsole {
-	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive), Media: archive != nil,
-		Index: p.NewMergedIndex(ctl.Objects, nil, wall)} // no database here: the resource process's, asked over HTTP
+// NewConsole: the VMS at `/`, and the recorder at `/rec/…` when a rec controller is given (the console's
+// token over RecSpec). Both answer /events from the same merge over the resources' databases.
+func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recCtl *p.SpecController) *p.Mount {
+	index := p.NewMergedIndex(ctl.Objects, nil, wall) // no database here: the resource process's, asked over HTTP
+	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive), Media: archive != nil, Index: index}
 	if archive != nil {
 		o.MarksRoot = archive.Root
 	}
-	return p.NewSpecConsole(ctl.SpecController, o)
+	m := p.NewMount(p.NewSpecConsole(ctl.SpecController, o))
+	if recCtl != nil {
+		m.Add("rec", p.NewSpecConsole(recCtl, p.ConsoleOptions{Wall: wall, Index: index}))
+	}
+	return m
 }
 
-func NewHandler(ctl *VmsController, archive *ArchiveResource, wall p.Clock) http.Handler {
-	return NewConsole(ctl, archive, wall).Handler()
+func NewHandler(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recCtl *p.SpecController) http.Handler {
+	return NewConsole(ctl, archive, wall, recCtl).Handler()
 }
 
 // Serve on addr ("127.0.0.1:0" picks a port); the listener says which.
-func Serve(ctl *VmsController, archive *ArchiveResource, addr string, wall p.Clock) (*http.Server, net.Listener, error) {
-	return NewConsole(ctl, archive, wall).Serve(addr)
+func Serve(ctl *VmsController, archive *ArchiveResource, addr string, wall p.Clock, recCtl *p.SpecController) (*http.Server, net.Listener, error) {
+	return NewConsole(ctl, archive, wall, recCtl).Serve(addr)
 }

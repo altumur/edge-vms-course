@@ -8,7 +8,7 @@ package cluster
 // new; the names say so: platform/resources/<server>/heartbeat,
 // platform/mirror, job "resource".
 //
-//	ClusterResource = vms.NewVmsResource: ArchivePolicy registered as the "vms" hook, an EventDatabase attached
+//	ClusterResource = vms.NewVmsResource: ArchivePolicy registered as the "rec" hook (the recorder's: manifest repair, media retention), an EventDatabase attached
 //	VmsRoutes       = vms.ResourceRoutes:  GET /manifest/<cam>, GET /segment/<path> (Range honoured)
 
 import (

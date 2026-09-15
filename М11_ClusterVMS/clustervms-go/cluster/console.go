@@ -5,13 +5,14 @@ package cluster
 // SpecConsole run from the VMS spec, exactly as М10 runs it; what a CLUSTER
 // adds is where the bytes are — two routes, registered, not subclassed:
 //
-//	GET /timeline/<id>               merged across the resources that hold the camera; unreachable ones named
+//	GET /timeline/<id>               merged across the resources that hold the camera's RECORDING (rec/<cam>); unreachable ones named
 //	GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
+//	/rec/spec, /rec/recordings, …    the recorder mounted under its name (psimplatform.Mount): the page's Record toggle POSTs here
 //
 // The rest — the page, /spec, /cameras, /where (one scan of the assignments),
-// /resources, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
-// psimplatform.SpecConsole reading vms.subsystem.yaml. A console for the
-// det subsystem is the same type with a different YAML and no extra.
+// /resources, /servers, /policy, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
+// psimplatform.SpecConsole reading vms.subsystem.yaml. The recorder's console
+// at /rec/… is the same type over rec.subsystem.yaml and no extra.
 
 import (
 	"fmt"
@@ -31,6 +32,7 @@ type ConsoleOptions struct {
 	WorstFailover float64
 	Index         p.EventQuerier // nil = the platform's MergedIndex over the resources' /events
 	ArchiveRoot   string
+	RecCtl        *p.SpecController // the recorder's controller with the console's token: mounted at /rec/…
 }
 
 // ClusterRoutes: the cluster's media routes — the timeline is merged, the segment is proxied.
@@ -46,7 +48,7 @@ func ClusterRoutes(ctl *ClusterController, reader ManifestReader) p.Extra {
 		switch {
 		case strings.HasPrefix(path, "/timeline/"):
 			cid, _ := p.LastSegmentInt(path)
-			cur, _ := p.CurrentEpoch(ctl.Vars, ctl.Sub.EpochKey(strconv.Itoa(cid)))
+			cur, _ := p.CurrentEpoch(ctl.Vars, "rec/epoch/"+strconv.Itoa(cid)) // the RECORDING's epoch: footage is the recorder's, fenced by its writer
 			from, to := p.QueryRange(req)
 			p.SendJSON(w, 200, MergedTimeline(p.ResourcesSeen(ctl.Objects), reader, cid, from, to, cur, ctl.Wall(), 45).ToMap())
 			return true
@@ -86,12 +88,18 @@ func ClusterRoutes(ctl *ClusterController, reader ManifestReader) p.Extra {
 	}
 }
 
-func NewConsole(ctl *ClusterController, o ConsoleOptions) *p.SpecConsole {
+// NewConsole: the VMS at `/` and, when the console fronts it (o.RecCtl), the recorder at `/rec/…`. Both
+// answer /events from the same merge over the resources' databases.
+func NewConsole(ctl *ClusterController, o ConsoleOptions) *p.Mount {
 	if o.Index == nil {
 		o.Index = p.NewMergedIndex(ctl.Objects, nil, ctl.Wall) // no database here: every live resource's /events, merged
 	}
-	return p.NewSpecConsole(ctl.SpecController, p.ConsoleOptions{MarksRoot: o.ArchiveRoot, Index: o.Index, WorstFailover: o.WorstFailover,
-		Extra: ClusterRoutes(ctl, o.Reader), Media: true})
+	m := p.NewMount(p.NewSpecConsole(ctl.SpecController, p.ConsoleOptions{MarksRoot: o.ArchiveRoot, Index: o.Index, WorstFailover: o.WorstFailover,
+		Extra: ClusterRoutes(ctl, o.Reader), Media: true}))
+	if o.RecCtl != nil {
+		m.Add("rec", p.NewSpecConsole(o.RecCtl, p.ConsoleOptions{Wall: ctl.Wall, Index: o.Index}))
+	}
+	return m
 }
 
 func NewHandler(ctl *ClusterController, o ConsoleOptions) http.Handler {

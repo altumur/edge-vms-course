@@ -21,7 +21,7 @@ func (s *fakeStore) Desired() []vms.Camera { return s.rows }
 
 func cam(i, revision int, enabled bool) vms.Camera {
 	return vms.Camera{ID: i, Name: "cam" + strconv.Itoa(i), Source: "driverpack://file/cam" + strconv.Itoa(i) + ".mp4",
-		Enabled: enabled, RetentionDays: 30, Priority: 100, Revision: revision}
+		Enabled: enabled, Priority: 100, Revision: revision}
 }
 
 func actions(a ...string) []vms.Action {

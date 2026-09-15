@@ -93,7 +93,7 @@ func MergedTimeline(resources map[string]p.ResourceHeartbeat, reader ManifestRea
 	for _, server := range servers {
 		hb := resources[server]
 		has := false
-		for _, u := range hb.Units["vms"] { // the platform's heartbeat: units per subsystem
+		for _, u := range hb.Units["rec"] { // the platform's heartbeat: units per subsystem — footage is the recorder's tree, rec/<cam>
 			if u == unit {
 				has = true
 			}

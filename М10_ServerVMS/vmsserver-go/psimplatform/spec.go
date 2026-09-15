@@ -180,6 +180,8 @@ type SubsystemSpec struct {
 	HeadroomFrom     string
 	Constraint       string
 	Requires         string // "resource": a worker is eligible only while its server's resource is not silent
+	Servers          string // the default of the `servers` policy knob: shared | distinct (the console may change it)
+	Near             string // a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
 	TieBreak         string
 	DeadBand         float64
 	Snapshot         []string
@@ -201,7 +203,7 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	unit, pl := asMap(d["unit"]), asMap(d["placement"])
 	s := &SubsystemSpec{Name: name, Rows: "units", ID: "numeric", Fields: map[string]FieldSpec{}, CapacityFrom: "capacity",
-		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", TieBreak: "most-free-capacity", DeadBand: 0.10, RunningGauge: "units_running"}
+		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", Servers: "shared", Near: "none", TieBreak: "most-free-capacity", DeadBand: 0.10, RunningGauge: "units_running"}
 	if r, ok := unit["rows"].(string); ok {
 		s.Rows = r
 	}
@@ -256,6 +258,12 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if rq, ok := pl["requires"].(string); ok {
 		s.Requires = rq
+	}
+	if sv, ok := pl["servers"].(string); ok {
+		s.Servers = sv
+	}
+	if nr, ok := pl["near"].(string); ok {
+		s.Near = nr
 	}
 	if tb, ok := pl["tie_break"].(string); ok {
 		s.TieBreak = tb
@@ -700,12 +708,17 @@ func (c *SpecController) Eligible(r Row, workers []string) []string {
 // worker per server carries units; a second worker Nomad put on the same
 // server idles by policy, and a server whose worker and resource both fall
 // silent is gone (GoneServers) — its units move.
-var PolicyDefaults = map[string]string{"servers": "shared"}
 var PolicyChoices = map[string][]string{"servers": {"distinct", "shared"}}
+
+// PolicyDefaults: the spec's own defaults for the knobs — the VMS says shared (a box IS several workers on
+// one server), the recorder says distinct (a second recorder on the same disks is no second place to record).
+func (c *SpecController) PolicyDefaults() map[string]string {
+	return map[string]string{"servers": c.Spec.Servers}
+}
 
 func (c *SpecController) Policy() map[string]string {
 	out := map[string]string{}
-	for k, v := range PolicyDefaults {
+	for k, v := range c.PolicyDefaults() {
 		out[k] = v
 	}
 	it, _, _ := c.Vars.Get(c.Sub.Config("policy"))
@@ -872,6 +885,55 @@ func (c *SpecController) pool(workers []string) []string {
 	return out
 }
 
+// HolderNear: for `near: <sub>`, the worker of that subsystem whose heartbeat status lists this unit's id
+// in phase running — (worker, server) — or "". The recorder says `near: vms`: the unit's holder.
+func (c *SpecController) HolderNear(uid string) (worker, server string) {
+	if c.Spec.Near == "none" || c.Spec.Near == "" {
+		return "", ""
+	}
+	names := []string{}
+	hbs := Heartbeats(c.Objects, c.Spec.Near+"/")
+	for w := range hbs {
+		names = append(names, w)
+	}
+	sort.Strings(names)
+	for _, w := range names {
+		hb := hbs[w]
+		if c.Wall()-hb.Ts > 45 {
+			continue
+		}
+		for _, st := range hb.Status {
+			if Str(st["id"]) == uid && Str(st["phase"]) == "running" {
+				return w, hb.ExtraString("server", "?")
+			}
+		}
+	}
+	return "", ""
+}
+
+// pick: the affinity, then the tie-break — the best worker on the holder's server if one has room, else the
+// best anywhere; the note says which ("beside w-1 holding it" / "away from w-1 on srv-1 (no room there)") so
+// the reason tells the operator whether the unit reads its holder's shared memory or its RTSP fan-out.
+func (c *SpecController) pick(pool []string, uid string) (best string, free int, note string) {
+	holder, server := c.HolderNear(uid)
+	if holder != "" {
+		var beside []string
+		for _, w := range pool {
+			if c.ServerOf(w) == server {
+				beside = append(beside, w)
+			}
+		}
+		if b, f := c.best(beside); b != "" {
+			return b, f, ", beside " + holder + " holding it"
+		}
+	}
+	best, free = c.best(pool)
+	if best != "" && holder != "" {
+		return best, free, ", away from " + holder + " on " + server + " (no room there)"
+	}
+	return best, free, ""
+}
+
 func (c *SpecController) best(pool []string) (string, int) {
 	best, free := "", 0
 	for _, w := range pool { // most-free-capacity: the one tie-break in the catalogue
@@ -895,7 +957,7 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 		return nil, nil
 	}
 	pool := c.Eligible(r, c.pool(workers))
-	best, free := c.best(pool)
+	best, free, near := c.pick(pool, uid)
 	if best == "" {
 		return nil, nil
 	}
@@ -909,6 +971,7 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 	if c.Spec.Requires == "resource" {
 		reason += ", whose resource is " + c.ResourceState(c.ServerOf(best), 45)
 	}
+	reason += near
 	pl := Placement{uid, best, reason, c.Wall(), 0}
 	// the row first (CAS decides who won), then the assignment
 	written, err := c.Write(c.Sub.Config("placement", uid), func(it Items) Items {
@@ -1031,16 +1094,11 @@ func (c *SpecController) Redistribute(workers []string) []Move {
 			if r := c.Unit(uid); r != nil {
 				pool = c.Eligible(r, live)
 			}
-			best, bestFree := "", -1<<30
-			for _, w := range pool {
-				if f := c.CapacityOf(w) - c.Load(w); f > bestFree {
-					best, bestFree = w, f
-				}
-			}
-			if best == "" || c.Load(best) >= c.CapacityOf(best) {
+			best, bestFree, near := c.pick(pool, uid)
+			if best == "" {
 				break // the system is full; the unit waits, listed where it was
 			}
-			c.MoveTo(uid, best, fmt.Sprintf("%s; most free capacity (%d); on %s", g.why, bestFree, c.ServerOf(best)))
+			c.MoveTo(uid, best, fmt.Sprintf("%s; most free capacity (%d); on %s%s", g.why, bestFree, c.ServerOf(best), near))
 			moves = append(moves, Move{uid, g.worker, best})
 		}
 	}

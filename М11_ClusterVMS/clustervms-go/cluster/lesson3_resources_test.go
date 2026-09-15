@@ -46,7 +46,7 @@ func TestATimelineSpansTwoResourcesAndNamesTheUnreachableOne(t *testing.T) {
 	segment(t, c.Servers["srv-b"], 7, 4, tt-300, 600, 1000) // after, on B, next epoch
 	hbs := c.resources(nil)
 	seen := p.ResourcesSeen(c.Objects)
-	eq(t, seen["srv-a"].Units, map[string][]string{"vms": {"7"}})
+	eq(t, seen["srv-a"].Units, map[string][]string{"rec": {"7"}}) // media + the manifest, the recorder's tree
 	eq(t, seen["srv-c"].Units, map[string][]string{})
 	if seen["srv-a"].Usage <= 2000 { // media + the manifest
 		t.Fatal(seen["srv-a"].Usage)
@@ -81,14 +81,15 @@ func TestATimelineSpansTwoResourcesAndNamesTheUnreachableOne(t *testing.T) {
 func TestTheResourcePolicyNeedsNeitherWorkerNorController(t *testing.T) {
 	c := newCluster()
 	ctl := c.controller(0, "")
-	c.create(t, ctl, map[string]any{"source": "driverpack://file/1.mp4", "retention_days": 1})
+	c.create(t, ctl, map[string]any{"source": "driverpack://file/1.mp4"})
+	p.NewSpecController(vms.RecSpec, c.Vars, c.Objects, 0, c.Wall.Now, "").Create(map[string]any{"cam": "1", "retention_days": 1}) // retention is the RECORDING's row
 	srv := c.Servers["srv-a"]
 	tt := c.Wall.Now()
 	segment(t, srv, 1, 1, tt-3*86400, 600, 1000)
 	segment(t, srv, 1, 1, tt-3600, 600, 1000)
 	os.Remove(filepath.Join(srv.Archive, vms.NewManifest(srv.Archive, 1).Read()[1].Path)) // a file gone behind the manifest's back
 	rep := cluster.ClusterResource(srv.Resource, "srv-a", "http://srv-a", c.Vars, c.Objects, c.Wall.Now, nil).Pass()
-	eq(t, rep, map[string]any{"vms.added": 0, "vms.dropped": 1, "vms.closed": 0, "vms.media_removed": 1, "removed": 0, "enabled": false, "mirrored": 0, "peers": []string{}})
+	eq(t, rep, map[string]any{"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0, "enabled": false, "mirrored": 0, "peers": []string{}})
 	eq(t, len(vms.NewManifest(srv.Archive, 1).Read()), 0)
 }
 

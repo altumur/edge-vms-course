@@ -6,6 +6,15 @@ package vms
 // CAS when it starts one, holds a lease per camera, and publishes a
 // heartbeat carrying its status. It never writes configuration.
 //
+// It HOLDS a camera: one connection, one epoch, one fan-out — the tee's
+// RTP branch re-served as rtsp://<server>:8554/<cam> (`live_url`) for
+// subscribers on any server, and its shmsink branch <ShmDir>/<cam>.shm
+// (`live_shm`) for subscribers on this one — and writes the camera's
+// events into vms/<cam>/e<epoch>/ on its server's resource. It records
+// nothing: footage is the recorder's (recorder.go), a subscriber like the
+// gateway and the detectors. The same class runs the recorder over the
+// rec rows: Sub, RowsName, ParseRow and the hooks are what differ.
+//
 // What the environment hands a process, on a box or in an allocation:
 //
 //	WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
@@ -81,12 +90,13 @@ type FakeActuator struct {
 	Calls   []Action
 	Running map[int]bool
 	Epochs  map[int]int
+	Started map[int]Camera // what each start was given: the enriched row (the fan-out, the recorder's source)
 	Dead    []int
 	Posted  []Posted
 }
 
 func NewFakeActuator() *FakeActuator {
-	return &FakeActuator{Running: map[int]bool{}, Epochs: map[int]int{}}
+	return &FakeActuator{Running: map[int]bool{}, Epochs: map[int]int{}, Started: map[int]Camera{}}
 }
 
 func FailingSet(ids ...int) func(int) bool {
@@ -111,6 +121,7 @@ func (f *FakeActuator) Actuate(verb string, cam Camera) bool {
 	}
 	f.Running[cam.ID] = true
 	f.Epochs[cam.ID] = cam.Epoch
+	f.Started[cam.ID] = cam
 	return true
 }
 
@@ -164,6 +175,12 @@ type VmsWorkerOptions struct {
 	ArchiveRoot   string
 	BucketSeconds int
 	Env           Env // nil: the process's own
+	// the subsystem this worker is a worker OF: the VMS by default; the recorder sets rec/recordings
+	Sub      *p.Subsystem
+	RowsName string
+	ParseRow func(p.Items) Camera
+	NameEnv  string // WORKER_NAME (w-<i>) or RECORDER_NAME (r-<i>)
+	Prefix   string
 }
 
 // VmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
@@ -189,6 +206,27 @@ type VmsWorker struct {
 	PreviousHb       float64 // the previous instance of this slot, if it left a heartbeat: what failover is measured from
 	PreviousInstance string
 	Passes           int
+	ShmDir           string
+	RowsName         string
+	ParseRow         func(p.Items) Camera
+	// hooks the recorder fills in: what a pipeline needs beyond the row (nil = cannot start now), what the
+	// status says per unit, and what runs before each reconcile pass and after each pump
+	Enrich      func(cam Camera) (Camera, bool)
+	StatusExtra func(cam Camera) map[string]any
+	BeforePass  func()
+	AfterPump   func()
+	StatusFix   func(st []map[string]any)
+}
+
+func slotFromEnv(env Env, nameEnv, prefix string) string {
+	if n := env.Get(nameEnv); n != "" {
+		return n
+	}
+	if i := env.Get("NOMAD_ALLOC_INDEX"); i != "" {
+		n, _ := strconv.Atoi(i)
+		return prefix + "-" + strconv.Itoa(n)
+	}
+	return ""
 }
 
 // NewVmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
@@ -196,18 +234,28 @@ type VmsWorker struct {
 // whichever slot is free — a lapsed one first, so a replacement inherits its assignment.
 func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actuator, o VmsWorkerOptions) (*VmsWorker, error) {
 	env := o.Env
+	sub, rows, parse, nameEnv, prefix := VMS, "cameras", Row, "WORKER_NAME", "w"
+	if o.Sub != nil {
+		sub, rows, parse, nameEnv, prefix = *o.Sub, o.RowsName, o.ParseRow, o.NameEnv, o.Prefix
+	}
 	if name == "" {
-		name = SlotFromEnvironment(env)
+		name = slotFromEnv(env, nameEnv, prefix)
 	}
 	if o.Instance == "" {
 		o.Instance = env.Get("NOMAD_ALLOC_ID")
 	}
-	base := p.NewWorker(VMS, vars, objects, o.WorkerOptions)
+	base := p.NewWorker(sub, vars, objects, o.WorkerOptions)
 	if _, err := base.ClaimSlot(name); err != nil {
 		return nil, err
 	}
 	w := &VmsWorker{Worker: base, ArchiveRoot: o.ArchiveRoot, BucketSeconds: o.BucketSeconds, Capacity: o.Capacity,
-		Act: act, RecordingAllowed: true, Server: o.Server, Labels: LabelsFromEnvironment(env), Alloc: env.Get("NOMAD_ALLOC_ID")}
+		Act: act, RecordingAllowed: true, Server: o.Server, Labels: LabelsFromEnvironment(env), Alloc: env.Get("NOMAD_ALLOC_ID"),
+		RowsName: rows, ParseRow: parse, ShmDir: env.Get("SHM_DIR")}
+	if w.ShmDir == "" {
+		w.ShmDir = ShmDir
+	}
+	w.Enrich = w.enrichWorker
+	w.StatusExtra = w.statusExtraWorker
 	if w.ArchiveRoot == "" {
 		w.ArchiveRoot = env.Get("ARCHIVE")
 		if w.ArchiveRoot == "" {
@@ -256,12 +304,26 @@ func (w *VmsWorker) Refresh() {
 	w.AssignmentRev = a.Rev
 	rows := []Camera{}
 	for _, unit := range a.Units {
-		items, _, _ := w.Vars.Get(VMS.Config("cameras", unit))
+		items, _, _ := w.Vars.Get(w.Sub.Config(w.RowsName, unit))
 		if items != nil && items["deleted"] != "true" {
-			rows = append(rows, Row(items))
+			rows = append(rows, w.ParseRow(items))
 		}
 	}
 	w.Rows = rows
+}
+
+// What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`), the loopback
+// port the fan-out serves from, and the shared-memory branch (`live_shm`) for subscribers on this server.
+func (w *VmsWorker) enrichWorker(cam Camera) (Camera, bool) {
+	cam.LiveURL, cam.LivePort, cam.LiveShm = LiveURL(w.Server, cam.ID), LivePort(cam.ID), LiveShm(cam.ID, w.ShmDir)
+	return cam, true
+}
+
+// What the heartbeat says per unit beyond the platform's fields: the worker publishes where the camera's
+// stream is — the fan-out, and the same-server fast path — so a recorder, a gateway or a detector finds it
+// by reading, never by calling.
+func (w *VmsWorker) statusExtraWorker(cam Camera) map[string]any {
+	return map[string]any{"live_url": LiveURL(w.Server, cam.ID), "live_shm": LiveShm(cam.ID, w.ShmDir)}
 }
 
 // the gate
@@ -283,7 +345,11 @@ func (w *VmsWorker) actuate(verb string, cam Camera) bool {
 		if !w.MayWrite(unit) {
 			return false
 		}
-		return w.Act.Actuate(verb, cam)
+		full, ok := w.Enrich(cam)
+		if !ok {
+			return false // cannot start now (a recorder whose camera nobody holds): backoff, retry
+		}
+		return w.Act.Actuate(verb, full)
 	}
 	ok := w.Act.Actuate("stop", cam)
 	w.Release(unit)
@@ -297,6 +363,9 @@ func (w *VmsWorker) ReconcileOnce() []Action {
 }
 
 func (w *VmsWorker) ReconcileAt(now float64) []Action {
+	if w.BeforePass != nil {
+		w.BeforePass()
+	}
 	w.Refresh()
 	actions := w.Reconciler.Reconcile(now)
 	w.Passes++
@@ -375,6 +444,9 @@ func (w *VmsWorker) PumpOnce() {
 		w.Reconciler.Lost(cid, w.Now())
 		w.Observe(cid, "silent", nil) // the event with no segment open, by definition
 	}
+	if w.AfterPump != nil {
+		w.AfterPump()
+	}
 }
 
 func (w *VmsWorker) Status() []map[string]any {
@@ -395,9 +467,18 @@ func (w *VmsWorker) Status() []map[string]any {
 		case w.Reconciler.Failures[cam.ID] != nil:
 			phase = "failed"
 		}
-		out = append(out, map[string]any{"id": cam.ID, "ref": cam.Ref, "name": cam.Name, "enabled": cam.Enabled, "phase": phase,
+		st := map[string]any{"id": cam.ID, "ref": cam.Ref, "name": cam.Name, "enabled": cam.Enabled, "phase": phase,
 			"position": pos.State, "revision": cam.Revision, "observed_revision": w.Reconciler.Actual[cam.ID],
-			"epoch": w.Epochs[strconv.Itoa(cam.ID)]})
+			"epoch": w.Epochs[strconv.Itoa(cam.ID)]}
+		if w.StatusExtra != nil {
+			for k, v := range w.StatusExtra(cam) {
+				st[k] = v
+			}
+		}
+		out = append(out, st)
+	}
+	if w.StatusFix != nil {
+		w.StatusFix(out)
 	}
 	return out
 }
@@ -415,7 +496,7 @@ func (w *VmsWorker) HeartbeatExtra() map[string]any {
 		"assignment_rev": w.AssignmentRev, "fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
 		"capacity": w.Capacity, "headroom": w.Headroom(), "started": w.StartedWall,
 		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance,
-		"archive": w.ArchiveRoot} // where it records: on a cluster, Nomad's meta.archive, through $ARCHIVE
+		"archive": w.ArchiveRoot} // the resource its events (a recorder: its footage) go to — on a cluster Nomad's meta.archive, through $ARCHIVE
 }
 
 func (w *VmsWorker) HeartbeatOnce() error {

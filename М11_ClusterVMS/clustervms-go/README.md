@@ -1,6 +1,6 @@
 # clustervms-go — М11, whole, in Go, measured against the Python original
 
-М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror and the event database that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 31 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
+М9 Lesson 9 argued that the rewrite touches only the actuator and proved it on one file. This directory is the same claim on the 2c shape of a whole cluster: every mechanism М10 and М11 designed — identity by claim, the epoch by check-and-set, the lease that fences the zombie, capacity as the worker's word, placement under label constraints with the server in the reason, the resource job with its peer mirror and the event database that is a cache, the snapshot that leaves the cluster — ported to Go **with the Python suite's 32 tests ported alongside, unchanged in meaning**. It is built **on** [`vmsserver-go`](../../М10_ServerVMS/vmsserver-go/README.md), М10's port, exactly as `clustervms/` is built on `vmsserver/`.
 
 ```
 clustervms-go/
@@ -8,15 +8,16 @@ clustervms-go/
   cluster/
     variables.go               NomadVariables (net/http, the task's own token, cas, delete) and FakeVariables (one raft in memory, ACL)
     objectstore.go  s3.go      VariablesObjectStore (this cluster's choice: objects as Variables), HTTP, a directory, S3 with SigV4 + List
-    worker.go                  ClusterWorker = vms.VmsWorker — one type alias and an env-first constructor; nothing a box lacks
+    worker.go                  ClusterWorker = vms.VmsWorker, ClusterRecorder = vms.RecWorker — type aliases and env-first constructors; nothing a box lacks
     controller.go              ClusterController = vms.VmsController — one type alias; constraints, the server in the reason, the snapshot and
                                the measured failover are the one-box behaviour with N = 1, in the platform's SpecController
     directory.go               where is camera 7 — one scan of vms/workers/*, cached by time; "w-1+w-2" during a move
-    resource.go                VmsRoutes (/manifest, /segment with Range) on the platform's resource server; ClusterResource registers the VMS hook
-    timeline.go                MergedTimeline across resources; unreachable named; "not lost"
-    console.go                 the platform's SpecConsole over the VMS spec plus ClusterRoutes — /timeline/<id> merged across resources, /segment/<path>?server= proxied from that resource
-    *_test.go                  31 tests; bench_test.go — five operations timed
-  cmd/clustervms/main.go       worker | controller | console | resource — the four jobs, the same environment as the Python ones (the resource job keeps the event database; the console merges)
+    resource.go                VmsRoutes (/manifest, /segment with Range) on the platform's resource server; ClusterResource registers the recorder's rec hook
+    timeline.go                MergedTimeline across the resources holding the camera's RECORDING (rec/<cam>); unreachable named; "not lost"
+    console.go                 the platform's SpecConsole over the VMS spec plus ClusterRoutes — /timeline/<id> merged across resources, /segment/<path>?server= proxied from that resource;
+                               the recorder mounted at /rec/… (ConsoleOptions.RecCtl)
+    *_test.go                  32 tests; bench_test.go — five operations timed
+  cmd/clustervms/main.go       worker | controller | recorder | reccontroller | console | resource — the six jobs, the same environment as the Python ones (the resource job keeps the event database; the console merges)
   cmd/baseline/main.go         a server at idle: one worker and one controller with fifty cameras; prints its PSS
   cmd/pybaseline/baseline.py   the same shape in Python
   cmd/pybench/bench.py         the five operations in Python
@@ -24,7 +25,7 @@ clustervms-go/
 ```
 
 ```bash
-go test ./cluster/                      # 31 tests, ~150 ms
+go test ./cluster/                      # 32 tests, ~200 ms
 go test -race ./cluster/                # the epoch race with four real goroutines, race-detector clean
 CLUSTERVMS_PATH=../clustervms ./measure.sh
 ```
@@ -46,7 +47,7 @@ Both processes are **a server at idle**: one worker with fifty cameras placed on
 |---|---|---|---|
 | **worker + controller at idle, 50 cameras** | **8.9 MB** | **21.2 MB** | 2.4× — smaller than М9's 4× because the 2c worker is smaller than the old Node in both languages: no Postgres client, no publish/restore, no re-index sweep |
 | Deployable artifact | one static binary, **6.8 MB** (arm64: 6.4 MB, one `GOARCH=arm64` away) | interpreter + the two packages, as М9 counted them | |
-| Test suite | 31 tests in **150 ms** (570 ms with `go test`'s compile); М10's 41 in 140 ms | 31 tests in ~1.3 s, 42 in ~1.0 s (`run.py`'s own startup included) | Both are sub-second suites; the argument was never test speed. |
+| Test suite | 29 tests in **150 ms** (570 ms with `go test`'s compile); М10's 41 in 140 ms | 29 tests in ~1.3 s, 42 in ~1.0 s (`run.py`'s own startup included) | Both are sub-second suites; the argument was never test speed. |
 | Lines, non-test (М10 + М11) | ~5,600 | ~3,200 | 1.75× — error returns and types. Tests: 2,600 vs 1,400. |
 
 The controller's actual work, per operation (`go test -bench` / `cmd/pybench/bench.py`, same inputs):

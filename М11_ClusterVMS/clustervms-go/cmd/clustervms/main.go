@@ -31,7 +31,7 @@ func env(k, def string) string {
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: clustervms worker|controller|console|resource")
+		log.Fatal("usage: clustervms worker|controller|recorder|reccontroller|console|resource")
 	}
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)
@@ -58,18 +58,32 @@ func main() {
 		}
 	}
 	switch os.Args[1] {
-	case "worker":
-		res := vms.NewArchiveResource(spool, archive, 600, nil)
-		for _, pth := range res.ClosedInSpool(30, p.Wall()()) {
-			res.Promote(pth, 0)
-		}
-		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
+	case "worker": // holds the camera: one connection, one fan-out, its events into the resource on its server; no spool, no footage
+		log.Println("no GStreamer in the Go port: the fake actuator holds nothing")
 		w, err := cluster.NewClusterWorker(vars, objects, vms.NewFakeActuator(), nil, vms.VmsWorkerOptions{ArchiveRoot: archive})
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("worker %s (alloc %s) on %s claimed its slot", w.Name, w.Alloc, w.Server)
 		w.Run(2*time.Second, stop)
+	case "recorder": // the only writer of footage: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on THIS server's archive
+		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
+		r, err := cluster.NewClusterRecorder(vars, objects, vms.NewFakeActuator(), vms.NewArchiveResource(spool, archive, 600, nil), nil, vms.VmsWorkerOptions{})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("recorder %s (alloc %s) on %s claimed its slot", r.Name, r.Alloc, r.Server)
+		r.Run(2*time.Second, stop)
+	case "reccontroller": // count = 1, the only writer of rec placement: recordings onto recorders whose resource answers, beside the camera's worker when there is room
+		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
+		ctl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")
+		every(5*time.Second, func() {
+			if _, err := ctl.EnsurePlaced(nil); err != nil {
+				log.Println("rec placement:", err)
+			}
+			ctl.Redistribute(nil)
+			ctl.UnplaceDeleted()
+		})
 	case "controller": // count = 1, the only writer of placement; no HTTP — nothing asks it anything
 		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
 		ctl := cluster.NewClusterController(vars, objects, capacity, nil, env("CLUSTER", "cluster-a"))
@@ -83,7 +97,8 @@ func main() {
 	case "console": // a system job, one per server: the page and the API; no event database of its own — /events asks the resources
 		capacity, _ := strconv.Atoi(env("CAPACITY", "50"))
 		ctl := cluster.NewClusterController(vars, objects, capacity, nil, env("CLUSTER", "cluster-a"))
-		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive})
+		srv, ln, err := cluster.Serve(ctl, "0.0.0.0:"+env("CONSOLE_PORT", "8080"), cluster.ConsoleOptions{ArchiveRoot: archive,
+			RecCtl: p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")}) // the recorder at /rec/…: the page's Record toggle
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -109,6 +124,6 @@ func main() {
 		})
 		r.Database.Stop()
 	default:
-		log.Fatal("usage: clustervms worker|controller|console|resource")
+		log.Fatal("usage: clustervms worker|controller|recorder|reccontroller|console|resource")
 	}
 }

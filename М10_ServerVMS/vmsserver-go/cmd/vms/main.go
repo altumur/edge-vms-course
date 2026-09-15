@@ -1,10 +1,11 @@
-// vms worker|controller|console — the three processes, on one box.
+// vms worker|controller|recorder|reccontroller|console|resource — the processes, on one box.
 //
 //	PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
-//	SPOOL=/data/spool  ARCHIVE=/data/archive
-//	WORKER_NAME=w-1                  the slot to claim (systemd: %i); unset: NOMAD_ALLOC_INDEX → w-<index>;
+//	SPOOL=/data/spool  ARCHIVE=/data/archive   the recorder's two roots; the worker uses ARCHIVE for its events only
+//	SHM_DIR=/run/vms                 the worker's shared-memory fan-out branch, read by a recorder on this box
+//	WORKER_NAME=w-1 / RECORDER_NAME=r-1   the slot to claim (systemd: %i); unset: NOMAD_ALLOC_INDEX → w-<index>;
 //	                                 neither: the first free slot, a lapsed one first
-//	CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
+//	CAPACITY=50                      cameras this worker can hold (a recorder: recordings it can write) — exported as headroom
 //	CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
 package main
 
@@ -45,17 +46,39 @@ func main() {
 		}
 		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
 		vars = vars.AsWriter("vmsworker", "vms/epoch/*", "vms/slots/*")
-		res := vms.NewArchiveResource(spool, archive, 600, nil)
-		for _, pth := range res.ClosedInSpool(30, p.Wall()()) { // what the last instance closed but did not promote
-			res.Promote(pth, 0)
-		}
-		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
+		log.Println("no GStreamer in the Go port: the fake actuator holds nothing")
 		w, err := vms.NewVmsWorker(name, vars, objects, vms.NewFakeActuator(), vms.VmsWorkerOptions{Capacity: capacity, ArchiveRoot: archive})
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("worker %s (instance %s) claimed its slot", w.Name, w.Instance)
 		w.Run(2*time.Second, stop)
+	case "recorder": // the only writer of footage: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on THIS box's archive
+		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
+		vars = vars.AsWriter("vmsrecorder", "rec/epoch/*", "rec/slots/*")
+		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
+		r, err := vms.NewRecWorker(os.Getenv("RECORDER_NAME"), vars, objects, vms.NewFakeActuator(), vms.NewArchiveResource(spool, archive, 600, nil),
+			vms.VmsWorkerOptions{Capacity: capacity})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("recorder %s (instance %s) claimed its slot", r.Name, r.Instance)
+		r.Run(2*time.Second, stop)
+	case "reccontroller": // count = 1, the only writer of rec placement: recordings onto recorders whose resource answers, beside the camera's worker when there is room
+		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
+		vars = vars.AsWriter("vmsreccontroller", vms.RecSpec.ACLController()...)
+		ctl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")
+		for {
+			if _, err := ctl.EnsurePlaced(nil); err != nil {
+				log.Println("rec placement pass failed:", err)
+			}
+			ctl.Redistribute(nil)
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
 	case "controller": // count = 1, the only writer of placement; no HTTP — nothing asks it anything
 		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
 		vars = vars.AsWriter("vmscontroller", vms.Spec.ACLController()...)
@@ -74,10 +97,11 @@ func main() {
 		}
 	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
 		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...)
+		vars = vars.AsWriter("vmsconsole", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
-		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil)
+		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil,
+			p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")) // the recorder at /rec/…: the page's Record toggle
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -115,7 +139,7 @@ func main() {
 		r.Database.Stop()
 		srv.Close()
 	default:
-		log.Fatal("usage: vms worker|controller|console|resource")
+		log.Fatal("usage: vms worker|controller|recorder|reccontroller|console|resource")
 	}
 }
 

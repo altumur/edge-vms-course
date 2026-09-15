@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"clustervms/cluster"
+	p "vmsserver/psimplatform"
 	"vmsserver/vms"
 )
 
@@ -186,5 +187,97 @@ func TestTheLeaseStopsWritingBeforeTheReplacementMayStart(t *testing.T) {
 	eq(t, a.LeasePass(), []string{}) // renewal succeeds (nobody took the epoch)...
 	if !a.MayWrite("1") {            // ...and it may write again — it was never fenced
 		t.Fatal("renewed")
+	}
+}
+
+func TestThePowerPullMovesTheRecordingAndLeavesTheFootageWhereItWasWritten(t *testing.T) {
+	// Two subsystems fail over from one dead server, each by its own rule. The WORKER (`shared`): Nomad's
+	// replacement w-1 claims the slot on srv-b and holds the camera under the next epoch — the power pull.
+	// The RECORDER (`distinct` by default): a rescheduled r-1 on srv-b would idle beside r-2 by policy, so
+	// the rec controller moves the recording to the recorder that is there — beside w-1, by the affinity —
+	// and it re-subscribes through shared memory. The footage written on srv-a stays on srv-a's disks under
+	// e1 — unavailable until it returns, never rebuilt, never lost; the timeline names both.
+	c, ctl, _, _ := recording(t, 1)
+	rs := c.resources(nil)
+	rec := p.NewSpecController(vms.RecSpec, c.Vars.AsWriter("reccontroller", vms.RecSpec.ACLController()...), c.Objects, 0, c.Wall.Now, "")
+	eq(t, rec.Policy(), map[string]string{"servers": "distinct"}) // each subsystem's own default
+	eq(t, ctl.Policy(), map[string]string{"servers": "shared"})
+	r1, r2 := c.recorder(t, 1, "srv-a", 0), c.recorder(t, 2, "srv-b", 0)
+	r1.HeartbeatOnce()
+	r2.HeartbeatOnce()
+	p.NewSpecController(vms.RecSpec, c.Vars, c.Objects, 0, c.Wall.Now, "").Create(map[string]any{"cam": "1"}) // the operator: record camera 1
+	pls, _ := rec.EnsurePlaced(nil)
+	if pls[0].Worker != "r-1" || !strings.HasSuffix(pls[0].Reason, "beside w-1 holding it") { // the affinity: beside the camera's worker
+		t.Fatal(pls[0])
+	}
+	if acts := r1.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 1}) {
+		t.Fatal(acts)
+	}
+	started := r1.Act.(*vms.FakeActuator).Started[1]
+	if started.Source != vms.LiveShm(1, vms.ShmDir) || started.Via != "shm" || started.Epoch != 1 { // so it reads the worker's tee, not RTSP
+		t.Fatal(started)
+	}
+	r1.HeartbeatOnce()
+	tt := c.Wall.Now()
+	segment(t, c.Servers["srv-a"], 1, 1, tt-600, 600, 1000)
+	rs["srv-a"].Heartbeat()
+	eq(t, p.ResourcesSeen(c.Objects)["srv-a"].Units, map[string][]string{"rec": {"1"}}) // footage: the recorder's tree
+	// srv-a dies: w-1 and r-1 both silent, and so is srv-a's resource. Nomad's replacement w-1 comes up on srv-b
+	c.Wall.Advance(lostAfter + 3)
+	r2.HeartbeatOnce()
+	rs["srv-b"].Heartbeat()
+	rs["srv-c"].Heartbeat()
+	actB := vms.NewFakeActuator()
+	b := c.worker(t, 1, "srv-b", 0, actB)
+	if acts := b.ReconcileOnce(); b.Name != "w-1" || len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 1}) || actB.Epochs[1] != 2 { // the worker: Nomad's slot, the next epoch
+		t.Fatal(b.Name, acts, actB.Epochs)
+	}
+	b.HeartbeatOnce()
+	if len(rec.GoneServers(45)) != 0 || len(rec.Redistribute(nil)) != 0 { // the recorder: one lostAfter is a crash, not a server
+		t.Fatal("moved early")
+	}
+	if acts := r2.ReconcileOnce(); len(acts) != 0 || len(r2.Rows) != 0 { // r-2 has nothing yet
+		t.Fatal(acts)
+	}
+	c.Wall.Advance(lostAfter + 3)
+	b.HeartbeatOnce()
+	r2.HeartbeatOnce()
+	rs["srv-b"].Heartbeat()
+	rs["srv-c"].Heartbeat()
+	eq(t, rec.GoneServers(45), map[string]string{"r-1": "srv-a"})
+	moves := rec.Redistribute(nil)
+	if len(moves) != 1 || moves[0].From != "r-1" || moves[0].To != "r-2" {
+		t.Fatal(moves)
+	}
+	pl := rec.Placement("1")
+	if !strings.HasPrefix(pl.Reason, "server srv-a gone: slot r-1 lapsed and its resource silent; ") || !strings.HasSuffix(pl.Reason, "; on srv-b, beside w-1 holding it") {
+		t.Fatal(pl.Reason)
+	}
+	if acts := r2.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 1}) { // w-1 came back on srv-b too: shared memory again
+		t.Fatal(acts)
+	}
+	st2 := r2.Act.(*vms.FakeActuator).Started[1]
+	if st2.Source != vms.LiveShm(1, vms.ShmDir) || st2.Epoch != 2 {
+		t.Fatal(st2)
+	}
+	r2.HeartbeatOnce()
+	if st := rec.WorkersSeen(45)["r-2"].Status[0]; st["via"] != "shm" || rec.Where("1") != "r-2" {
+		t.Fatal(st, rec.Where("1"))
+	}
+	eq(t, vms.LiveURL("srv-b", 1), "rtsp://srv-b:8554/1") // what r-2 would read had w-1 landed on srv-c
+	// the timeline: e1 on srv-a unavailable by name; e2 will be on srv-b — and srv-a's footage comes back with its disks
+	tl := cluster.MergedTimeline(p.ResourcesSeen(c.Objects), dirReader{c}, 1, tt-2000, tt+1, 2, c.Wall.Now(), 45)
+	if len(tl.Segments) != 0 || len(tl.Unreachable) != 1 || tl.Unreachable[0] != "srv-a" || !strings.Contains(tl.Note, "not lost") {
+		t.Fatal(tl)
+	}
+	rs["srv-a"].Heartbeat()
+	tl = cluster.MergedTimeline(p.ResourcesSeen(c.Objects), dirReader{c}, 1, tt-2000, tt+1, 2, c.Wall.Now(), 45)
+	if len(tl.Segments) != 1 || tl.Segments[0].Server != "srv-a" || tl.Segments[0].Epoch != 1 || !tl.Segments[0].Fenced || len(tl.Unreachable) != 0 {
+		t.Fatal(tl)
+	}
+	a2 := c.recorder(t, 1, "srv-a", 0)
+	a2.HeartbeatOnce()
+	if acts := a2.ReconcileOnce(); a2.Name != "r-1" || len(acts) != 0 || len(rec.Redistribute(nil)) != 0 || rec.Where("1") != "r-2" { // a place to record returned; nothing moves back
+		t.Fatal(a2.Name, acts)
 	}
 }

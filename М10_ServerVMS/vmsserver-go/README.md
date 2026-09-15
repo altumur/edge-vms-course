@@ -21,24 +21,30 @@ vmsserver-go/
                                the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers an Extra for its own routes
   vms/                         the VMS — a subsystem
     vms.subsystem.yaml         the VMS's controller, as a spec — embedded into the binary (go:embed); the same file the Python package reads
-    config.go                  Camera, the typed view of a spec row; Row / ItemsOf through the spec
+    config.go                  Spec and RecSpec (vms.subsystem.yaml, rec.subsystem.yaml); Camera, the typed view of a row — the worker's camera
+                               or the recorder's recording; LiveURL / LiveShm, the worker's two fan-out branches
     reconciler.go              М9 Lesson 6's loop: Reconcile, Lost, Clear, Status
-    archive.go                 SegmentPath / Parse, Manifest (Read / Buckets / Rewrite / Timeline), ArchiveResource (Promote,
-                               CloseBuckets, Repair, Retain), ArchivePolicy — the hook the VMS registers with the resource
+    archive.go                 two trees: rec/<cam>/ media (SegmentPath / Parse, Manifest — Read / Rewrite / Timeline, media only —
+                               ArchiveResource: Promote, Repair, Retain) and vms/<cam>/ events (EventLogFor); ArchivePolicy — the rec hook the
+                               recorder registers with the resource, retention by rec/recordings/<cam>
     worker.go                  VmsWorker: the slot, server, labels and capacity from the environment (a box or an allocation); the gate (an epoch
-                               per start), LeasePass, Fence, Observe, PumpOnce, Status, Headroom, Run
+                               per start); holds the camera — live_url and live_shm in its status, events, no footage; LeasePass, Fence,
+                               Observe, PumpOnce, Status, Headroom, Run; the hooks (Enrich, StatusExtra, BeforePass, AfterPump) the recorder fills
+    recorder.go                RecWorker: VmsWorker over rec/recordings/*; Source from the VMS heartbeat — shm:// on the same server, rtsp://
+                               elsewhere; Resubscribe when the camera's holder moves; PromoteClosed; rec_recordings_running
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
-    console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> and /segment/<path> with Range
-    resource.go                the resource process: NewVmsResource — the platform's Resource with ArchivePolicy registered and an EventDatabase attached; ResourceRoutes
+    console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> and /segment/<path> with Range;
+                               the recorder mounted at /rec/… (psimplatform.Mount)
+    resource.go                the resource process: NewVmsResource — the platform's Resource with the recorder's ArchivePolicy registered and an EventDatabase attached; ResourceRoutes
                                (/manifest, /segment) — the same function clustervms-go runs as the resource job
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
-  cmd/vms/main.go              vms worker|controller|console|resource — the box's processes, with the fake actuator
-  *_test.go                    44 tests, in the packages they test; -race clean
+  cmd/vms/main.go              vms worker|controller|recorder|reccontroller|console|resource — the box's processes, with the fake actuator
+  *_test.go                    46 tests, in the packages they test; -race clean
 ```
 
 ```bash
-go test ./...                    # 44 tests, ~130 ms
+go test ./...                    # 46 tests, ~150 ms
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```

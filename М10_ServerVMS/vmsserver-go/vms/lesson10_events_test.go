@@ -1,6 +1,6 @@
 package vms_test
 
-// Lesson 9 — events: the database that is a cache. The resource PROCESS keeps
+// Lesson 10 — events: the database that is a cache. The resource PROCESS keeps
 // a database over its own tree and serves it; the console holds none and
 // asks. The worker's `silent` and the operator's `mark` on one camera's
 // timeline (the Go port has no detector yet); a restarted database rebuilds
@@ -49,7 +49,7 @@ func TestEventsReachTheTimelineThroughTheResourceProcessAndTheConsole(t *testing
 	if seen := p.ResourcesSeen(box.Objects); len(seen) != 1 || seen["srv-1"].URL != res.URL { // the console finds the resource by its heartbeat
 		t.Fatal(seen)
 	}
-	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now) // no database here: MergedIndex asks srv-1
+	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now, nil) // no database here: MergedIndex asks srv-1
 	if err != nil {
 		t.Fatal(err)
 	}

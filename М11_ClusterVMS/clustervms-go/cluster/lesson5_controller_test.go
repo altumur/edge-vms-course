@@ -17,6 +17,7 @@ import (
 
 	"clustervms/cluster"
 	p "vmsserver/psimplatform"
+	"vmsserver/vms"
 )
 
 func threeWorkers(t *testing.T, c *Cluster) map[string]*cluster.ClusterWorker {
@@ -170,7 +171,7 @@ func TestAWorkerRunsWhereAResourceAnswersAndLeavesWhenItStops(t *testing.T) {
 		t.Fatal(r)
 	}
 	// the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
-	sv := cluster.NewConsole(ctl, cluster.ConsoleOptions{}).Servers()["servers"].(map[string]any)
+	sv := cluster.NewConsole(ctl, cluster.ConsoleOptions{}).Root.Servers()["servers"].(map[string]any)
 	sa, sb := sv["srv-a"].(map[string]any), sv["srv-b"].(map[string]any)
 	if sa["resource"] != "silent" || sa["placeable"] != false || sa["why"] != "resource on srv-a silent" || sa["archive"] != "/data/archive" {
 		t.Fatal(sa)
@@ -233,7 +234,8 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	c := newCluster()
 	ctl := c.controller(0, "")
 	ws := threeWorkers(t, c)
-	srv, ln, err := cluster.Serve(ctl, "127.0.0.1:0", cluster.ConsoleOptions{WorstFailover: 48.0, ArchiveRoot: c.Servers["srv-a"].Archive})
+	recCon := p.NewSpecController(vms.RecSpec, c.Vars.AsWriter("console", vms.RecSpec.ACLConsole()...), c.Objects, 0, c.Wall.Now, "") // the console's door to recordings
+	srv, ln, err := cluster.Serve(ctl, "127.0.0.1:0", cluster.ConsoleOptions{WorstFailover: 48.0, ArchiveRoot: c.Servers["srv-a"].Archive, RecCtl: recCon})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +268,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 		t.Fatal(out)
 	}
 	_, out = call(t, "GET", base+"/metrics", nil, nil)
-	if !strings.Contains(out, `vms_failover_seconds{kind="worst"} 48.0`) || !strings.Contains(out, "vms_workers_live 3") || !strings.Contains(out, "vms_cameras_recording 1") {
+	if !strings.Contains(out, `vms_failover_seconds{kind="worst"} 48.0`) || !strings.Contains(out, "vms_workers_live 3") || !strings.Contains(out, "vms_cameras_running 1") {
 		t.Fatal(out)
 	}
 	if st, out := call(t, "GET", base+"/resources", nil, nil); st != 200 || out != "{}" {
@@ -274,6 +276,34 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	}
 	if _, out := call(t, "GET", base+"/unplaceable", nil, nil); out != "[]" {
 		t.Fatal(out)
+	}
+	// the recorder at /rec/…: the page's Record toggle writes a recording row; placement is the rec controller's, not the console's
+	var mounts map[string]any
+	_, out = call(t, "GET", base+"/mounts", nil, nil)
+	json.Unmarshal([]byte(out), &mounts)
+	if mounts["root"] != "vms" || mounts["mounts"].(map[string]any)["rec"] == nil {
+		t.Fatal(out)
+	}
+	st, out = call(t, "POST", base+"/rec/recordings", map[string]any{"cam": "1", "retention_days": 7}, map[string]string{"Idempotency-Key": "r1"})
+	var recRow map[string]any
+	json.Unmarshal([]byte(out), &recRow)
+	if st != 201 || recRow["worker"] != nil {
+		t.Fatal(st, out)
+	}
+	if it, _, _ := c.Vars.Get("rec/recordings/1"); it["retention_days"] != "7" {
+		t.Fatal(it)
+	}
+	var pol map[string]any
+	_, out = call(t, "GET", base+"/rec/policy", nil, nil)
+	json.Unmarshal([]byte(out), &pol)
+	if pol["servers"] != "distinct" { // the recorder's own knob
+		t.Fatal(out)
+	}
+	if st, _ := call(t, "PUT", base+"/rec/recordings/1", map[string]any{"worker": "r-0"}, nil); st != 400 {
+		t.Fatal(st)
+	}
+	if st, _ := call(t, "DELETE", base+"/rec/recordings/1", nil, nil); st != 200 && st != 204 {
+		t.Fatal(st)
 	}
 	// srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
 	segment(t, c.Servers["srv-a"], 1, 1, c.Wall.Now()-600, 600, 256)

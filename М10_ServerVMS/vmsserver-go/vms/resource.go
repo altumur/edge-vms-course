@@ -7,7 +7,7 @@ package vms
 // It has no controller: it has a policy pass on a timer, a heartbeat, its
 // HTTP, and the event database over its own tree. What the VMS adds:
 //
-//	ArchivePolicy    registered as the "vms" hook: repair the manifests, close buckets into them, retain media
+//	ArchivePolicy    registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<cam>
 //	ResourceRoutes   GET /manifest/<cam>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
 //
 // The platform's part — platform/resources/<server>/heartbeat, GET /events
@@ -89,7 +89,7 @@ func NewVmsResource(archive *ArchiveResource, server, url string, vars p.Variabl
 		wall = archive.Wall
 	}
 	r := p.NewResource(archive.Root, server, url, vars, objects, archive.BucketSeconds, wall, peers)
-	r.Register("vms", &ArchivePolicy{Res: archive, Vars: vars})
+	r.Register("rec", &ArchivePolicy{Res: archive, Vars: vars}) // footage is the recorder's: rec/<cam>/…, rec/recordings/<cam>
 	r.Database = p.NewEventDatabase(archive.Root, server, wall, archive.BucketSeconds)
 	return r
 }

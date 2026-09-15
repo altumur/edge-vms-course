@@ -1,6 +1,6 @@
 package vms_test
 
-// Lesson 5 — vmscontroller: the only writer; refusals; placement with its
+// Lesson 6 — vmscontroller: the only writer; refusals; placement with its
 // property tests; two controllers; the read model; the failure arithmetic.
 
 import (
@@ -44,7 +44,7 @@ func TestCRUDByCASAndWhatItRefuses(t *testing.T) {
 	if r.ID != 1 || r.Revision != 1 || ctl.Camera(1).Name != "gate" {
 		t.Fatal(r)
 	}
-	if u, _ := ctl.UpdateCamera(1, map[string]any{"retention_days": 14}); u.Revision != 2 {
+	if u, _ := ctl.UpdateCamera(1, map[string]any{"events_retention_days": 14}); u.Revision != 2 {
 		t.Fatal(u)
 	}
 	for _, bad := range []map[string]any{{"worker": "w-1"}, {"revision": 9}, {"phase": "running"}, {"epoch": 3}, {"placement": map[string]any{}}} {
@@ -317,7 +317,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	con := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now) // what the console process holds
 	w := worker(t, box, "w-1", vms.NewFakeActuator(), vms.VmsWorkerOptions{Server: "srv-1"})
 	w.HeartbeatOnce()
-	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now)
+	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if _, wh, _ := call(t, "GET", base+"/where/1", nil, nil); wh["worker"] != "w-1" {
 		t.Fatal(wh)
 	}
-	if _, _, raw := call(t, "GET", base+"/metrics", nil, nil); !strings.Contains(string(raw), "vms_cameras_recording 1") {
+	if _, _, raw := call(t, "GET", base+"/metrics", nil, nil); !strings.Contains(string(raw), "vms_cameras_running 1") {
 		t.Fatal(string(raw))
 	}
 	// an operator's mark is the CONSOLE's event: its own bucket, never a worker's
@@ -385,7 +385,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	_, _, raw := call(t, "GET", base+"/timeline/1", nil, nil)
 	var tl []map[string]any
 	json.Unmarshal(raw, &tl)
-	if len(tl) != 1 || tl[0]["media"] != "vms/1/e1/20260912T100000Z.mp4" {
+	if len(tl) != 1 || tl[0]["media"] != "rec/1/e1/20260912T100000Z.mp4" {
 		t.Fatal(string(raw))
 	}
 	req, _ := http.NewRequest("GET", base+"/segment/"+tl[0]["media"].(string), nil)
@@ -424,8 +424,8 @@ func TestARetryThatLandsOnAnotherConsoleIsOneCamera(t *testing.T) {
 	box := testbox.NewBox()
 	a := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
 	b := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
-	s1, l1, _ := vms.Serve(a, nil, "127.0.0.1:0", box.Wall.Now)
-	s2, l2, _ := vms.Serve(b, nil, "127.0.0.1:0", box.Wall.Now)
+	s1, l1, _ := vms.Serve(a, nil, "127.0.0.1:0", box.Wall.Now, nil)
+	s2, l2, _ := vms.Serve(b, nil, "127.0.0.1:0", box.Wall.Now, nil)
 	defer s1.Close()
 	defer s2.Close()
 	b1, b2 := "http://"+l1.Addr().String(), "http://"+l2.Addr().String()

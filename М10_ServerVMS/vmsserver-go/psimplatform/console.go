@@ -729,3 +729,72 @@ func (c *SpecConsole) Serve(addr string) (*http.Server, net.Listener, error) {
 	go srv.Serve(ln)
 	return srv, ln, nil
 }
+
+// Mount: one console process, several subsystems. The root console answers
+// at `/` (the page, `/<rows>`, its extras); every other subsystem is a path:
+// `/rec/spec`, `/rec/recordings`, `/rec/metrics` — the same class over that
+// subsystem's spec with the console's token. `/mounts` names what the
+// process fronts. A new subsystem is a YAML, a worker, and a path.
+type Mount struct {
+	Root   *SpecConsole
+	Mounts map[string]*SpecConsole
+	names  []string
+}
+
+func NewMount(root *SpecConsole) *Mount {
+	return &Mount{Root: root, Mounts: map[string]*SpecConsole{}}
+}
+
+func (m *Mount) Add(name string, c *SpecConsole) *Mount {
+	if _, have := m.Mounts[name]; !have {
+		m.names = append(m.names, name)
+	}
+	m.Mounts[name] = c
+	return m
+}
+
+func (m *Mount) Describe() map[string]any {
+	mounts := map[string]any{}
+	for _, n := range m.names {
+		mounts[n] = m.Mounts[n].Describe()
+	}
+	return map[string]any{"root": m.Root.Spec.Name, "mounts": mounts}
+}
+
+func (m *Mount) Handler() http.Handler {
+	root := m.Root.Handler()
+	handlers := map[string]http.Handler{}
+	for n, c := range m.Mounts {
+		handlers[n] = c.Handler()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/mounts" {
+			SendJSON(w, 200, m.Describe())
+			return
+		}
+		parts := strings.SplitN(req.URL.Path, "/", 3)
+		if len(parts) >= 2 {
+			if h, ok := handlers[parts[1]]; ok {
+				rest := "/"
+				if len(parts) > 2 {
+					rest += parts[2]
+				}
+				r2 := req.Clone(req.Context())
+				r2.URL.Path = rest
+				h.ServeHTTP(w, r2)
+				return
+			}
+		}
+		root.ServeHTTP(w, req)
+	})
+}
+
+func (m *Mount) Serve(addr string) (*http.Server, net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	srv := &http.Server{Handler: m.Handler()}
+	go srv.Serve(ln)
+	return srv, ln, nil
+}

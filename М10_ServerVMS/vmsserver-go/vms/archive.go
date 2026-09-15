@@ -1,16 +1,17 @@
 package vms
 
-// The archive as a resource — server-bound, no controller, a policy.
+// The archive as a resource — server-bound, no controller, a policy. Two
+// trees for one camera, two writers, two epochs:
 //
-//	<spool>/vms/<cam>/e<epoch>/<start>Z.mp4        the open segment, and closed ones not yet promoted
-//	<archive>/vms/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media
-//	<archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl   the camera's EVENT BUCKETS (the platform's event log)
-//	<archive>/vms/<cam>/manifest.jsonl             one line per media segment and one per closed event bucket
+//	<spool>/rec/<cam>/e<epoch>/<start>Z.mp4        the open segment, and closed ones not yet promoted — the RECORDER's
+//	<archive>/rec/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media, under the recorder's epoch
+//	<archive>/rec/<cam>/manifest.jsonl             one line per media segment; media only
+//	<archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl   the camera's EVENT BUCKETS — the WORKER's, under its epoch (the platform's event log)
 //
-// The archive's unit is a TIME SPAN under an epoch, not a media file. The
-// acknowledgement order is М9 Lesson 4's: a closed segment is PROMOTED
-// (renamed into the archive, then a manifest line appended), and the spool
-// copy is gone only after that.
+// The manifest indexes media; the resource's event database indexes the
+// buckets. The acknowledgement order is М9 Lesson 4's: a closed segment is
+// PROMOTED (renamed into the archive, then a manifest line appended), and
+// the spool copy is gone only after that.
 
 import (
 	"bufio"
@@ -29,7 +30,10 @@ import (
 	p "vmsserver/psimplatform"
 )
 
-const Sub = "vms"
+const (
+	Sub       = "rec" // footage: the recorder's tree and epoch
+	EventsSub = "vms" // events: the worker's tree and epoch
+)
 
 var (
 	segmentRe  = regexp.MustCompile(`^(\d{8}T\d{6}Z)\.mp4$`)
@@ -66,9 +70,9 @@ func Parse(path, root string) (cam, epoch int, start time.Time, ok bool) {
 }
 
 // EventLogFor is the camera's event log on this resource: what the worker
-// holding the camera's epoch writes into, recording or not.
+// holding the camera's epoch writes into, recorded or not — vms/<cam>/e<epoch>/.
 func EventLogFor(root string, cam, epoch, bucketSeconds int) *p.EventLog {
-	return p.NewEventLog(root, Sub, strconv.Itoa(cam), epoch, bucketSeconds)
+	return p.NewEventLog(root, EventsSub, strconv.Itoa(cam), epoch, bucketSeconds)
 }
 
 type Segment struct {
@@ -94,21 +98,16 @@ func SegmentFromLine(line string) (Segment, error) {
 	return Segment{int(p.ToFloat(d["cam"])), int(p.ToFloat(d["epoch"])), p.ToFloat(d["start"]), p.ToFloat(d["end"]), path, int64(p.ToFloat(d["bytes"]))}, nil
 }
 
-// Span is one entry of a timeline: a media segment, or an event bucket with no media.
+// Span is one entry of a timeline: a media segment under the recorder's epoch.
 type Span struct {
 	Start, End float64
-	Media      string // "" for a watched, not recorded span
+	Media      string
 	Epoch      int
-	Events     int
 	Fenced     bool
 }
 
 func (s Span) ToMap() map[string]any {
-	var media any
-	if s.Media != "" {
-		media = s.Media
-	}
-	return map[string]any{"start": s.Start, "end": s.End, "media": media, "epoch": s.Epoch, "events": s.Events, "fenced": s.Fenced}
+	return map[string]any{"start": s.Start, "end": s.End, "media": s.Media, "epoch": s.Epoch, "fenced": s.Fenced}
 }
 
 // Manifest: per camera, append-only, beside the footage.
@@ -150,65 +149,24 @@ func (m *Manifest) Lines() []string {
 	return out
 }
 
-func kindOf(line string) string {
-	var d struct {
-		Kind string `json:"kind"`
-	}
-	json.Unmarshal([]byte(line), &d)
-	if d.Kind == "" {
-		return "media"
-	}
-	return d.Kind
-}
-
-// Read: the media lines — what a player needs.
+// Read: the media lines — what a player needs. The manifest holds nothing else.
 func (m *Manifest) Read() []Segment {
 	out := []Segment{}
 	for _, l := range m.Lines() {
-		if kindOf(l) == "media" {
-			if s, err := SegmentFromLine(l); err == nil {
-				out = append(out, s)
-			}
+		if s, err := SegmentFromLine(l); err == nil && s.Path != "" {
+			out = append(out, s)
 		}
 	}
 	return out
 }
 
-// Buckets: the closed event buckets — what an index needs.
-func (m *Manifest) Buckets() []p.Bucket {
-	out := []p.Bucket{}
-	for _, l := range m.Lines() {
-		if kindOf(l) == "events" {
-			if b, err := p.BucketFromLine(l); err == nil {
-				out = append(out, b)
-			}
-		}
-	}
-	return out
-}
-
-type entry struct {
-	start float64
-	epoch int
-	line  string
-}
-
-func (m *Manifest) Rewrite(segs []Segment, buckets []p.Bucket) error {
-	if buckets == nil {
-		buckets = m.Buckets()
-	}
-	var es []entry
-	for _, s := range segs {
-		es = append(es, entry{s.Start, s.Epoch, s.Line()})
-	}
-	for _, b := range buckets {
-		es = append(es, entry{b.Start, b.Epoch, b.Line()})
-	}
+func (m *Manifest) Rewrite(segs []Segment) error {
+	es := append([]Segment{}, segs...)
 	sort.SliceStable(es, func(i, j int) bool {
-		if es[i].start != es[j].start {
-			return es[i].start < es[j].start
+		if es[i].Start != es[j].Start {
+			return es[i].Start < es[j].Start
 		}
-		return es[i].epoch < es[j].epoch
+		return es[i].Epoch < es[j].Epoch
 	})
 	os.MkdirAll(filepath.Dir(m.Path), 0o755)
 	f, err := os.Create(m.Path + ".tmp")
@@ -216,37 +174,21 @@ func (m *Manifest) Rewrite(segs []Segment, buckets []p.Bucket) error {
 		return err
 	}
 	for _, e := range es {
-		io.WriteString(f, e.line+"\n")
+		io.WriteString(f, e.Line()+"\n")
 	}
 	f.Close()
 	return os.Rename(m.Path+".tmp", m.Path)
 }
 
-// Timeline: spans overlapping [t0, t1) — media segments, and event buckets
-// with no media (the camera was watched, not recorded). Each marked fenced
-// if its epoch is older than the current (0 = unknown).
+// Timeline: media spans overlapping [t0, t1), each marked fenced if its
+// epoch is older than the recorder's current one (0 = unknown). Events are
+// not here: the resource's event database has them, and the console draws
+// them over these spans.
 func (m *Manifest) Timeline(t0, t1 float64, currentEpoch int) []Span {
 	var out []Span
 	for _, s := range m.Read() {
 		if s.End > t0 && s.Start < t1 {
-			out = append(out, Span{s.Start, s.End, s.Path, s.Epoch, 0, currentEpoch > 0 && s.Epoch < currentEpoch})
-		}
-	}
-	for _, b := range m.Buckets() {
-		if !(b.End > t0 && b.Start < t1) {
-			continue
-		}
-		hit := -1
-		for i, o := range out {
-			if o.Media != "" && o.Epoch == b.Epoch && o.Start < b.End && b.Start < o.End {
-				hit = i
-				break
-			}
-		}
-		if hit >= 0 {
-			out[hit].Events += b.Events // events during a recorded span: count them on it
-		} else {
-			out = append(out, Span{b.Start, b.End, "", b.Epoch, b.Events, currentEpoch > 0 && b.Epoch < currentEpoch})
+			out = append(out, Span{s.Start, s.End, s.Path, s.Epoch, currentEpoch > 0 && s.Epoch < currentEpoch})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -330,27 +272,7 @@ func move(src, dest string) error {
 	return os.Remove(src)
 }
 
-// CloseBuckets: event buckets whose span is over and that nobody has
-// written to for the grace get their manifest line.
-func (a *ArchiveResource) CloseBuckets(now, graceSeconds float64) []p.Bucket {
-	closed := []p.Bucket{}
-	for _, cam := range a.Cameras() {
-		man := NewManifest(a.Root, cam)
-		known := map[string]bool{}
-		for _, b := range man.Buckets() {
-			known[b.Path] = true
-		}
-		for _, b := range p.BucketsUnder(a.Root, Sub, strconv.Itoa(cam), a.BucketSeconds) {
-			if known[b.Path] || b.End > now || now-mtime(filepath.Join(a.Root, b.Path)) < graceSeconds {
-				continue
-			}
-			man.Append(b)
-			closed = append(closed, b)
-		}
-	}
-	return closed
-}
-
+// Cameras: the cameras with a rec/ tree — recorded, now or once.
 func (a *ArchiveResource) Cameras() []int {
 	ents, err := os.ReadDir(filepath.Join(a.Root, Sub))
 	if err != nil {
@@ -417,41 +339,17 @@ func (a *ArchiveResource) Repair() RepairReport {
 				rep.Dropped++
 			}
 		}
-		// event buckets: every CLOSED bucket on disk is a line; a line whose file is gone is dropped
-		known := map[string]bool{}
-		for _, b := range man.Buckets() {
-			known[b.Path] = true
-		}
-		onDisk := map[string]bool{}
-		var closed []p.Bucket
-		for _, b := range p.BucketsUnder(a.Root, Sub, strconv.Itoa(cam), a.BucketSeconds) {
-			if b.End <= a.Wall() {
-				closed = append(closed, b)
-				onDisk[b.Path] = true
-				if !known[b.Path] {
-					rep.Added++
-				}
-			}
-		}
-		for pth := range known {
-			if !onDisk[pth] {
-				rep.Dropped++
-			}
-		}
 		var segs []Segment
 		for _, s := range lines {
 			segs = append(segs, s)
 		}
-		if closed == nil {
-			closed = []p.Bucket{}
-		}
-		man.Rewrite(segs, closed)
+		man.Rewrite(segs)
 	}
 	return rep
 }
 
 // Retain: delete media older than days — the file first, then the line.
-// The buckets are the platform's to retain.
+// The buckets are the platform's to retain, by the VMS row's events_retention_days.
 func (a *ArchiveResource) Retain(cam int, days, now float64) int {
 	cutoff := now - days*86400
 	man := NewManifest(a.Root, cam)
@@ -466,7 +364,7 @@ func (a *ArchiveResource) Retain(cam int, days, now float64) int {
 		}
 	}
 	if removed > 0 {
-		man.Rewrite(keep, nil)
+		man.Rewrite(keep)
 	}
 	return removed
 }
@@ -486,9 +384,10 @@ func (a *ArchiveResource) Usage() int64 {
 	return total
 }
 
-// ArchivePolicy is what the VMS registers with the platform's resource job:
-// repair the manifests, close the buckets into them, retain media per camera
-// from the camera rows.
+// ArchivePolicy is what the RECORDER registers with the platform's resource
+// job (the "rec" hook): repair the manifests, retain media per camera from
+// the recording rows (rec/recordings/<cam>, retention_days; 30 for a camera
+// with no row).
 type ArchivePolicy struct {
 	Res  *ArchiveResource
 	Vars p.Variables
@@ -496,15 +395,14 @@ type ArchivePolicy struct {
 
 func (ap *ArchivePolicy) Pass(now float64) map[string]any {
 	rep := ap.Res.Repair()
-	closed := len(ap.Res.CloseBuckets(now, 30))
 	removed := 0
 	for _, cam := range ap.Res.Cameras() {
-		items, _, _ := ap.Vars.Get(Sub + "/cameras/" + strconv.Itoa(cam))
+		items, _, _ := ap.Vars.Get(Sub + "/recordings/" + strconv.Itoa(cam))
 		days := 30
 		if items != nil {
 			days = atoiDef(items["retention_days"], 30)
 		}
 		removed += ap.Res.Retain(cam, float64(days), now)
 	}
-	return map[string]any{"added": rep.Added, "dropped": rep.Dropped, "closed": closed, "media_removed": removed}
+	return map[string]any{"added": rep.Added, "dropped": rep.Dropped, "media_removed": removed}
 }

@@ -89,6 +89,20 @@ func (c *Cluster) worker(t testing.TB, index int, server string, capacity int, a
 	return w
 }
 
+// recorder: a recorder allocation on `server` — writes into THAT server's archive resource.
+func (c *Cluster) recorder(t testing.TB, index int, server string, capacity int) *cluster.ClusterRecorder {
+	t.Helper()
+	if capacity == 0 {
+		capacity = 50
+	}
+	r, err := cluster.NewClusterRecorder(c.Vars.AsWriter("vmsrecorder", "rec/epoch/*", "rec/slots/*"), c.Objects, vms.NewFakeActuator(),
+		c.Servers[server].Resource, c.env(index, server, ""), vms.VmsWorkerOptions{WorkerOptions: p.WorkerOptions{Clock: c.Clock.Now, Wall: c.Wall.Now}, Capacity: capacity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func (c *Cluster) controller(capacity int, name string) *cluster.ClusterController {
 	return cluster.NewClusterController(c.Vars, c.Objects, capacity, c.Wall.Now, name)
 }
