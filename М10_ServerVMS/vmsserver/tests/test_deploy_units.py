@@ -38,7 +38,7 @@ def test_the_units_run_the_entrypoints_the_package_has():
         assert u["Container"]["Exec"] == f"python3 -m vms {entry}"
         assert u["Container"]["EnvironmentFile"] == "/data/config/vms.env"             # the data partition, never a rootfs slot
         for vol in (u["Container"]["Volume"] if isinstance(u["Container"]["Volume"], list) else [u["Container"]["Volume"]]):
-            assert vol.startswith("/data/"), vol
+            assert vol.startswith("/data/") or vol.startswith("/run/vms:"), vol           # /run/vms: the shared-memory sockets — a tmpfs, not state
 
 
 def test_who_may_write_where_is_in_the_mounts_too():
@@ -53,6 +53,7 @@ def test_who_may_write_where_is_in_the_mounts_too():
     assert vols("vmsrecorder@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
     assert vols("vmsrecorder@.container")["/data/archive"] == "/data/archive:z"
     assert "/data/media" not in vols("vmsrecorder@.container")                          # it never reads a camera: it subscribes to the fan-out
+    assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("vmsrecorder@.container")["/run/vms"]   # the tee's shared memory: written by the worker, read by the recorder beside it
     assert "/data/archive" not in vols("vmsreccontroller.container")
     assert vols("vmsresource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
     assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records

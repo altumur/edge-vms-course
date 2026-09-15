@@ -32,6 +32,10 @@ job "vmsrecorder" {
       attribute = "${meta.archive}"
       operator  = "is_set"
     }
+    # `near: vms` in rec.subsystem.yaml: the rec controller prefers the recorder on the server whose worker holds the
+    # camera — there it reads the worker's tee through shared memory (/run/vms) instead of the RTSP fan-out. An
+    # affinity, never a filter: no room beside the worker and the recording goes elsewhere, over RTSP, and the
+    # placement reason says so ("away from w-1 on srv-a (no room there)").
     # spread, not distinct_hosts: a dead server's recorder comes back on a neighbour — and idles there by
     # default, because `rec/policy {servers: distinct}`: a second recorder on the same disks is no second
     # place to record. The rec CONTROLLER moves the dead server's recordings to a server whose resource
@@ -56,7 +60,7 @@ job "vmsrecorder" {
         image        = "localhost/clustervms:latest"
         network_mode = "host"                        # it subscribes to workers' RTSP fan-outs, on this server or elsewhere
         args         = ["python3", "-m", "cluster", "recorder"]
-        volumes      = ["/data/spool:/data/spool", "/data/archive:/data/archive"]   # the only writer of segments; no /data/media: it never reads a camera
+        volumes      = ["/data/spool:/data/spool", "/data/archive:/data/archive", "/run/vms:/run/vms"]   # the only writer of segments; no /data/media: it never reads a camera; /run/vms: the workers' shared memory on this server
       }
       env {
         OBJECTS   = "variables://objects"

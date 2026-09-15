@@ -62,7 +62,7 @@ job "vmsworker" {
         image        = "localhost/clustervms:latest"
         network_mode = "host"
         args         = ["python3", "-m", "cluster", "worker"]
-        volumes      = ["/data/archive:/data/archive", "/data/media:/data/media"]   # no spool: it writes events, never segments
+        volumes      = ["/data/archive:/data/archive", "/data/media:/data/media", "/run/vms:/run/vms"]   # no spool: it writes events, never segments; /run/vms: the tee's shared-memory branch for subscribers on this server
       }
       env {
         OBJECTS   = "variables://objects"          # heartbeats and the snapshot as Variables; no MinIO on this cluster

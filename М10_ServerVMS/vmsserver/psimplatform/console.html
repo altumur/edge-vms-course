@@ -574,7 +574,7 @@ async function loadRec() {
   const d = await (await fetch('/rec/recordings')).json();
   const row = (d.rows || []).find(r => String(r.id) === String(current)) || (d.configured || []).find(r => String(r.id) === String(current));
   $('#recstart').style.display = row ? 'none' : 'flex'; $('#recstop').style.display = row ? '' : 'none';
-  $('#recstate').textContent = row ? `${row.phase || 'placed'}${row.why ? ' · ' + row.why : ''}${row.worker ? ' · ' + row.worker + (row.server ? ' on ' + row.server : '') : ' · unplaced'} · keep ${row.retention_days} days`
+  $('#recstate').textContent = row ? `${row.phase || 'placed'}${row.why ? ' · ' + row.why : ''}${row.worker ? ' · ' + row.worker + (row.server ? ' on ' + row.server : '') : ' · unplaced'}${row.via ? ' · via ' + row.via : ''} · keep ${row.retention_days} days`
                                    : 'not recorded — watched: live, detectors and events only';
 }
 $('#recstart').onsubmit = async e => {

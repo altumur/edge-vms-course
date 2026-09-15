@@ -93,7 +93,7 @@ from psimplatform.variables import Variables
 
 from psimplatform.events import EventLog
 
-from .config import live_url, row
+from .config import SHM_DIR, live_shm, live_url, row
 from .reconciler import CONVERGED, Reconciler
 
 log = logging.getLogger("vmsworker")
@@ -210,6 +210,7 @@ class VmsWorker(Worker):
         super().__init__(self.SUB, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
         self.claim_slot(prefer=name if name is not None else slot_from_environment(env, self.NAME_ENV, self.SLOT_PREFIX))
         self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource: where its events go
+        self.shm_dir = env.get("SHM_DIR", SHM_DIR)                                 # the tee's shared-memory branch, for subscribers on this server
         self.bucket_seconds = bucket_seconds
         self.observed: list[tuple[int, float, str]] = []
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
@@ -285,7 +286,7 @@ class VmsWorker(Worker):
     # What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`) and the loopback
     # port the fan-out server listens on. `None` means "cannot start now".
     def enrich(self, cam: dict) -> dict | None:
-        return dict(cam, live_url=live_url(self.server, cam["id"]), live_port=live_port(cam["id"]))
+        return dict(cam, live_url=live_url(self.server, cam["id"]), live_port=live_port(cam["id"]), live_shm=live_shm(cam["id"], self.shm_dir))
 
     # Seconds since start on the monotonic clock — the reconciler's `now` for backoff.
     def now(self) -> float:
@@ -403,7 +404,7 @@ class VmsWorker(Worker):
     # What the heartbeat says per unit beyond the platform's fields: the worker publishes `live_url` — where a
     # recorder, a gateway or a detector subscribes; never a viewer.
     def status_extra(self, cam: dict) -> dict:
-        return {"live_url": live_url(self.server, cam["id"])}
+        return {"live_url": live_url(self.server, cam["id"]), "live_shm": live_shm(cam["id"], self.shm_dir)}   # the fan-out, and the same-server fast path
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU
     # with no assignment left is full." What the autoscaler reads via the controller's `headroom()` and

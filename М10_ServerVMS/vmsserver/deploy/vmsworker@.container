@@ -55,6 +55,10 @@ Volume=/data/platform:/data/platform:z
 Volume=/data/archive:/data/archive:z
 # the files `driverpack://file/<name>` plays; read-only, the worker never writes media.
 Volume=/data/media:/data/media:ro,z
+# the tee's shared-memory branch: `shmsink` opens <SHM_DIR>/<cam>.shm here (`live_shm` in the heartbeat); a
+# subscriber on THIS box — the recorder — reads it with `shmsrc`, no RTSP hop. A socket on a tmpfs, not state:
+# the one mount outside /data, and nothing an update must keep.
+Volume=/run/vms:/run/vms:z
 # host network: the RTSP fan-out listens on :8554 (`live_url` in the heartbeat) — what the recorder, the
 # gateways and the detectors subscribe to, from this box or another server.
 Network=host

@@ -27,6 +27,8 @@ placement:
   requires:   resource                               # the only subsystem that must be where the archive is
   servers:    distinct                               # the default policy: one recorder per server carries recordings (the console may say shared)
   tie_break:  most-free-capacity
+  near:       vms                                    # an affinity: prefer the recorder on the server whose worker holds the camera — it then reads the
+                                                     # worker's shared-memory branch instead of its RTSP fan-out; elsewhere when that server has no room
   rebalance:  {dead_band: 0.10}
 snapshot: [cam, retention_days, enabled, labels]
 console:

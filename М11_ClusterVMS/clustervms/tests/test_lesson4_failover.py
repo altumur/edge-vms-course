@@ -135,7 +135,7 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     from cluster.timeline import merged_timeline
     from psimplatform.spec import SpecController
     from vms.archive import Manifest, Segment, segment_path
-    from vms.config import REC_SPEC, live_url
+    from vms.config import REC_SPEC, live_shm, live_url
     c, ctl, a, act_a = _recording(1)
     rs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
     for r in rs.values(): r.heartbeat()
@@ -143,8 +143,9 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     assert rec.policy() == {"servers": "distinct"} and ctl.policy() == {"servers": "shared"}   # each subsystem's own default
     r1, r2 = c.recorder(1, "srv-a"), c.recorder(2, "srv-b"); r1.heartbeat_once(); r2.heartbeat_once()
     SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1"})           # the operator: record camera 1
-    assert rec.ensure_placed()[0].worker == "r-1" and r1.reconcile_once() == [("start", 1)]
-    assert r1.actuator.started[1]["source"] == live_url("srv-a", 1) and r1.actuator.started[1]["epoch"] == 1
+    pl = rec.ensure_placed()[0]
+    assert pl.worker == "r-1" and pl.reason.endswith("beside w-1 holding it") and r1.reconcile_once() == [("start", 1)]   # the affinity: beside the camera's worker
+    assert r1.actuator.started[1]["source"] == live_shm(1) and r1.actuator.started[1]["via"] == "shm" and r1.actuator.started[1]["epoch"] == 1   # so it reads the worker's tee, not RTSP
     r1.heartbeat_once()
     t = c.wall(); srv_a = c.servers["srv-a"]
     p = segment_path(srv_a.archive, 1, 1, datetime.fromtimestamp(t - 600, timezone.utc)); os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -161,10 +162,11 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     c.wall.advance(LOST_AFTER + 3); b.heartbeat_once(); r2.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
     assert rec.gone_servers() == {"r-1": "srv-a"}
     assert [(m[1], m[2]) for m in rec.redistribute()] == [("r-1", "r-2")]
-    assert rec.placement("1").reason.startswith("server srv-a gone: slot r-1 lapsed and its resource silent; ") and rec.placement("1").reason.endswith("; on srv-b")
-    assert r2.reconcile_once() == [("start", 1)] and r2.actuator.started[1]["source"] == live_url("srv-b", 1) and r2.actuator.started[1]["epoch"] == 2
+    assert rec.placement("1").reason.startswith("server srv-a gone: slot r-1 lapsed and its resource silent; ") and rec.placement("1").reason.endswith("; on srv-b, beside w-1 holding it")
+    assert r2.reconcile_once() == [("start", 1)] and r2.actuator.started[1]["source"] == live_shm(1) and r2.actuator.started[1]["epoch"] == 2   # w-1 came back on srv-b too: shared memory again
     r2.heartbeat_once()
-    assert rec.workers_seen()["r-2"].status[0]["source"] == "rtsp://srv-b:8554/1" and rec.where("1") == "r-2"
+    assert rec.workers_seen()["r-2"].status[0]["via"] == "shm" and rec.where("1") == "r-2"
+    assert live_url("srv-b", 1) == "rtsp://srv-b:8554/1"                                        # what r-2 would read had w-1 landed on srv-c
     # the timeline: e1 on srv-a unavailable by name; e2 will be on srv-b — and srv-a's footage comes back with its disks
     class R:
         def read(self, url, cam): return Manifest(c.servers[url.rsplit("/", 1)[1]].archive, cam).read()

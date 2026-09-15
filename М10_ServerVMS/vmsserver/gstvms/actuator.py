@@ -25,12 +25,16 @@
 #
 # ## Module-level names
 # - `log` — logger `gstvms`.
-# - `DESC` — the launch template: `driverpacksrc uri={uri} name=src ! h264parse ! watchdog
-#   timeout={watchdog} ! tee name=t`, then branch one `t. ! queue ! archivesink name=sink camera={cam}
-#   epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}`, and branch two `t. ! queue
-#   leaky=downstream max-size-buffers=30 ! fakesink sync=false` — a leaky queue into a fakesink "until М12's
-#   gateway subscribes to it" (a live viewer branch that never blocks recording). `watchdog` posts an error
-#   if no buffer passes for `timeout` ms, which is how a stalled source becomes a dead camera.
+# - `DESC` — the worker's launch template: `driverpacksrc uri={uri} name=src ! h264parse ! watchdog
+#   timeout={watchdog} ! tee name=t`, then two leaky branches: `rtph264pay ! udpsink 127.0.0.1:{port}` (the
+#   loopback RTP the RTSP fan-out re-serves as rtsp://<server>:8554/<cam> — subscribers on any server) and
+#   `shmsink socket-path=<SHM_DIR>/<cam>.shm` (the same bytes in shared memory — subscribers on THIS server,
+#   the recorder first, read it with `shmsrc`: no RTSP hop, no fan-out process on the recording path). No
+#   `archivesink`: the worker records nothing. `watchdog` posts an error if no buffer passes for `timeout`
+#   ms, which is how a stalled source becomes a dead camera.
+# - `REC_DESC` / `REC_SHM_DESC` — the recorder's: `rtspsrc location=<live_url> ! rtph264depay` or
+#   `shmsrc socket-path=<…>.shm` (the source the recorder chose by where the worker is), then `h264parse !
+#   watchdog ! archivesink camera={cam} epoch={epoch} …` under the RECORDER's epoch.
 #
 # ## Notes
 # - Verified where: the README says `gstvms/` is written to GStreamer's Python binding and not exercised in
@@ -56,11 +60,14 @@ log = logging.getLogger("gstvms")
 Gst.init(None)
 
 DESC = ("driverpacksrc uri={uri} name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
-        "t. ! queue leaky=downstream max-size-buffers=30 ! {live}")
+        "t. ! queue leaky=downstream max-size-buffers=30 ! {live} "
+        "t. ! queue leaky=downstream max-size-buffers=30 ! {shm}")
+SHM = "shmsink socket-path={path} shm-size=20000000 wait-for-connection=false sync=false"      # the tee's same-server branch: any number of shmsrc readers
 LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} sync=false"   # the tee's branch: RTP to the loopback port
 IDLE = "fakesink sync=false"                                                                    # the RTSP fan-out (livesrv) serves from
-REC_DESC = ("rtspsrc location={source} latency=200 protocols=tcp name=src ! rtph264depay ! h264parse ! watchdog timeout={watchdog} ! "
-            "archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}")
+REC_SINK = "h264parse ! watchdog timeout={watchdog} ! archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}"
+REC_DESC = "rtspsrc location={source} latency=200 protocols=tcp name=src ! rtph264depay ! " + REC_SINK       # another server's worker: its fan-out
+REC_SHM_DESC = "shmsrc socket-path={path} is-live=true do-timestamp=true name=src ! video/x-h264,stream-format=byte-stream ! " + REC_SINK   # this server's worker: its tee, directly
 
 
 # State: `spool`, `archive`, `seg` (segment seconds), `watchdog` (ms), `pipelines` (`{camera id:
@@ -113,7 +120,8 @@ class GstActuator:
     # The pipeline for this verb's row: the worker's DESC with the tee's loopback branch.
     def describe(self, cam: dict) -> str:
         live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
-        return DESC.format(uri=cam["source"], watchdog=self.watchdog, live=live)
+        shm = SHM.format(path=cam["live_shm"][len("shm://"):]) if cam.get("live_shm") else IDLE
+        return DESC.format(uri=cam["source"], watchdog=self.watchdog, live=live, shm=shm)
 
     def _publish(self, cid: int, cam: dict) -> None:
         if self.fanout is not None and cam.get("live_port"):
@@ -164,8 +172,9 @@ class GstActuator:
 
 
 class GstRecActuator(GstActuator):
-    """The recorder's: `rtspsrc` on the camera's fan-out URL, `archivesink` into the spool under the
-    recorder's epoch. No fan-out of its own; nothing here reads a camera."""
+    """The recorder's: `rtspsrc` on the camera's fan-out URL — or `shmsrc` on the worker's shared-memory
+    branch when the worker is on this server — then `archivesink` into the spool under the recorder's
+    epoch. No fan-out of its own; nothing here reads a camera."""
 
     def __init__(self, spool: str, archive: str, segment_seconds: int = 600, watchdog_ms: int = 8000):
         self.spool, self.archive, self.seg, self.watchdog = spool, archive, segment_seconds, watchdog_ms
@@ -173,5 +182,7 @@ class GstRecActuator(GstActuator):
         self.pipelines, self.dead, self.posted = {}, [], []
 
     def describe(self, cam: dict) -> str:
-        return REC_DESC.format(source=cam["source"], watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0),
-                               spool=self.spool, archive=self.archive, seg=self.seg)
+        kw = dict(watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0), spool=self.spool, archive=self.archive, seg=self.seg)
+        if cam["source"].startswith("shm://"):                                 # the worker is on this server: read its tee's shared memory
+            return REC_SHM_DESC.format(path=cam["source"][len("shm://"):], **kw)
+        return REC_DESC.format(source=cam["source"], **kw)

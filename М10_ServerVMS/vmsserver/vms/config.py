@@ -62,7 +62,13 @@ LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__fi
 DET_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "det.subsystem.yaml"))     # the third: detectors
 REC_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rec.subsystem.yaml"))     # the fourth: recorders, on the archive
 LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's loopback: the RTSP fan-out's one subscriber (gstvms/livesrv.py)
+SHM_DIR = "/run/vms"         # the tee's shared-memory branch: <SHM_DIR>/<cam>.shm — a subscriber on the SAME server reads it (shmsrc), no RTSP hop
 RTSP_PORT = 8554             # the worker's RTSP fan-out: rtsp://<server>:8554/<cam> — what a recorder, a gateway, a detector subscribe to
+
+
+def live_shm(cid, shm_dir: str = SHM_DIR) -> str:
+    """The camera's shared-memory socket on its worker's server: the local fast path (shm:// scheme)."""
+    return f"shm://{shm_dir}/{cid}.shm"
 
 
 def live_url(server: str, cid) -> str:

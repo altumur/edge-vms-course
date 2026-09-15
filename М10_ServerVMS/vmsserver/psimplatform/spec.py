@@ -169,6 +169,7 @@ class SubsystemSpec:
     requires: str = "none"        # "resource": a worker is eligible only while its server's resource is not silent
     servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
+    near: str = "none"            # a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
     running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
@@ -189,7 +190,7 @@ class SubsystemSpec:
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
-                   dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
+                   near=str(pl.get("near", "none")), dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
 
@@ -556,6 +557,36 @@ class SpecController(Controller):
         gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool))
         return [w for w in pool if w not in gone]
 
+    # `near: <sub>`: the worker of that subsystem whose heartbeat status lists this unit's id in phase
+    # `running` — `(worker, server)` — or None. The recorder says `near: vms`: the camera's holder.
+    def holder_near(self, uid) -> tuple[str, str] | None:
+        if self.spec.near == "none":
+            return None
+        from .console import heartbeats                            # the read model's scan, without the age filter
+        for w, hb in heartbeats(self.objects, self.spec.near + "/").items():
+            if self.wall() - hb.ts > 45.0:
+                continue
+            for st in hb.status:
+                if str(st.get("id")) == str(uid) and st.get("phase") == "running":
+                    return w, hb.extra.get("server", "?")
+        return None
+
+    # The pick, with the affinity: the best worker on the holder's server if one has room, else the best
+    # anywhere; `(worker, free, note)` where the note says which it was — "beside w-1 holding it" or
+    # "away from w-1 on srv-1 (no room there)" — so the reason tells the operator whether the recording
+    # reads its worker's shared memory or its RTSP fan-out.
+    def _pick(self, pool: list[str], uid) -> tuple[str | None, int, str]:
+        near = self.holder_near(uid)
+        if near is not None:
+            beside = [w for w in pool if self.server_of(w) == near[1]]
+            best, free = self._best(beside)
+            if best is not None:
+                return best, free, f", beside {near[0]} holding it"
+        best, free = self._best(pool)
+        if best is not None and near is not None:
+            return best, free, f", away from {near[0]} on {near[1]} (no room there)"
+        return best, free, ""
+
     # `most-free-capacity`: the worker with the largest `capacity_of − load`, strictly positive; ties go to
     # the first in sorted order.
     def _best(self, pool: list[str]) -> tuple[str | None, int]:
@@ -585,7 +616,7 @@ class SpecController(Controller):
         if row is None:
             return None
         pool = self.eligible(row, self._pool(workers))
-        best, free = self._best(pool)
+        best, free, near = self._pick(pool, uid)
         if best is None:
             return None                                 # "the system is full" — or nothing that can reach it; never "w-1 is full"
         reason = f"most free capacity ({free}) among {len(pool)} worker(s)"
@@ -594,6 +625,7 @@ class SpecController(Controller):
         reason += f"; on {self.server_of(best)}"
         if self.spec.requires == "resource":
             reason += f", whose resource is {self.resource_state(self.server_of(best))}"
+        reason += near
         pl = Placement(self.spec.parse_id(uid), best, reason, self.wall(), 0)
         # the row first (CAS decides who won), then the assignment
         def mutate(it):
@@ -677,10 +709,10 @@ class SpecController(Controller):
                 uid = self.spec.parse_id(unit)
                 row = self.unit(uid)
                 pool = self.eligible(row, live) if row else live
-                best = max(pool, key=lambda w: self.capacity_of(w) - self.load(w), default=None)
-                if best is None or self.load(best) >= self.capacity_of(best):
+                best, free, near = self._pick(pool, uid)
+                if best is None:
                     break                                   # the system is full; the unit waits, listed where it was
-                self.move(uid, best, f"{why}; most free capacity ({self.capacity_of(best) - self.load(best)}); on {self.server_of(best)}")
+                self.move(uid, best, f"{why}; most free capacity ({free}); on {self.server_of(best)}{near}")
                 moves.append((uid, gone, best))
         return moves
 

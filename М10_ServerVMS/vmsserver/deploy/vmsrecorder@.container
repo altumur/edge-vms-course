@@ -40,7 +40,10 @@ Volume=/data/platform:/data/platform:z
 Volume=/data/spool:/data/spool:z
 # read-write: the recorder is the only writer of segments (promote) and manifests, under `rec/`.
 Volume=/data/archive:/data/archive:z
-# host network: it subscribes to workers' RTSP fan-outs, on this box or elsewhere.
+# the workers' shared-memory branches on this box (`live_shm`): the recorder reads a camera held HERE from
+# its worker's tee with `shmsrc`; a camera held elsewhere it reads over RTSP. A tmpfs of sockets, not state.
+Volume=/run/vms:/run/vms:z
+# host network: it subscribes to workers' RTSP fan-outs on other servers.
 Network=host
 # SIGTERM finalizes the open segment: archivesink closes it and the last pass promotes it.
 StopTimeout=20

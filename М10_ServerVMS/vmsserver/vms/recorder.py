@@ -71,11 +71,17 @@ class RecWorker(VmsWorker):
 
     # -- where a camera's stream is: the VMS heartbeat, never a call to the worker ------------------
     def source(self, cam) -> tuple[str, str] | None:
-        """`(server, live_url)` of the worker holding the camera, from its heartbeat; None if nobody does."""
+        """`(server, source)` of the worker holding the camera, from its heartbeat; None if nobody does.
+        The source is the worker's shared-memory branch (`live_shm`, shm://…) when that worker is on
+        THIS server — the same bytes with no RTSP hop, no fan-out process on the recording path — and
+        its RTSP fan-out (`live_url`) otherwise."""
         for hb in heartbeats(self.objects, "vms/").values():
             for st in hb.status:
                 if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
-                    return hb.extra.get("server", "?"), st["live_url"]
+                    server = hb.extra.get("server", "?")
+                    if server == self.server and st.get("live_shm"):
+                        return server, st["live_shm"]
+                    return server, st["live_url"]
         return None
 
     # A recording's pipeline needs a source: `rtspsrc location=<live_url> ! archivesink` under this
@@ -88,11 +94,12 @@ class RecWorker(VmsWorker):
             return None
         self.waiting.discard(cam["id"])
         self.sources[cam["id"]] = src[1]
-        return dict(cam, source=src[1], source_server=src[0], spool=self.archive.spool, archive=self.archive.root)
+        return dict(cam, source=src[1], source_server=src[0], via="shm" if src[1].startswith("shm://") else "rtsp",
+                    spool=self.archive.spool, archive=self.archive.root)
 
     def status_extra(self, cam: dict) -> dict:
         src = self.source(cam["id"])
-        out = {"cam": str(cam["id"]), "source": src[1] if src else None}
+        out = {"cam": str(cam["id"]), "source": src[1] if src else None, "via": (None if src is None else "shm" if src[1].startswith("shm://") else "rtsp")}
         if cam["id"] in self.waiting and cam["id"] not in self.reconciler.actual:
             out["why"] = "camera held by nobody"
         return out
@@ -106,9 +113,9 @@ class RecWorker(VmsWorker):
 
     # -- the passes: the worker's, plus a re-subscription when the camera's holder moved, plus the
     # promotion of closed segments ---------------------------------------------------------------------
-    # The camera's worker failed over: `live_url` names another server now. The pipeline reading the old
-    # URL is stopped and counted lost, so the reconciler starts it again on the new source — under the same
-    # rec epoch: the recorder did not move, its writer did not change.
+    # The camera's worker moved: the source is another server's fan-out now — or, if it moved HERE, the
+    # shared-memory branch. The pipeline reading the old source is stopped and counted lost, so the
+    # reconciler starts it again on the new one, under a new rec epoch (a start is a new writer).
     def resubscribe(self, now: float | None = None) -> list[int]:
         now = self.now() if now is None else now
         moved = []
