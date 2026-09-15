@@ -34,9 +34,9 @@
 | 7 | [Личность через захват](07-identity-by-claim.md) | Написать `Slot`, `claim_slot`, `renew_slot`, `release_slot`; показать, как замена наследует просроченный слот вместе с назначением, и почему индекс планировщика — это предпочтение, а Variable — доказательство. |
 | 8 | [Две базы](08-the-two-bases.md) | Написать `Controller` с его `write` (прочитать, изменить, CAS, повторить) — образцом каждой последующей записи — и `Worker` с воротами: `take_epoch`, `may_write`, `renew_leases`, `heartbeat`. |
 | 9 | [Подсистема — это YAML](09-a-subsystem-is-a-yaml.md) | Прочитать десять строк YAML в `SubsystemSpec`: `Field` с типами и значениями по умолчанию, `Derived`, `row`/`items`, `parse_id`. |
-| 10 | Что токену позволено писать | Написать `refuse`, `new_row`, `PLATFORM_FIELDS` и два ACL, вырезанных из одной спецификации; объяснить, почему поля `worker`, `epoch`, `revision` оператор не отправляет никогда. |
-| 11 | `SpecController` I — строки | CRUD по CAS: `create`, `update`, `delete`, счётчик идентификаторов, производные строки, `revision`, идемпотентное создание. |
-| 12 | `SpecController` II — размещение | Собрать причину размещения по частям: `eligible`, `_pool`, `_best`, `_pick`, `holder_near`, `place`, `ensure_placed`, `move`, `unplaceable`. |
+| 10 | [Что токену позволено писать](10-what-a-token-may-write.md) | Написать `refuse`, `new_row`, `PLATFORM_FIELDS` и два ACL, вырезанных из одной спецификации; объяснить, почему поля `worker`, `epoch`, `revision` оператор не отправляет никогда. |
+| 11 | [`SpecController` I — строки](11-speccontroller-the-rows.md) | CRUD по CAS: `create`, `update`, `delete`, счётчик идентификаторов, производные строки, `revision`, идемпотентное создание. |
+| 12 | [`SpecController` II — размещение](12-speccontroller-placement.md) | Собрать причину размещения по частям: `eligible`, `_pool`, `_best`, `_pick`, `holder_near`, `place`, `ensure_placed`, `move`, `unplaceable`. |
 | 13 | `SpecController` III — молчания, ручки, снимок | `resource_state`, `without_resource`, `idle_by_policy`, `gone_servers`, `redistribute`, `rebalance`; политики `servers: shared \| distinct`; `read_model`, `snapshot`, `failover_seconds`. |
 | 14 | События: бакеты на ресурсе | Написать `events.py` целиком: путь бакета, `EventLog.append`, `read_bucket`, `buckets_under`, `subsystems_under` — форму данных, у которой один писатель по построению. |
 | 15 | База, которая является кэшем | `EventDatabase` над собственным деревом ресурса — `rebuild`, `tail`, `query`, `forget` — и `MergedIndex`: то, что есть у консоли вместо базы. |
