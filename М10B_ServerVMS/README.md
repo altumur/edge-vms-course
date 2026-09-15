@@ -22,9 +22,9 @@
 | 1 | [Первая подсистема](01-the-first-subsystem.md) | Прочитать `vms.subsystem.yaml` поле за полем против читателя спецификаций из М10A; написать `config.py` и `controller.py` — подкласс, который добавляет слова VMS и ничего больше. |
 | 2 | [Цикл сверки](02-the-reconcile-loop.md) | Перенести цикл из М9 без изменений — `desired` персистентно, `actual` выводится, `>=` на ревизии, отступ с джиттером — и прогнать против него семь тестов М9 неизменёнными. |
 | 3 | [`vmsworker` I — процесс](03-vmsworker-the-process.md) | Слот из окружения, `refresh` над назначением, ворота `_actuate`: новая эпоха на новый старт, аренда до первого вызова актуатора. |
-| 4 | `vmsworker` II — держать камеру | `enrich` и две ветви раздачи (`live_url`, `live_shm`), `observe`, `pump_once`, `status`, `heartbeat`, `lease_pass`, `fence`, `run`; зомби и переназначение, которое зомби не является. |
-| 5 | `driverpacksrc` | Написать элемент GStreamer на Python; разобрать `driverpack://file/<имя>` и отказать вендорской форме по имени; зациклить файл с пересчётом PTS. |
-| 6 | `archivesink` | `splitmuxsink` в спул, эпоха в каждом пути, `format-location`; что начинает `fragment-closed` и почему порядок подтверждения именно такой. |
+| 4 | [`vmsworker` II — держать камеру](04-vmsworker-holding-the-camera.md) | `enrich` и две ветви раздачи (`live_url`, `live_shm`), `observe`, `pump_once`, `status`, `heartbeat`, `lease_pass`, `fence`, `run`; зомби и переназначение, которое зомби не является. |
+| 5 | [`driverpacksrc`](05-driverpacksrc.md) | Написать элемент GStreamer на Python; разобрать `driverpack://file/<имя>` и отказать вендорской форме по имени; зациклить файл с пересчётом PTS. |
+| 6 | [`archivesink`](06-archivesink.md) | `splitmuxsink` в спул, эпоха в каждом пути, `format-location`; что начинает `fragment-closed` и почему порядок подтверждения именно такой. |
 | 7 | Архив I — два дерева и перенос | Пути, `Segment`, `Manifest.append/read`, `ArchiveResource.promote`; убийство на седьмой минуте и что именно теряется. |
 | 8 | Архив II — починка, хранение, таймлайн | `repair` из одних файлов, `retain` по строке записи, `timeline` с отсечёнными эпохами, `ArchivePolicy` — проход, который регистратор вешает на ресурс. |
 | 9 | Актуаторы и раздача | `GstActuator` с двумя ветвями `tee`, `GstRecActuator` с двумя источниками, `FanOut` на GstRtspServer; почему раздача — это RTSP, а не multicast, и когда это разделяемая память. |
