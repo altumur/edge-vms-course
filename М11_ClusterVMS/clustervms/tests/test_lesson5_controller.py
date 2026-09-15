@@ -97,7 +97,7 @@ def test_a_worker_runs_where_a_resource_answers_and_leaves_when_it_stops():
     assert ctl.placement(a).reason.endswith("; on srv-b")
     # the console shows the label beside the fact: what each server's workers record into, and whether its resource answers
     from cluster.console import make_console
-    sv = make_console(ctl).servers()["servers"]
+    sv = make_console(ctl).root.servers()["servers"]
     assert sv["srv-a"]["resource"] == "silent" and sv["srv-a"]["placeable"] is False and sv["srv-a"]["why"] == "resource on srv-a silent"
     assert sv["srv-b"]["resource"] == "live" and sv["srv-b"]["placeable"] is True and [w["worker"] for w in sv["srv-b"]["workers"]] == ["w-1"]
     assert sv["srv-a"]["archive"] == "/data/archive"                                                # the worker's $ARCHIVE — Nomad's meta.archive on a cluster
@@ -124,7 +124,10 @@ def test_the_snapshot_is_the_only_thing_that_leaves_the_cluster():
 def test_the_console_over_http():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall)
     ws = _three_workers(c, ctl)
-    srv = serve(ctl, "127.0.0.1", 0, worst_failover=48.0, archive_root=c.servers["srv-a"].archive); port = srv.server_address[1]
+    from psimplatform.spec import SpecController
+    from vms.config import REC_SPEC
+    rec_con = SpecController(REC_SPEC, c.vars.as_writer("console", REC_SPEC.acl_console()), c.objects, wall=c.wall)   # the console's door to recordings
+    srv = serve(ctl, "127.0.0.1", 0, worst_failover=48.0, archive_root=c.servers["srv-a"].archive, rec_ctl=rec_con); port = srv.server_address[1]
     base = f"http://127.0.0.1:{port}"
     def call(method, path, body=None, headers=None):
         req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers or {})
@@ -140,7 +143,7 @@ def test_the_console_over_http():
     st, out = call("GET", "/where/1"); d = json.loads(out)
     assert st == 200 and d["worker"] == d["directory"] and "on srv-" in d["reason"]
     st, out = call("GET", "/metrics")
-    assert 'vms_failover_seconds{kind="worst"} 48.0' in out and "vms_workers_live 3" in out and "vms_cameras_recording 1" in out
+    assert 'vms_failover_seconds{kind="worst"} 48.0' in out and "vms_workers_live 3" in out and "vms_cameras_running 1" in out
     st, out = call("GET", "/resources"); assert st == 200 and json.loads(out) == {}
     # the administrator's knob: one row, the console's to write, the controller's to read on its next pass
     st, out = call("GET", "/policy"); assert st == 200 and json.loads(out)["servers"] == "shared"
@@ -148,6 +151,12 @@ def test_the_console_over_http():
     assert call("PUT", "/policy", {"servers": "everywhere"})[0] == 400 and ctl.policy() == {"servers": "distinct"}
     st, out = call("GET", "/servers"); assert json.loads(out)["policy"] == {"servers": "distinct"}
     call("PUT", "/policy", {"servers": "shared"})
+    # the recorder at /rec/…: the page's Record toggle writes a recording row; placement is the rec controller's, not the console's
+    st, out = call("GET", "/mounts"); assert json.loads(out) == {"root": "vms", "mounts": {"rec": json.loads(call("GET", "/rec/spec")[1])}}
+    st, out = call("POST", "/rec/recordings", {"cam": "1", "retention_days": 7}, {"Idempotency-Key": "r1"}); assert st == 201 and json.loads(out)["worker"] is None
+    assert c.vars.get("rec/recordings/1")[0]["retention_days"] == "7" and json.loads(call("GET", "/rec/policy")[1])["servers"] == "distinct"   # the recorder's own knob
+    assert call("PUT", "/rec/recordings/1", {"worker": "r-0"})[0] == 400
+    assert call("DELETE", "/rec/recordings/1")[0] in (200, 204)
     st, out = call("GET", "/unplaceable"); assert json.loads(out) == []
     # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
     from psimplatform.resource import serve as serve_resource

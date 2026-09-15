@@ -143,7 +143,7 @@ one container per camera:    200 × (B + I)  ≈ 13.6 GB
 four workers of fifty:         4 × (B + 50I) ≈  1.8 GB
 ```
 
-Report PSS, not RSS — fifty processes share `libgstreamer`, and RSS counts it fifty times. The unit Nomad places is a **worker**: one process, N pipelines. Its `CAPACITY` — the number the worker puts in its heartbeat, the number the controller places by and the autoscaler scales on — is `(memory budget − B) / I` on *this* server, rounded down. It is the worker's number, measured where the pipelines run; the controller reads it and has none of its own (М10 Lesson 5).
+Report PSS, not RSS — fifty processes share `libgstreamer`, and RSS counts it fifty times. The unit Nomad places is a **worker**: one process, N pipelines. Its `CAPACITY` — the number the worker puts in its heartbeat, the number the controller places by and the autoscaler scales on — is `(memory budget − B) / I` on *this* server, rounded down. It is the worker's number, measured where the pipelines run; the controller reads it and has none of its own (М10 Lesson 6).
 
 **Deliverable:** a working cluster; `tests/test_lesson1_stores.py` green; a measured `CAPACITY` for your hardware written into `deploy/vmsworker.nomad.hcl`; and your version of Step 2's argument, one page, for the first time somebody proposes running Nomad on the single-box product for consistency.
 

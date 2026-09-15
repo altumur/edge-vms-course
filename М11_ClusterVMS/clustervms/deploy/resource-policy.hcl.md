@@ -9,7 +9,7 @@
 - `path "platform/mirror" { capabilities = ["read"] }` — `mirror_settings(vars_)`: whether mirroring is on and how many copies; written by an operator, never by a resource.
 - `path "*/retention" { capabilities = ["read"] }` — each subsystem's default retention (`<sub>/retention {days}`), read by `retention_days()` in the platform's bucket-retention pass.
 - `path "*/retention/*" { capabilities = ["read"] }` — the per-unit override (`vms/retention/<id>`, written by the console as a derived row).
-- `path "vms/cameras/*" { capabilities = ["read", "list"] }` — the VMS's registered pass (`ArchivePolicy.pass_`) reads `retention_days` from each camera row for media retention; the comment says so.
+- `path "rec/recordings/*" { capabilities = ["read", "list"] }` — the recorder's registered pass (`ArchivePolicy.pass_`) reads `retention_days` from each recording row for media retention; the comment says so.
 
 ## Notes
 - The resource needs `list` on `objects/platform/resources/` for `resources_seen`; the `*` grant covers it.

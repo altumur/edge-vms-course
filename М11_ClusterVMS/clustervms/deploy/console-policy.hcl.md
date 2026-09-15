@@ -16,3 +16,5 @@
 ## Notes
 - The console writes its **marks** (`POST /marks`) into a bucket file on this server's archive, not into Variables — no policy line is needed for that; the jobspec's `/data/archive` volume is.
 - Nomad's variables ACL evaluates the most specific matching path, so the `vms/*` read-only line does not take the write away from `vms/cameras/*`.
+- `vms/policy` and `rec/policy` — the administrator's knobs (`servers: shared | distinct`), written from the page.
+- `rec/recordings/*`, `rec/next_id`, `rec/idem/*` — the recorder's operator rows, for the console's mount at `/rec/…` (the page's *Record* toggle); `rec/*` read-only for `/rec/where`, `/rec/servers`.

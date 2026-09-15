@@ -27,7 +27,7 @@ and the worker is the subsystem.
 # # spec.py — the controller as data: SubsystemSpec from `<sub>.subsystem.yaml`, and SpecController, the one
 # controller every subsystem runs
 #
-# **Role in the module.** Lesson 5. A subsystem gives the platform one YAML file and the platform runs its
+# **Role in the module.** Lesson 6. A subsystem gives the platform one YAML file and the platform runs its
 # controller from it. The spec says: `name` (the prefix `<name>/*`); `unit` (where rows live —
 # `<name>/<rows>/<id>` — how an id is made — `numeric` or a field name — the operator's fields with types
 # and defaults, and derived rows kept beside the unit, such as the VMS's `vms/retention/<id>` that the
@@ -39,7 +39,7 @@ and the worker is the subsystem.
 # `SpecController` extends `contract.Controller` and adds units, placement, redistribution, rebalance, the
 # read model and the snapshot. `vms/controller.py` is this class with the VMS's spec and VMS names for the
 # methods; `vms/config.py` exposes `row()`/`items()`; `console.py` runs over the same spec.
-# `tests/test_lesson7_live.py` and `tests/test_lesson8_det.py` run two more subsystems through it from their own YAML.
+# `tests/test_lesson8_live.py` and `tests/test_lesson9_det.py` run two more subsystems through it from their own YAML.
 #
 # ## Module-level names
 # - `PLATFORM_FIELDS = ("worker", "placement", "epoch", "revision", "observed_revision", "phase", "id")` —
@@ -154,7 +154,7 @@ class Derived:
 # name); `fields`; `derived`; `capacity_from` / `capacity_fallback` (heartbeat key for a worker's capacity,
 # and the number for a worker that said nothing); `headroom_from`; `constraint`; `tie_break` (only
 # `most-free-capacity` exists); `dead_band`; `snapshot` (field names); `running_gauge` (`units_running` by
-# default; `cameras_recording` for the VMS).
+# default; `cameras_running` for the VMS).
 @dataclass
 class SubsystemSpec:
     name: str
@@ -167,6 +167,7 @@ class SubsystemSpec:
     headroom_from: str = "headroom"
     constraint: str = "none"
     requires: str = "none"        # "resource": a worker is eligible only while its server's resource is not silent
+    servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
@@ -187,7 +188,7 @@ class SubsystemSpec:
         return cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
-                   constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), tie_break=pl.get("tie_break", "most-free-capacity"),
+                   constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
@@ -473,8 +474,11 @@ class SpecController(Controller):
     # units; a second worker Nomad put on the same server idles by policy, and a server whose worker and
     # resource both fall silent is gone (`gone_servers`) — its units move. The jobspec says `spread`, so
     # both are possible without touching Nomad; the administrator chooses on the console.
-    POLICY_DEFAULTS = {"servers": "shared"}
     POLICY_CHOICES = {"servers": ("distinct", "shared")}
+
+    @property
+    def POLICY_DEFAULTS(self) -> dict:                                   # the spec's `placement.servers` is the default; the row overrides
+        return {"servers": self.spec.servers}
 
     def policy(self) -> dict:
         items, _ = self.vars.get(self.sub.config("policy"))

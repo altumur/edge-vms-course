@@ -9,6 +9,6 @@ namespace "default" {
     path "platform/mirror"              { capabilities = ["read"] }
     path "*/retention"                  { capabilities = ["read"] }
     path "*/retention/*"                { capabilities = ["read"] }
-    path "vms/cameras/*"                { capabilities = ["read", "list"] }   # the VMS's registered pass: media retention per camera
+    path "rec/recordings/*"             { capabilities = ["read", "list"] }   # the recorder's registered pass: media retention per recording row
   }
 }

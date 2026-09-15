@@ -1,4 +1,4 @@
-"""Lesson 8 — detectors as the third subsystem, and one console for
+"""Lesson 9 — detectors as the third subsystem, and one console for
 all of them. A unit is one model on one camera, created from the camera's page
 with the console's token, placed on a GPU-labelled worker by stream headroom;
 its events are buckets under det/<unit>/e<epoch>/ on the resource, written
@@ -89,7 +89,7 @@ def test_a_model_on_a_camera_is_placed_on_a_gpu_worker_and_writes_its_own_bucket
             box.wall.advance(2); gpu.reconcile_once()
         gpu.heartbeat_once()
         st = call(base, "GET", "/det/units")[1]["rows"][0]
-        assert st["phase"] == "running" and st["events"] == 2 and st["port"] == 20001 and st["worker"] == "d-2"
+        assert st["phase"] == "running" and st["events"] == 2 and st["source"] == "rtsp://srv-1:8554/1" and st["worker"] == "d-2"
         assert subsystems_under(box.archive) == {"det": ["1-linecross"]}                # its own prefix on the same resource
         e1 = os.path.join(box.archive, "det", "1-linecross", "e1")
         lines = [l for b in sorted(os.listdir(e1)) for l in read_bucket(os.path.join(e1, b))]
@@ -107,14 +107,14 @@ def test_a_model_on_a_camera_is_placed_on_a_gpu_worker_and_writes_its_own_bucket
         srv.shutdown(); srv.server_close()
 
 
-def test_a_camera_that_stops_recording_leaves_the_model_waiting_not_failed():
+def test_a_camera_nobody_holds_leaves_the_model_waiting_not_failed():
     box, ctl, det_ctl, w, srv, base = _box()
     try:
         gpu = _det(box, "d-1")
         call(base, "POST", "/det/units", {"name": "1-motion", "cam": "1", "kind": "motion"}, {"Idempotency-Key": "k1"})
         det_ctl.ensure_placed(); assert gpu.reconcile_once() == ["1-motion"]
         w.actuator.dead.append(1); w.pump_once(); w.heartbeat_once()                    # the camera's pipeline died: its phase is no longer running
-        assert gpu.reconcile_once() == [] and gpu.status_by_unit["1-motion"] == {"id": "1-motion", "cam": "1", "kind": "motion", "phase": "waiting", "why": "camera not recording"}
+        assert gpu.reconcile_once() == [] and gpu.status_by_unit["1-motion"] == {"id": "1-motion", "cam": "1", "kind": "motion", "phase": "waiting", "why": "camera held by nobody"}
         assert det_ctl.where("1-motion") == "d-1"                                        # placement is untouched: the worker waits, nothing is moved
         # an unknown model kind is reported, not run
         call(base, "POST", "/det/units", {"name": "1-face", "cam": "1", "kind": "face"}, {"Idempotency-Key": "k2"})

@@ -1,10 +1,12 @@
-"""python3 -m cluster worker | controller | console | resource — the jobs (each resource keeps the event database over its own tree).
+"""python3 -m cluster worker | controller | recorder | reccontroller | console | resource — the jobs
+(each resource keeps the event database over its own tree; the recorder is the only writer of footage).
 
     NOMAD_ADDR, NOMAD_TOKEN            the task's own workload identity (Variables)
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
                                        s3+http://… when a cluster is large enough to want MinIO; file:///path on a bench
-    NOMAD_ALLOC_INDEX                  worker: the slot to claim; NOMAD_NODE_NAME the server; NOMAD_META_labels
-    SPOOL, ARCHIVE                     worker and resource: the same disks on the same server
+    NOMAD_ALLOC_INDEX                  worker, recorder: the slot to claim (w-<i>, r-<i>); NOMAD_NODE_NAME the server; NOMAD_META_labels
+    ARCHIVE                            worker: where its events go (the resource on its server); recorder and resource: the same disks
+    SPOOL                              recorder: where its pipelines write before promotion
     RESOURCE_URL                       resource: how the console reaches this server's manifests and events
     EVENTDB                            resource: where its event database lives (default :memory: — a cache, rebuilt on start)
     CAPACITY                           worker: cameras it can carry on this server
@@ -32,19 +34,46 @@ spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE
 
 
 def worker() -> None:
-    from vms.archive import ArchiveResource
+    """holds the camera: one connection, one epoch, one fan-out (rtsp://<server>:8554/<cam>), its events into
+    the resource on its server. No spool, no footage: recording is the recorder's."""
     from cluster.worker import ClusterWorker
     try:
         from gstvms.actuator import GstActuator
-        act = GstActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))
+        act = GstActuator()
     except ImportError:
-        logging.warning("no GStreamer: the fake actuator records nothing"); act = None
-    res = ArchiveResource(spool, archive)
-    for p in res.closed_in_spool(grace_seconds=30, now=time.time()):
-        res.promote(p)
+        logging.warning("no GStreamer: the fake actuator holds nothing"); act = None
     w = ClusterWorker(NomadVariables(), objects, act)
     logging.info("worker %s on %s (alloc %s) claimed its slot; labels %s", w.name, w.server, w.alloc, w.labels)
     w.run(stop=stop)                              # SIGTERM from Nomad → release_slot(): scale-in, not a crash
+
+
+def recorder() -> None:
+    """the only writer of footage: subscribes to the worker's fan-out, writes rec/<cam>/e<epoch>/ on THIS server's
+    archive, promotes closed segments from the spool on every pass."""
+    from vms.archive import ArchiveResource
+    from cluster.recorder import ClusterRecorder
+    try:
+        from gstvms.actuator import GstRecActuator
+        act = GstRecActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))
+    except ImportError:
+        logging.warning("no GStreamer: the fake actuator records nothing"); act = None
+    r = ClusterRecorder(NomadVariables(), objects, act, archive=ArchiveResource(spool, archive))
+    logging.info("recorder %s on %s (alloc %s) claimed its slot; labels %s", r.name, r.server, r.alloc, r.labels)
+    r.run(stop=stop)
+
+
+def reccontroller() -> None:
+    """count = 1, the only writer of rec placement: which recorder writes which camera's footage, where the
+    resource answers, one recorder per server by default (rec/policy)."""
+    from psimplatform.spec import SpecController
+    from vms.config import REC_SPEC
+    ctl = SpecController(REC_SPEC, NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")))
+    while not stop.is_set():
+        try:
+            ctl.ensure_placed(); ctl.redistribute(); ctl.unplace_deleted()
+        except Exception:                         # noqa: BLE001
+            logging.exception("rec placement pass failed")
+        stop.wait(5)
 
 
 def controller() -> None:
@@ -66,10 +95,14 @@ def console() -> None:
     pass. No event database of its own: /events asks the live resources and merges."""
     from cluster.console import serve
     from cluster.controller import ClusterController
-    ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
+    from psimplatform.spec import SpecController
+    from vms.config import REC_SPEC
+    vars_ = NomadVariables()
+    ctl = ClusterController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")),
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
     srv = serve(ctl, os.environ.get("CONSOLE_HOST", "0.0.0.0"), int(os.environ.get("CONSOLE_PORT", "8080")),
-                archive_root=archive if os.path.isdir(archive) else None)     # marks go into this server's resource, if it has one
+                archive_root=archive if os.path.isdir(archive) else None,     # marks go into this server's resource, if it has one
+                rec_ctl=SpecController(REC_SPEC, vars_, objects))              # the recorder at /rec/…: the page's Record toggle
     stop.wait()
     srv.shutdown()
 
@@ -99,4 +132,5 @@ def resource() -> None:
 
 
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "console": console, "resource": resource}[sys.argv[1]]()
+    {"worker": worker, "controller": controller, "recorder": recorder, "reccontroller": reccontroller,
+     "console": console, "resource": resource}[sys.argv[1]]()

@@ -20,8 +20,8 @@ def write_segment(root, cam, epoch, start, size=1000, mtime=None):
 
 
 def test_parse_and_paths():
-    assert parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a") == (7, 5, utc("2026-09-12T10:10:00"))
-    assert parse("/a/vms/7/e5/manifest.jsonl", "/a") is None and parse("/a/7/e5/20260912T101000Z.mp4", "/a") is None
+    assert parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a") == (7, 5, utc("2026-09-12T10:10:00"))
+    assert parse("/a/rec/7/e5/manifest.jsonl", "/a") is None and parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a") is None   # the worker's tree holds no media
 
 
 def test_promote_is_the_acknowledgement_order():
@@ -87,44 +87,49 @@ def test_retention_is_a_policy_on_the_resource():
         res.promote(write_segment(box.spool, 7, 3, f"2026-10-{day:02d}T10:00:00", mtime=utc(f"2026-10-{day:02d}T10:10:00").timestamp()))
     assert res.retain(7, days=8, now=now) == 2                              # cutoff 12 Oct: the 1st and the 10th go
     left = Manifest(box.archive, 7).read()
-    assert len(left) == 1 and not os.path.exists(os.path.join(box.archive, "vms", "7", "e3", "20261001T100000Z.mp4"))
+    assert len(left) == 1 and not os.path.exists(os.path.join(box.archive, "rec", "7", "e3", "20261001T100000Z.mp4"))
     assert res.usage() == 1000
 
 
 def test_events_are_buckets_on_the_resource_recording_or_not():
-    """The archive's unit is a time span under an epoch, not a media file. A
-    camera that is watched and never recorded has event buckets; a camera that
-    went silent has no segment open, and the event that says so goes into its
-    bucket. Buckets are written in place, indexed when closed, counted onto a
-    recorded span when one overlaps, fenced by the epoch, rebuilt by repair,
-    retained by their own policy. No controller wrote any of it."""
+    """An event is an observation, written by the WORKER holding the camera's
+    epoch, into the camera's bucket on the worker's server's resource —
+    `vms/<cam>/e<epoch>/` — recording or not. Footage is the RECORDER's, under
+    its own epoch in `rec/<cam>/e<epoch>/`, indexed by the manifest beside it.
+    Two trees, two writers, one camera: a camera that is watched and never
+    recorded has buckets and no rec/ tree; the manifest indexes media only, the
+    resource's event database indexes the buckets; each is retained by its own
+    policy. No controller wrote any of it."""
     from vms.archive import event_log
-    from psimplatform.events import parse_bucket, read_bucket
+    from psimplatform.events import parse_bucket, read_bucket, subsystems_under
+    from psimplatform.eventdatabase import EventDatabase
     box = Box(); res = ArchiveResource(box.spool, box.archive, wall=lambda: box.wall())
     t0 = utc("2026-09-12T10:00:00").timestamp()
-    box.wall.t = t0 + 2000                                                     # the resource's clock: every bucket below is over
+    box.wall.t = t0 + 2000
     log = event_log(box.archive, 7, 3)                                          # the worker holds epoch 3 for camera 7
-    p = log.append(t0 + 12.5, "motion", zone="gate")                            # not recording: still an event
+    p = log.append(t0 + 12.5, "motion", zone="gate")                            # not recorded: still an event
     assert parse_bucket(p, box.archive) == ("vms", "7", 3, t0) and read_bucket(p)[0]["zone"] == "gate"
     log.append(t0 + 40.0, "silent")                                             # the event with no segment, by definition
     p2 = log.append(t0 + 700.0, "person", score=0.9)                            # the next bucket: rolled by the clock
-    for f in (p, p2): os.utime(f, (t0 + 1250, t0 + 1250))                       # quiet for the grace (the test's clock is not the disk's)
-    assert Manifest(box.archive, 7).buckets() == []                             # durable already; not yet indexed
-    assert [b.events for b in res.close_buckets(now=t0 + 1300)] == [2, 1]      # both spans over and quiet: indexed
-    assert res.close_buckets(now=t0 + 1300) == []                               # idempotent
-    tl = Manifest(box.archive, 7).timeline(t0, t0 + 1200, current_epoch=4)
-    assert [(x["media"], x["events"], x["fenced"]) for x in tl] == [(None, 2, True), (None, 1, True)]   # watched, not recorded; fenced
-    # now the camera IS recorded for the second span: the events count onto the media
+    assert subsystems_under(box.archive) == {"vms": ["7"]} and res.cameras() == []   # watched, not recorded: buckets, no rec/ tree
+    assert Manifest(box.archive, 7).timeline(t0, t0 + 1200) == []              # the manifest indexes media, and there is none
+    db = EventDatabase(box.archive, "box", wall=box.wall)
+    assert db.rebuild()["added"] == 3 and [e["kind"] for e in db.query(t0, t0 + 1200, cam=7)["events"]] == ["motion", "silent", "person"]
+    # now a recorder records the camera under ITS epoch, into rec/: the timeline has a span, the events are still the worker's
     seg = res.promote(write_segment(box.spool, 7, 4, "2026-09-12T10:10:00", mtime=t0 + 1200))
-    log4 = event_log(box.archive, 7, 4); p4 = log4.append(t0 + 650.0, "motion"); os.utime(p4, (t0 + 1900, t0 + 1900)); res.close_buckets(now=t0 + 2000)
-    tl = Manifest(box.archive, 7).timeline(t0 + 600, t0 + 1200, current_epoch=4)
-    assert [(x["media"] is not None, x["epoch"], x["events"], x["fenced"]) for x in tl] == [(False, 3, 1, True), (True, 4, 1, False)]
-    # repair rebuilds both kinds from the files; media retention is the VMS's, bucket retention the platform's
+    assert seg.path == "rec/7/e4/20260912T101000Z.mp4" and res.cameras() == [7]
+    tl = Manifest(box.archive, 7).timeline(t0, t0 + 1200, current_epoch=4)
+    assert [(x["media"] is not None, x["epoch"], x["fenced"]) for x in tl] == [(True, 4, False)]
+    assert subsystems_under(box.archive) == {"rec": ["7"], "vms": ["7"]}         # two trees, two writers, one camera
+    # repair rebuilds the manifest from the files; media retention is the recorder's, bucket retention the platform's
     from psimplatform.resource import Resource
     os.remove(Manifest(box.archive, 7).path)
-    assert res.repair() == {"added": 4, "dropped": 0}
-    assert res.retain(7, days=1, now=t0 + 3 * 86400) == 1 and len(Manifest(box.archive, 7).buckets()) == 3
-    box.vars.put("vms/retention/7", {"days": 30})                               # what the controller writes for a camera's events
+    assert res.repair() == {"added": 1, "dropped": 0}
+    assert res.retain(7, days=1, now=t0 + 3 * 86400) == 1 and Manifest(box.archive, 7).read() == []
+    assert os.path.exists(p) and os.path.exists(p2)                              # the recorder's retention never touches the worker's buckets
+    box.vars.put("vms/retention/7", {"days": 30})                               # what the VMS controller writes for a camera's events
     platform = Resource(box.archive, "box", "http://box", box.vars, box.objects, wall=lambda: t0 + 40 * 86400)
-    assert platform.retain() == 3 and not os.path.exists(p)                     # files, by the platform...
-    assert res.repair() == {"added": 0, "dropped": 3}                           # ...lines, by the VMS's own pass
+    platform.database = db
+    assert platform.retain() == 2 and not os.path.exists(p)                     # files, by the platform — and the database forgets
+    assert db.query(t0, t0 + 1200, cam=7)["events"] == []
+    assert box.vars.list("vms/events") == []

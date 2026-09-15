@@ -1,6 +1,6 @@
 """The detector worker — the second subsystem's worker. A unit is one model on
-one camera (`7-linecross`); the worker subscribes to the camera's RTP on the
-loopback the way the gateway does (from the VMS worker's heartbeat, never by
+one camera (`7-linecross`); the worker subscribes to the camera's RTSP fan-out
+the way the gateway does (`live_url` from the VMS worker's heartbeat, never by
 calling it), decodes, runs the model, and writes what the model saw into the
 unit's bucket on the resource — `det/<unit>/e<epoch>/…events.jsonl`, under
 the epoch it holds, so a stale instance's events are identifiable like a
@@ -65,10 +65,11 @@ class DetWorker(Worker):
 
     # -- where the camera's RTP is: the VMS heartbeat, never a call to the worker ---------------------
     def rtp_source(self, cam: str):
+        """`(server, live_url)` of the worker holding the camera — its RTSP fan-out, on any server."""
         for hb in heartbeats(self.objects, "vms/").values():
             for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_port"):
-                    return hb.extra.get("server", "?"), int(st["live_port"])
+                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
+                    return hb.extra.get("server", "?"), st["live_url"]
         return None
 
     def unit_row(self, unit: str) -> dict | None:
@@ -89,12 +90,12 @@ class DetWorker(Worker):
                 self.status_by_unit[unit] = {"id": unit, "cam": row["cam"], "kind": row["kind"], "phase": "unsupported"}; continue
             src = self.rtp_source(row["cam"])
             if src is None:
-                self._stop(unit); self.status_by_unit[unit] = {"id": unit, "cam": row["cam"], "kind": row["kind"], "phase": "waiting", "why": "camera not recording"}; continue
+                self._stop(unit); self.status_by_unit[unit] = {"id": unit, "cam": row["cam"], "kind": row["kind"], "phase": "waiting", "why": "camera held by nobody"}; continue
             if unit not in self.running:
                 if unit not in self.epochs:
                     self.take_epoch(unit)                                       # one writer of det/<unit>/… at a time
                 self.running[unit] = self.models[row["kind"]](row)
-                self.status_by_unit[unit] = {"id": unit, "cam": row["cam"], "kind": row["kind"], "phase": "running", "events": 0, "server": src[0], "port": src[1]}
+                self.status_by_unit[unit] = {"id": unit, "cam": row["cam"], "kind": row["kind"], "phase": "running", "events": 0, "server": src[0], "source": src[1]}
             if self.may_write(unit):
                 for kind, fields in self.running[unit].observe(now):           # what the model saw, into the unit's bucket under its epoch
                     EventLog(self.archive_root, DET.name, unit, self.epochs[unit]).append(now, kind, **fields)

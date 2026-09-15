@@ -1,4 +1,4 @@
-"""Lesson 9 — events: the database that is a cache. An event is an
+"""Lesson 10 — events: the database that is a cache. An event is an
 observation, written by the worker holding a unit's epoch into that unit's
 bucket on the resource (Lesson 3); the resource PROCESS keeps a database
 over its own tree and serves it; the console holds none and asks. Three

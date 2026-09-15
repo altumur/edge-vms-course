@@ -21,7 +21,7 @@
 - `strategy "target-value" { target = 0.9 }` — keep average load at 0.9: scale out when the fleet is fuller than 90 %, in when emptier; matches the `strategy "target-value"` plugin in the autoscaler config.
 
 ### `constraint`
-- `attribute = "${meta.archive}"  operator = "is_set"` — the comment: a worker records into the resource on its own server, so only servers that have one.
+- `attribute = "${meta.archive}"  operator = "is_set"` — the comment: a worker writes its camera's events into the resource on its own server (as a detector does), so only servers that have one; footage is the recorder's job's concern, with the same line.
 - `spread { attribute = "${node.unique.id}" }` — a preference, not `distinct_hosts`: Nomad puts workers on different servers when it can and doubles up when it must (a dead server's worker rescheduled onto a neighbour). Whether a second worker on one server *carries* cameras is the administrator's choice on the console — `vms/policy {servers: shared | distinct}` (Lesson 4): shared, it does and a dead server's worker comes back on a neighbour with its cameras; distinct, it idles by policy and the controller moves a dead server's cameras on two silences (`SpecController.gone_servers`).
 
 ### `disconnect`
@@ -38,9 +38,9 @@ Lesson 4 — the comment: the defaults are wrong for a worker.
 - `config.image = "localhost/clustervms:latest"` — the local image.
 - `config.network_mode = "host"` — the local Nomad agent at `127.0.0.1:4646`, and camera RTSP on the server's VLANs.
 - `config.args = ["python3", "-m", "cluster", "worker"]` — the `worker` verb.
-- `config.volumes = ["/data/spool:/data/spool", "/data/archive:/data/archive", "/data/media:/data/media"]` — the spool `archivesink` writes, the archive it promotes into (the resource's tree on this server), and the media files `driverpack://file/<name>` plays. Unlike М10's unit, `/data/media` is not `:ro` here.
+- `config.volumes = ["/data/archive:/data/archive", "/data/media:/data/media"]` — the archive its events go into (the resource's tree on this server) and the media files `driverpack://file/<name>` plays. No spool: the worker writes events, never segments (`vmsrecorder.nomad.hcl` has the spool). Unlike М10's unit, `/data/media` is not `:ro` here.
 - `env.OBJECTS = "variables://objects"` — heartbeats as Variables; the comment says no MinIO on this cluster.
-- `env.ARCHIVE = "${meta.archive}"` — the label the `constraint` above placed by, interpolated into the worker's environment: it records there (`VmsWorker.archive_root`) and reports it in its heartbeat as `archive`, so the console's `/servers` shows the label beside the fact (the resource heartbeat).
+- `env.ARCHIVE = "${meta.archive}"` — the label the `constraint` above placed by, interpolated into the worker's environment: its events go there (`VmsWorker.archive_root`) and it reports it in its heartbeat as `archive`, so the console's `/servers` shows the label beside the fact (the resource heartbeat).
 - `env.CAPACITY = "50"` — the comment: this server's number (cameras it can carry), per node class in a product. The worker reports it in its heartbeat and the controller places by that report, not by this file.
 - `resources { cpu = 2000  memory = 2048 }` — the comment: B + n·I, rounded up — 2 GHz and 2 GB for 50 cameras' pipelines.
 

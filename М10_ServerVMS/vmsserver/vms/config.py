@@ -59,8 +59,24 @@ from psimplatform.spec import PLATFORM_FIELDS, SubsystemSpec
 
 SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vms.subsystem.yaml"))
 LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.subsystem.yaml"))   # the second subsystem: live fan-outs
-DET_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "det.subsystem.yaml"))     # the fourth: detectors
-LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's server: LIVE_PORT_BASE + camera id (the heartbeat carries it)
+DET_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "det.subsystem.yaml"))     # the third: detectors
+REC_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rec.subsystem.yaml"))     # the fourth: recorders, on the archive
+LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's loopback: the RTSP fan-out's one subscriber (gstvms/livesrv.py)
+RTSP_PORT = 8554             # the worker's RTSP fan-out: rtsp://<server>:8554/<cam> — what a recorder, a gateway, a detector subscribe to
+
+
+def live_url(server: str, cid) -> str:
+    """Where a camera's stream is served from: the worker's RTSP fan-out. In the
+    heartbeat, so a subscriber needs only the heartbeat — on any server."""
+    return f"rtsp://{server}:{RTSP_PORT}/{cid}"
+
+
+# `REC_SPEC.row(items)` with `id` as the camera number: the recorder's reconciler wants an int id like the
+# worker's, and a recording is named by its camera.
+def rec_row(items: dict) -> dict:
+    r = REC_SPEC.row(items)
+    r["id"] = int(r["cam"])
+    return r
 OPERATOR_FIELDS = tuple(SPEC.fields)
 FORBIDDEN_FIELDS = PLATFORM_FIELDS
 

@@ -11,6 +11,7 @@ import cluster  # noqa: E402,F401  — puts М10's vmsserver on sys.path
 
 from cluster.objectstore import FsObjectStore  # noqa: E402
 from cluster.variables import FakeVariables  # noqa: E402
+from cluster.recorder import ClusterRecorder  # noqa: E402
 from cluster.worker import ClusterWorker  # noqa: E402
 from vms.archive import ArchiveResource  # noqa: E402
 from vms.worker import FakeActuator  # noqa: E402
@@ -52,6 +53,12 @@ class Cluster:
                           actuator or FakeActuator(), env=self.env(index, server, alloc),
                           clock=self.clock, wall=self.wall, capacity=capacity)
         return w
+
+    def recorder(self, index: int, server: str, capacity: int = 50, actuator=None, alloc=None) -> ClusterRecorder:
+        """A recorder allocation on `server`: writes into THAT server's archive resource."""
+        return ClusterRecorder(self.vars.as_writer("vmsrecorder", ["rec/epoch/*", "rec/slots/*"]), self.objects,
+                               actuator or FakeActuator(), env=self.env(index, server, alloc), archive=self.servers[server].resource,
+                               clock=self.clock, wall=self.wall, capacity=capacity)
 
 
 def world():

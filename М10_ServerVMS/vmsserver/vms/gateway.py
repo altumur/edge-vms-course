@@ -15,7 +15,7 @@ N browsers behind it over WebRTC. Capacity is counted in viewers.
     GET    /metrics               live_sessions, live_streams_up, live_headroom
 
 Rules it keeps: it subscribes to a camera ONCE whatever the viewer count;
-it finds the worker's RTP port from the VMS heartbeat, never by calling a
+it finds the worker's fan-out URL from the VMS heartbeat, never by calling a
 worker; a viewer never reaches a worker; it holds nothing a restart cannot
 rediscover. The media path is a `Peer` — `FakePeer` here (signalling only),
 `gstvms.webrtc.GstPeer` on a box (webrtcbin: ICE, DTLS-SRTP, RTP).
@@ -59,14 +59,14 @@ class FakePeer:
 
 # One camera's subscription: the RTP source (server, port) it listens to and the peers fanned out from it.
 class Upstream:
-    def __init__(self, cam: str, server: str, port: int, epoch: int):
-        self.cam, self.server, self.port, self.epoch = cam, server, port, epoch
+    def __init__(self, cam: str, server: str, url: str, epoch: int):
+        self.cam, self.server, self.url, self.epoch = cam, server, url, epoch
         self.peers: dict[str, object] = {}
         self.idle_since: float | None = None      # wall time the last viewer left; None while watched
 
     def to_status(self) -> dict:
         return {"id": self.cam, "phase": "live" if self.peers else "idle", "sessions": len(self.peers),
-                "server": self.server, "port": self.port, "epoch": self.epoch}
+                "server": self.server, "source": self.url, "epoch": self.epoch}
 
 
 class LiveGateway(Worker):
@@ -91,10 +91,11 @@ class LiveGateway(Worker):
 
     # -- where a camera's RTP is: the VMS heartbeat, never a call to the worker ----------------------
     def rtp_source(self, cam: str):
+        """`(server, live_url, epoch)` of the worker holding the camera — its RTSP fan-out, on any server."""
         for hb in heartbeats(self.objects, "vms/").values():
             for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_port"):
-                    return hb.extra.get("server", "?"), int(st["live_port"]), int(st.get("epoch", 0))
+                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
+                    return hb.extra.get("server", "?"), st["live_url"], int(st.get("epoch", 0))
         return None
 
     # -- the reconcile pass: make the subscriptions equal the assignment -------------------------------

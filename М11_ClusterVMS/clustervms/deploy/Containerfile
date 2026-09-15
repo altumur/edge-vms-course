@@ -5,7 +5,7 @@
 # then this one from the module directory:
 #   podman build -f ../../М10_ServerVMS/vmsserver/deploy/Containerfile -t localhost/vmsserver:latest ../../М10_ServerVMS/vmsserver
 #   podman build -f deploy/Containerfile -t localhost/clustervms:latest .
-# Four entrypoints: python3 -m cluster worker | controller | console | resource.
+# Six entrypoints: python3 -m cluster worker | controller | recorder | reccontroller | console | resource.
 FROM localhost/vmsserver:latest
 WORKDIR /app
 COPY cluster cluster

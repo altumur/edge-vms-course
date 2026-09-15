@@ -1,0 +1,53 @@
+# /etc/containers/systemd/vmsrecorder@.container — the recorder, the fourth
+# subsystem's worker and the only one placed on top of the archive.
+# `systemctl start vmsrecorder@r-1` — the instance name is the slot it claims.
+# It holds no camera: it subscribes to the fan-out of whichever worker does
+# (live_url from the VMS heartbeat) and writes footage into rec/<cam>/e<epoch>/
+# on this box's archive. In М11 this unit becomes vmsrecorder.nomad.hcl, a job
+# constrained to meta.archive, one per server by policy.
+# ================================================================================================
+# NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
+# ================================================================================================
+# # vmsrecorder@.container — the recorder as a Quadlet template: `systemctl start vmsrecorder@r-1`
+#
+# **Role.** The Quadlet unit for the `rec` subsystem's worker. `python3 -m vms recorder`: `RecWorker` claims
+# the slot `%i`, reads `rec/workers/<r>` and the recording rows it names, subscribes each to the camera's
+# `live_url`, takes `rec/epoch/<cam>`, and records with `GstRecActuator` (`rtspsrc ! archivesink`) into the
+# spool, promoting closed segments into the archive on every pass. The mounts are the recorder's: the spool
+# and the archive read-write — it is the ONLY writer of segments — the platform's stores read-write for its
+# slot, epochs and heartbeat; no media directory (it never reads a camera). Checked by
+# `tests/test_deploy_units.py`.
+#
+# ## Notes
+# - `CAPACITY` is recordings this box's disks and NIC can take: the recorder's own number, exported as
+#   headroom; the rec controller places by it.
+# - One per server by default (`rec/policy {servers: distinct}`): a second instance on the same disks is no
+#   second place to record; on a box, one instance.
+# ================================================================================================
+[Unit]
+Description=VMS recorder %i — the recordings of its assignment, into this box's archive
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms recorder
+Environment=RECORDER_NAME=%i
+# `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `CAPACITY`, `SEGMENT_SECONDS`, `LOG_LEVEL`.
+EnvironmentFile=/data/config/vms.env
+# read-write: `rec/epoch/*`, `rec/slots/*` (its token) and its heartbeat object.
+Volume=/data/platform:/data/platform:z
+# where `archivesink` writes segments; `closed_in_spool` reads it at start and on every pass.
+Volume=/data/spool:/data/spool:z
+# read-write: the recorder is the only writer of segments (promote) and manifests, under `rec/`.
+Volume=/data/archive:/data/archive:z
+# host network: it subscribes to workers' RTSP fan-outs, on this box or elsewhere.
+Network=host
+# SIGTERM finalizes the open segment: archivesink closes it and the last pass promotes it.
+StopTimeout=20
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

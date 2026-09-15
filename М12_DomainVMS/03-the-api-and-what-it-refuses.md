@@ -173,7 +173,7 @@ In no case does a web problem reach a worker, and in no case does a worker's pro
 1. Set `lost_after` below `HEARTBEAT_INTERVAL` and describe what the operator sees. Then say why the number must be М11's `lost_after` and not a console setting.
 2. Add М9's `conditions` to the worker's status (the heartbeat carries `position` only) and cost it: bytes per worker per interval at fifty cameras with three conditions each — and say at what count the object store stops being Variables.
 3. Write the `causes()` case for a whole datacenter — every server in one cluster silent while the cluster's Variables still answer (the servers are up, the cameras' network is gone). Which scope is that?
-4. The domain console's idempotency cache is in its memory and `count = 2`. Say what a retry that lands on the other instance does, and whether the controller's CAS on the row (М10 Lesson 5) saves you. Then read how М10's `SpecConsole` moved the key into the store (`vms/idem/<key>`, claimed by create-only CAS) and say what the domain's version should do.
+4. The domain console's idempotency cache is in its memory and `count = 2`. Say what a retry that lands on the other instance does, and whether the controller's CAS on the row (М10 Lesson 6) saves you. Then read how М10's `SpecConsole` moved the key into the store (`vms/idem/<key>`, claimed by create-only CAS) and say what the domain's version should do.
 5. Replace the leaky queue with a blocking one on the *upstream* subscription and run the fan-out test. Then say, in one sentence, which process you just made a dependency of recording.
 
 ## Where this is going

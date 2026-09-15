@@ -15,7 +15,7 @@ What *was* on the server is footage, and this lesson is honest about it. Footage
 ## Prerequisites
 
 - **М10 Lesson 3** — the archive as a resource: promote, manifest, repair, retain; the epoch in every path.
-- **М10 Lesson 5** — the controller acknowledges after the CAS commit.
+- **М10 Lesson 6** — the controller acknowledges after the CAS commit.
 - **Lesson 2** — the resource as a `system` job; the worker's constraint to servers with `meta.archive`.
 - **М9 Lesson 4** — the open segment is lost; never resume it.
 
@@ -38,7 +38,7 @@ Worker `w-1` runs on Server A. Server A dies. Nomad places `w-1`'s replacement o
 | On Server A | Under the recorder model | Under 2c | The test |
 |---|---|---|---|
 | **Configuration** — cameras, assignment, placement | in the recorder's Postgres; published upward; restored with an RPO | **in raft already**; `w-1` reads it on B. Nothing travels | `test_an_edit_during_the_failover_is_simply_there` |
-| **Footage** | on the dead disk | **on the dead resource**: unavailable until A returns; `w-1` records into B's resource from its first segment | `test_a_timeline_spans_two_resources…` |
+| **Footage** | on the dead disk | **on the dead resource**: unavailable until A returns; the recorder on B is given the recording and writes into B's resource from its first segment (`rec/<cam>/`, the recorder's tree and epoch) | `test_a_timeline_spans_two_resources…` |
 | **The index** | in the dead Postgres; rebuilt by scanning | **the manifest, beside the footage**: returns with the disks; the timeline merges two | same |
 | **The open segment** | lost, up to one segment length | lost, up to one segment length — the number is the segment length | М10 Lesson 3 |
 | **Identity, the epoch, the slot** | in Variables | in Variables — unchanged | Lesson 2 |

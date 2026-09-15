@@ -1,6 +1,6 @@
 """The gateway's media path, Track 2 (needs `gi`, gst-plugins-bad with
 webrtcbin, libnice, dtls, srtp): one GStreamer pipeline per CAMERA on the
-gateway — `udpsrc` on the worker's RTP port, a jitter buffer, a `tee` — and
+gateway — `rtspsrc` on the worker's fan-out URL (`live_url`, any server), a `tee` — and
 one `webrtcbin` per VIEWER hung off that tee. The H.264 payload passes
 through untouched: no decode, no encode. WHEP is answered without trickle —
 the answer carries every ICE candidate — so one HTTP round trip is the whole
@@ -25,15 +25,14 @@ from gi.repository import Gst, GstSdp, GstWebRTC  # noqa: E402
 log = logging.getLogger("gstvms.webrtc")
 Gst.init(None)
 
-RTP_CAPS = "application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000"
-SOURCE = "udpsrc port={port} caps=\"{caps}\" ! rtpjitterbuffer latency=200 ! tee name=t allow-not-linked=true"
+SOURCE = "rtspsrc location={url} latency=200 protocols=tcp ! rtph264depay ! h264parse config-interval=-1 ! rtph264pay config-interval=1 pt=96 ! tee name=t allow-not-linked=true"
 
 
 # One camera's subscription on the gateway: the pipeline every viewer of that camera branches from. Built once
 # per Upstream (kept on it as `pipeline`), torn down when the gateway drops the upstream.
 class _Source:
-    def __init__(self, port: int):
-        self.pipeline = Gst.parse_launch(SOURCE.format(port=port, caps=RTP_CAPS))
+    def __init__(self, url: str):
+        self.pipeline = Gst.parse_launch(SOURCE.format(url=url))
         self.tee = self.pipeline.get_by_name("t")
         self.pipeline.set_state(Gst.State.PLAYING)
         self.viewers = 0
@@ -48,7 +47,7 @@ class GstPeer:
     def __init__(self, upstream):
         self.up = upstream
         if getattr(upstream, "pipeline", None) is None:
-            upstream.pipeline = _Source(upstream.port)
+            upstream.pipeline = _Source(upstream.url)
         self.src: _Source = upstream.pipeline
         self.queue = Gst.ElementFactory.make("queue"); self.queue.set_property("leaky", 2)   # downstream: a slow viewer drops
         self.webrtc = Gst.ElementFactory.make("webrtcbin")

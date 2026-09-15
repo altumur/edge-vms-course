@@ -1,4 +1,4 @@
-# timeline.py — one camera's timeline across the resources it recorded into; the unreachable one named, *unavailable*, never *lost*
+# timeline.py — one camera's timeline across the resources its recording was written into (`rec/<cam>`); the unreachable one named, *unavailable*, never *lost*
 
 **Role in the module.** Lesson 3. A camera that failed over has footage on two servers: the dead one's until the failure, the new one's after. The console asks every resource whose heartbeat reports the camera for its manifest and merges the segments, tagging each with its server and whether its epoch is fenced (older than the current one). A resource whose heartbeat is stale, or that does not answer, is *unreachable*: its ranges are omitted and the answer says so by server name, with a note that they are unavailable until the server returns. The docstring fixes the vocabulary: *unavailable* is a state with a name in it; *lost* is a word this module never prints for footage on a disk. Called by `console.cluster_routes` for `GET /timeline/<id>`; tested by `test_a_timeline_spans_two_resources_and_names_the_unreachable_one` and the HTTP console test.
 
@@ -15,7 +15,7 @@ The socket timeout for one manifest fetch — short, because a slow resource mus
 
 ### `merged_timeline(resources, reader, cam, t0, t1, current_epoch=None, now=None, lost_after=45.0) -> dict`
 `resources` is `resources_seen(objects)` — `{server: heartbeat dict}` with `ts`, `url`, `units` (per subsystem). For every server in sorted order:
-- skip it unless `str(cam)` is in `units["vms"]` — the platform's heartbeat says which units each subsystem has on that resource;
+- skip it unless `str(cam)` is in `units["rec"]` — footage is the recorder's tree — the platform's heartbeat says which units each subsystem has on that resource;
 - if `now - ts > lost_after` (45 s, the same number as Nomad's `disconnect.lost_after`) → `unreachable`, no fetch;
 - else fetch; any exception (the heartbeat is fresh but the server is not answering) → `unreachable`;
 - keep every segment overlapping `[t0, t1)` as `{start, end, path, epoch, server, fenced}` with `fenced = current_epoch is not None and s.epoch < current_epoch`.

@@ -1,4 +1,4 @@
-"""Lesson 9 — what runs on М9's box: the three processes and the policy pass as
+"""Lesson 10 — what runs on М9's box: the three processes and the policy pass as
 Quadlet units over one image, on the data partition. No podman here (the
 generator's dry-run is deploy/check-quadlet.sh, for the bench); this checks
 that the units and the Containerfile agree with the package they run."""
@@ -27,9 +27,10 @@ def unit(name):
 def test_the_units_run_the_entrypoints_the_package_has():
     from vms import __main__ as m  # noqa: F401  (imports the module without running it: no __name__ == "__main__")
     entrypoints = set(re.findall(r'"(\w+)": \w+', open(os.path.join(HERE, "vms", "__main__.py")).read().split("__main__")[-1]))
-    assert entrypoints == {"worker", "controller", "console", "resource", "gateway", "livecontroller", "detworker", "detcontroller"}
+    assert entrypoints == {"worker", "controller", "recorder", "reccontroller", "console", "resource", "gateway", "livecontroller", "detworker", "detcontroller"}
     for name, entry in [("vmsworker@.container", "worker"), ("vmscontroller.container", "controller"),
                         ("vmsconsole.container", "console"), ("vmsresource.container", "resource"),
+                        ("vmsrecorder@.container", "recorder"), ("vmsreccontroller.container", "reccontroller"),
                         ("vmsgateway@.container", "gateway"), ("vmslivecontroller.container", "livecontroller"),
                         ("vmsdetworker@.container", "detworker"), ("vmsdetcontroller.container", "detcontroller")]:
         u = unit(name)
@@ -46,11 +47,16 @@ def test_who_may_write_where_is_in_the_mounts_too():
     vols = lambda n: dict(v.split(":", 1) for v in (lambda x: x if isinstance(x, list) else [x])(unit(n)["Container"]["Volume"]))
     assert "/data/archive" not in vols("vmscontroller.container") and "/data/spool" not in vols("vmscontroller.container")
     assert vols("vmsconsole.container")["/data/spool"].endswith(":ro,z")                # reads, never records
-    assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # the only writer of segments
+    assert "/data/spool" not in vols("vmsworker@.container")                            # the worker records nothing: no spool
+    assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # its events, vms/<cam>/, on this box's resource
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
+    assert vols("vmsrecorder@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
+    assert vols("vmsrecorder@.container")["/data/archive"] == "/data/archive:z"
+    assert "/data/media" not in vols("vmsrecorder@.container")                          # it never reads a camera: it subscribes to the fan-out
+    assert "/data/archive" not in vols("vmsreccontroller.container")
     assert vols("vmsresource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
     assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
-    assert unit("vmsworker@.container")["Container"]["StopTimeout"] == "20"            # SIGTERM finalizes the open segment
+    assert unit("vmsrecorder@.container")["Container"]["StopTimeout"] == "20"          # SIGTERM finalizes the open segment
     assert unit("vmsresource.container")["Service"]["Restart"] == "always"             # a process, not a timer: the database lives in it
 
 

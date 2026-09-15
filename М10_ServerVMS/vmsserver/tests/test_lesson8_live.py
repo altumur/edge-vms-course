@@ -1,4 +1,4 @@
-"""Lesson 7 — live video as the second subsystem. A gateway is a worker
+"""Lesson 8 — live video as the second subsystem. A gateway is a worker
 whose unit is a camera's fan-out and whose capacity is viewers; the unit is
 created by the first viewer and deleted after the last; one subscription per
 camera whatever the audience; the worker never learns a viewer exists."""
@@ -12,7 +12,8 @@ from psimplatform.variables import Forbidden
 from vms.config import LIVE_SPEC, SPEC
 from vms.controller import VmsController
 from vms.gateway import LiveGateway
-from vms.worker import FakeActuator, VmsWorker, live_port
+from vms.config import live_url
+from vms.worker import FakeActuator, VmsWorker
 from vms.console import serve
 from tests.conftest import Box
 
@@ -56,9 +57,9 @@ def test_the_first_viewer_creates_the_stream_and_the_controller_places_it():
     box, ctl, live_ctl, w, srv, base = _box()
     try:
         g = _gateway(box, "g-1")
-        # the worker's heartbeat says where the RTP is; nobody asked the worker
+        # the worker's heartbeat says where the stream is — its RTSP fan-out, reachable from any server; nobody asked the worker
         st = [s for s in ctl.workers_seen()["w-1"].status if s["id"] == 1][0]
-        assert st["live_port"] == live_port(1) == 20001 and "viewers" not in st
+        assert st["live_url"] == live_url("srv-1", 1) == "rtsp://srv-1:8554/1" and "viewers" not in st
         # first viewer: the console creates live/streams/1 and says "retry" — placement is the controller's pass
         code, body, _ = _whep(base, 1)
         assert code == 503 and json.loads(body)["retry_after"] == 2
@@ -70,7 +71,7 @@ def test_the_first_viewer_creates_the_stream_and_the_controller_places_it():
         except Forbidden:
             pass
         assert live_ctl.ensure_placed()[0].worker == "g-1"                              # the live controller's pass
-        assert g.reconcile_once() == ["1"] and g.subscriptions == 1 and g.upstreams["1"].port == 20001 and g.upstreams["1"].server == "srv-1"
+        assert g.reconcile_once() == ["1"] and g.subscriptions == 1 and g.upstreams["1"].url == "rtsp://srv-1:8554/1" and g.upstreams["1"].server == "srv-1"
         g.heartbeat_once()
         # second try: 201 with the gateway's SDP answer, and a session URL that goes back through the console
         code, answer, loc = _whep(base, 1)

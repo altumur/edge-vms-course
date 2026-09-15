@@ -1,4 +1,4 @@
-# Lesson 9 — Events: the Database That Is a Cache
+# Lesson 10 — Events: the Database That Is a Cache
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
 **You will build:** the resource as a process — `python3 -m vms resource`, the platform's `Resource` with the VMS registered on it: a heartbeat, the policy pass, its HTTP, and an `EventDatabase` over its own tree — and a console that holds no database and asks. Three subsystems' events on one camera's timeline, fenced by their own epochs; a database that proves it is a cache by being thrown away; retention that takes the rows with the file.
@@ -6,16 +6,16 @@
 
 ## Why this lesson exists
 
-Events have been written since Lesson 3 and shown since Lesson 6, and two questions were left open on the way: *who answers `/events?cam=7`*, and *why is that not a subsystem*. Lesson 6 answered the first with a database inside the console, over the local archive — which worked on one box and was wrong in shape: М11 would have needed a second answer, one job reading every server. This lesson gives the one answer that is the same on a box and on a cluster. The archive was a **resource** from Lesson 3 — pinned, registered on, never placed — and it now has the process that stands for it, the same process М11 runs as a `system` job on every server. What lies on a resource is indexed *by* that resource; a console with a question asks every resource it can find and merges. The events lesson is really the resource-process lesson, because the database is what a oneshot on a timer could not hold.
+Events have been written since Lesson 3 and shown since Lesson 7, and two questions were left open on the way: *who answers `/events?cam=7`*, and *why is that not a subsystem*. Lesson 7 answered the first with a database inside the console, over the local archive — which worked on one box and was wrong in shape: М11 would have needed a second answer, one job reading every server. This lesson gives the one answer that is the same on a box and on a cluster. The archive was a **resource** from Lesson 3 — pinned, registered on, never placed — and it now has the process that stands for it, the same process М11 runs as a `system` job on every server. What lies on a resource is indexed *by* that resource; a console with a question asks every resource it can find and merges. The events lesson is really the resource-process lesson, because the database is what a oneshot on a timer could not hold.
 
-> **What you can verify without hardware.** `tests/test_lesson9_events.py`: the resource process served over HTTP and found by its heartbeat; a detector's `linecross`, an operator's `mark` and the worker's `silent` on one camera's timeline through the console, in time order, each under its own subsystem and fenced when *its* epoch moves; the resource process stopped and the console saying so by name; a fresh database over the same tree giving the same rows; retention on the resource taking a bucket's rows with its file; nothing about events in any store.
+> **What you can verify without hardware.** `tests/test_lesson10_events.py`: the resource process served over HTTP and found by its heartbeat; a detector's `linecross`, an operator's `mark` and the worker's `silent` on one camera's timeline through the console, in time order, each under its own subsystem and fenced when *its* epoch moves; the resource process stopped and the console saying so by name; a fresh database over the same tree giving the same rows; retention on the resource taking a bucket's rows with its file; nothing about events in any store.
 
 ## Prerequisites
 
 - **Lesson 3** — event buckets on the resource, `EventLog`, `ArchivePolicy`, retention by `<sub>/retention/*`.
-- **Lesson 6** — the console, its mounts, `/events` on the page.
-- **Lesson 8** — a worker of another subsystem writing events under its own epoch.
-- **М9 Lesson 5** — the data partition; the units in Lesson 10 mount it.
+- **Lesson 7** — the console, its mounts, `/events` on the page.
+- **Lesson 9** — a worker of another subsystem writing events under its own epoch.
+- **М9 Lesson 5** — the data partition; the units in Lesson 11 mount it.
 
 ## Learning objectives
 
@@ -54,7 +54,7 @@ vms/retention/7 {days: 1}; resource.retain() -> 1                         the fi
 box.vars.list("vms/events") == []  objects.list("vms/events") == []      nothing about events in any store
 ```
 
-Two properties, the controller's from Lesson 5 in the form that matters for a cache: it holds nothing it cannot rebuild — `test_the_database_is_a_cache_and_retention_takes_the_rows_with_the_file` builds a second one over the same tree and gets the same rows — and nothing running depends on it: workers write buckets, the policy retains files, and the database is told (`Resource.retain` calls `forget`) rather than consulted. A restarted process says *catching up* until its rebuild is done rather than answering short; on one box that is seconds for a day of events. `EVENTDB` is `:memory:` in the unit because the next start rebuilds it anyway.
+Two properties, the controller's from Lesson 6 in the form that matters for a cache: it holds nothing it cannot rebuild — `test_the_database_is_a_cache_and_retention_takes_the_rows_with_the_file` builds a second one over the same tree and gets the same rows — and nothing running depends on it: workers write buckets, the policy retains files, and the database is told (`Resource.retain` calls `forget`) rather than consulted. A restarted process says *catching up* until its rebuild is done rather than answering short; on one box that is seconds for a day of events. `EVENTDB` is `:memory:` in the unit because the next start rebuilds it anyway.
 
 ## Step 3 — The console asks, and merges
 
@@ -78,7 +78,7 @@ The page shows all of it, and nothing on the page knows what an event means. Und
 
 The design record's row *What is a subsystem, and what is not* asks three questions: a process that moves, a unit that is placed, a capacity the worker measures. Events answer no to the first: they are a data shape on a resource, written by whoever holds the unit's epoch, so an "events subsystem" would be a second writer on camera 7 needing an epoch for a unit it does not run. The database answers no to the second: it indexes what lies on a resource, so it has nothing to place — it is where the buckets are, and moving it would mean moving the disk. And the console's merge answers no to the third: it has no capacity, because it holds nothing. The first draft of М11 had one `count = 1` index job reading every resource over HTTP — a cache, but a cluster-wide one, with a rebuild that scaled with the cluster and every server's rows on one server; the second draft put it beside every console; both were an index looking for a home, and the home was the resource all along. What *would* make it a subsystem is written down so the rule is testable: when "the buckets of resource srv-a" is a unit worth placing somewhere other than srv-a — and until then it is not placed at all.
 
-**Deliverable:** `vmsresource.container` running beside the worker, the controller and the console — heartbeating, retaining, serving `/events`; a line-crossing model, an operator's mark and a silent camera on one timeline through `/events?cam=`, each fenced by its own subsystem's epoch; the resource process restarted and the timeline back within seconds; a camera's `retention_days` shortened and its old events gone from the timeline on the next policy pass; the page's events list, its live feed and its Mark button all fed by `/events`; `test_lesson9_events.py` green.
+**Deliverable:** `vmsresource.container` running beside the worker, the controller and the console — heartbeating, retaining, serving `/events`; a line-crossing model, an operator's mark and a silent camera on one timeline through `/events?cam=`, each fenced by its own subsystem's epoch; the resource process restarted and the timeline back within seconds; a camera's `events_retention_days` shortened and its old events gone from the timeline on the next policy pass; the page's events list, its live feed and its Mark button all fed by `/events`; `test_lesson10_events.py` green.
 
 ---
 
@@ -90,7 +90,7 @@ The design record's row *What is a subsystem, and what is not* asks three questi
 | `/events` answers `[]` with `state: "live"` and no server named | No resource heartbeat at all: the process never started, or `PLATFORM_DIR` differs between the two units. `/resources` on the console lists what it sees. |
 | A detector's event shows `fenced: true` while the detector runs | Its epoch moved — another instance took the unit — and the event was written under the old one. Correct: the fence is per unit, by *that* subsystem's epoch. |
 | The timeline lags a new event by more than a few seconds | The tail interval is 3 s and the bucket must be on disk: a worker buffers nothing, but a detector fires on its own schedule. Rebuild is never needed for an open bucket. |
-| Old events remain after `retention_days` was cut | Retention runs on the policy pass, every 600 s; the database forgets on the same pass. `/events` never lies in between: the rows are there because the file is. |
+| Old events remain after `events_retention_days` was cut | Retention runs on the policy pass, every 600 s; the database forgets on the same pass. `/events` never lies in between: the rows are there because the file is. |
 
 ## Recap
 
@@ -108,4 +108,4 @@ The design record's row *What is a subsystem, and what is not* asks three questi
 
 ## Where this is going
 
-One box now runs exactly М11's set of processes: a worker, a controller and a console per subsystem, and one resource process with the event database in it. [**Lesson 10**](10-on-the-box.md) puts all of it on the box М9 built as Quadlet units, `vmsresource.container` among them, and М11 turns the same units into jobs with a server dying between them.
+One box now runs exactly М11's set of processes: a worker and a controller per subsystem — the recorder's among them — one console, and one resource process with the event database in it. [**Lesson 11**](11-on-the-box.md) puts all of it on the box М9 built as Quadlet units, `vmsresource.container` among them, and М11 turns the same units into jobs with a server dying between them.

@@ -5,7 +5,7 @@ the server exists; on a box it is `python3 -m vms resource`
 no controller: it has a policy pass on a timer, a heartbeat, its HTTP, and
 the event database over its own tree. What the VMS adds is its part:
 
-    ArchivePolicy   registered as the "vms" hook: repair the manifests, close buckets into them, retain media
+    ArchivePolicy   registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<cam>
     vms_routes      GET /manifest/<cam>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
 
     platform/resources/<server>/heartbeat   {server, ts, url, usage, units, mirrors} — how the console finds it
@@ -21,10 +21,10 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 # # resource.py — the resource process: the platform's Resource with the VMS's policy, routes and the event
 # database
 #
-# **Role in the module.** Lesson 9 (events) and Lesson 10 (the box). The archive was a resource from Lesson
+# **Role in the module.** Lesson 10 (events) and Lesson 11 (the box). The archive was a resource from Lesson
 # 3 — pinned, registered on, never placed — and this is the process that stands for it: the platform's
-# `Resource` over `/data/archive` with `ArchivePolicy` registered as the `vms` hook (repair, close, media
-# retention), a heartbeat under `platform/resources/<server>`, the platform's HTTP (`psimplatform.resource.
+# `Resource` over `/data/archive` with `ArchivePolicy` registered as the `rec` hook (the recorder's: manifest
+# repair, media retention by the recording row), a heartbeat under `platform/resources/<server>`, the platform's HTTP (`psimplatform.resource.
 # serve`) with the VMS's two reads added, and an `EventDatabase` over the tree, rebuilt on start and tailed,
 # served as `GET /events`. The console holds no database: it asks this process (`MergedIndex`). М11 runs the
 # same function as the `resource` job on every server (`cluster/resource.py` re-exports it), which is the
@@ -40,7 +40,8 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 #
 # ### `vms_resource(archive, server, url, vars_, objects, wall=None, peers=None, database=":memory:") -> Resource`
 # Builds the platform's `Resource` on the archive's root with the archive's `bucket_seconds` and clock,
-# registers `ArchivePolicy(archive, vars_)` as the `vms` hook, and attaches `resource.database =
+# registers `ArchivePolicy(archive, vars_)` as the `rec` hook (footage is the recorder's subsystem; the
+# worker's tree under `vms/` holds events only, retained by the platform's bucket policy), and attaches `resource.database =
 # EventDatabase(root, server, database, wall, bucket_seconds)` — created, not started: the process calls
 # `start()` after `restore()`, a test calls `rebuild()`/`tail()` by hand. `retain()` tells the database what
 # it removed; `serve()` answers `/events` from it.
@@ -89,6 +90,6 @@ def vms_resource(archive: ArchiveResource, server: str, url: str, vars_, objects
     event database over its tree (created; the process starts it after `restore()`)."""
     wall = wall or archive.wall
     r = Resource(archive.root, server, url, vars_, objects, archive.bucket_seconds, wall, peers)
-    r.register("vms", ArchivePolicy(archive, vars_))
+    r.register("rec", ArchivePolicy(archive, vars_))                    # footage is the recorder's: rec/<cam>/…, rec/recordings/<cam>
     r.database = EventDatabase(archive.root, server, database, wall, archive.bucket_seconds)
     return r

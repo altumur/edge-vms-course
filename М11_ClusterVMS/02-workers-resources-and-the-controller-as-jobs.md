@@ -1,12 +1,12 @@
 # Lesson 2 — Workers, Resources and the Controller as Jobs
 
 **Module:** ClusterVMS — workers that outlive their server (Module 11)
-**You will build:** five jobs — the worker with `count = N` and a `scaling` block, the archive resource as a `system` job, the controller at `count = 1`, the console as a `system` job on every server, and the Nomad Autoscaler — a worker identity that survives being rescheduled because it is claimed rather than given, and the ACL proven from inside an allocation.
+**You will build:** seven jobs — the worker with `count = N` and a `scaling` block, the recorder with the archive constraint and its own controller, the archive resource as a `system` job, the controller at `count = 1`, the console as a `system` job on every server, and the Nomad Autoscaler — a worker identity that survives being rescheduled because it is claimed rather than given, and the ACL proven from inside an allocation.
 **Time:** ~180 minutes.
 
 ## Why this lesson exists
 
-М10 ran three programs as `systemd` units. This lesson runs the same three programs as Nomad jobs and adds a fourth that is not the VMS's at all. The programs do not change; what changes is who starts them, how many, where, and what a process is told about itself when it comes up. That last one is the lesson's real subject. Under `systemd` a worker was `vmsworker@w-1` and knew its name from `%i`. Under Nomad it is *one of N allocations of a job*, and if its name came from nowhere better than its environment, a rescheduled worker would come back as somebody else and its cameras would sit in an assignment row nobody reads.
+М10 ran its programs as `systemd` units. This lesson runs the same programs as Nomad jobs — the worker, the recorder, their two controllers, the console, the resource — and adds one that is not the VMS's at all. The programs do not change; what changes is who starts them, how many, where, and what a process is told about itself when it comes up. That last one is the lesson's real subject. Under `systemd` a worker was `vmsworker@w-1` and knew its name from `%i`. Under Nomad it is *one of N allocations of a job*, and if its name came from nowhere better than its environment, a rescheduled worker would come back as somebody else and its cameras would sit in an assignment row nobody reads.
 
 The other thing this lesson settles is a question М10 left open and answered last: **who decides N.** Not the controller. The operator sets bounds, Nomad places, and the Nomad Autoscaler moves `count` from a number the workers export. The controller has no Nomad client, and this lesson shows the two things it does instead: place cameras on whatever workers exist, and move the cameras of a slot whose holder *said* it was stopping.
 
@@ -15,9 +15,9 @@ The other thing this lesson settles is a question М10 left open and answered la
 ## Prerequisites
 
 - **М10 Lesson 1, Step 5a** — identity by claim: `vms/slots/<name>`, `claim_slot(prefer)`, `released` versus lapsed.
-- **М10 Lesson 5, Step 4a** — the controller's one unasked move.
+- **М10 Lesson 6, Step 4a** — the controller's one unasked move.
 - **Lesson 1** — the cluster, `meta.labels`, `meta.archive`, ACLs on.
-- **М9 Lesson 4** — Quadlet; **М10 Lesson 10** — the Quadlet units these jobs translate, over the image these jobs build `FROM`.
+- **М9 Lesson 4** — Quadlet; **М10 Lesson 11** — the Quadlet units these jobs translate, over the image these jobs build `FROM`.
 
 ## Learning objectives
 
@@ -35,7 +35,9 @@ The other thing this lesson settles is a question М10 left open and answered la
 | Program | Quadlet unit on М9's box (М10) | Under Nomad | Why that shape |
 |---|---|---|---|
 | **`vmsworker`** | `vmsworker@.container`, `vmsworker@w-N` started by hand | `service`, `count = N`, `scaling {}`, `disconnect {}`, `kill_timeout = 20s`, `spread` | movable; placed by constraint; N is the scheduler's; whether two on one server carry cameras is the administrator's (`vms/policy`, Lesson 4) |
-| **`resource`** — the platform's, with the VMS registered on it | `vmsresource.container` — the same process (М10 Lesson 9) | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the VMS's manifests and footage as *its* part |
+| **`vmsrecorder`** | `vmsrecorder@.container` | `service`, `count = N`, **`constraint meta.archive is_set`**, `spread`, `disconnect {}`, `kill_timeout = 20s` | the only writer of footage, so the only job that must be where the disks are; one per server carries recordings by default (`rec/policy`); its recordings move by the rec controller when its server dies (Lesson 4) |
+| **`vmsreccontroller`** | `vmsreccontroller.container` | `service`, `count = 1` | the same `SpecController` over `rec.subsystem.yaml`; places recordings on recorders whose resource answers |
+| **`resource`** — the platform's, with the recorder registered on it | `vmsresource.container` — the same process (М10 Lesson 10) | **`system`**, `constraint meta.archive is_set` | one per eligible server, pinned; it never moves because it cannot; every subsystem's buckets, the mirror, the retention passes — and the recorder's manifests and footage as *its* part |
 | **`vmscontroller`** | `vmscontroller.container` | `service`, `count = 1`, no port | one is economy, not correctness — CAS is the correctness, and a second would repeat the same pass; its token writes placement only (`vmscontroller-policy.hcl`) |
 | **`console`** | `vmsconsole.container` | `system`, port 8080 on every server, `constraint meta.archive is_set` (for marks) | a person is waiting on it, and any server's address is the console — no load balancer, nothing in front; stateless; a retry is answered the same by any instance (`vms/idem/*`); its token writes the operator's rows only (`console-policy.hcl`) — a console that could place would be a second controller with a browser in front |
 | **the Nomad Autoscaler** | the operator's hand | `service`, `count = 1`, reads Prometheus, talks to Nomad | the only thing that changes `count`; MPL-2.0; not ours |
@@ -43,7 +45,7 @@ The other thing this lesson settles is a question М10 left open and answered la
 The files are in [`deploy/`](clustervms/deploy/). Two things in the worker's job are not translation but new:
 
 ```hcl
-constraint { attribute = "${meta.archive}"  operator = "is_set" }   # a worker records into the resource on ITS server
+constraint { attribute = "${meta.archive}"  operator = "is_set" }   # a worker writes its events into the resource on ITS server; the recorder's job has the same line for footage
 task "vmsworker" { kill_timeout = "20s" ... }                        # room to release the slot on SIGTERM
 ```
 
@@ -149,7 +151,7 @@ own=200 other=403 — one writer per key holds
 
 `own` is `PUT vms/epoch/verify`; `other` is `PUT vms/cameras/verify`. If `other` ever comes back 200, the sentence the whole module rests on — *the controller writes, the platform stores, the worker reads its share* — is a convention, and conventions do not survive the first "quick fix".
 
-**Deliverable:** the five jobs running with the behaviour they had under `systemd`; `nomad job scale vmsworker 3` → a new slot claimed and the next camera placed on it within one pass; `… 2` → the released slot's cameras redistributed; `verify-bench.sh` all PASS, including `own=200 other=403` from inside the allocation.
+**Deliverable:** the seven jobs running with the behaviour they had under `systemd`; `nomad job scale vmsworker 3` → a new slot claimed and the next camera placed on it within one pass; `… 2` → the released slot's cameras redistributed; `verify-bench.sh` all PASS, including `own=200 other=403` from inside the allocation.
 
 ---
 

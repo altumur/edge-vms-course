@@ -1,6 +1,11 @@
-"""The actuator that builds `driverpacksrc ! tee ! archivesink` per camera —
-the worker's verb -> pipeline. The tee's second branch is a leaky queue
-into a fakesink until М12's gateway subscribes to it."""
+"""The two actuators — a worker's verb -> pipeline.
+
+    GstActuator     the WORKER's: `driverpacksrc ! h264parse ! watchdog ! tee`, the tee's branch RTP to the
+                    loopback port the RTSP fan-out (`livesrv.py`) serves as rtsp://<server>:8554/<cam>. It holds
+                    the camera and records nothing.
+    GstRecActuator  the RECORDER's: `rtspsrc location=<live_url> ! rtph264depay ! h264parse ! archivesink` —
+                    subscribed to the fan-out, writing segments into the spool under the recorder's epoch.
+"""
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
@@ -51,19 +56,23 @@ log = logging.getLogger("gstvms")
 Gst.init(None)
 
 DESC = ("driverpacksrc uri={uri} name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
-        "t. ! queue ! archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg} "
         "t. ! queue leaky=downstream max-size-buffers=30 ! {live}")
-LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} sync=false"   # the live branch: RTP to the loopback,
-IDLE = "fakesink sync=false"                                                                    # into nobody unless a gateway listens
+LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} sync=false"   # the tee's branch: RTP to the loopback port
+IDLE = "fakesink sync=false"                                                                    # the RTSP fan-out (livesrv) serves from
+REC_DESC = ("rtspsrc location={source} latency=200 protocols=tcp name=src ! rtph264depay ! h264parse ! watchdog timeout={watchdog} ! "
+            "archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}")
 
 
 # State: `spool`, `archive`, `seg` (segment seconds), `watchdog` (ms), `pipelines` (`{camera id:
 # Gst.Pipeline}`), `dead` (ids whose bus posted an error since the last pump), `posted` (`(camera, kind,
 # fields)` since the last pump).
 class GstActuator:
-    # Stores the knobs; `__main__` passes `$SPOOL`, `$ARCHIVE`, `$SEGMENT_SECONDS`.
-    def __init__(self, spool: str, archive: str, segment_seconds: int = 600, watchdog_ms: int = 8000):
-        self.spool, self.archive, self.seg, self.watchdog = spool, archive, segment_seconds, watchdog_ms
+    """The worker's: holds the camera, serves the fan-out, records nothing."""
+
+    def __init__(self, watchdog_ms: int = 8000, rtsp_port: int = 8554):
+        self.watchdog = watchdog_ms
+        from .livesrv import FanOut
+        self.fanout = FanOut(rtsp_port)                  # rtsp://<server>:8554/<cam>: one shared factory per camera over its loopback port
         self.pipelines: dict[int, Gst.Pipeline] = {}
         self.dead: list[int] = []
         self.posted: list[tuple[int, str, dict]] = []   # what elements posted on the bus: (camera, kind, fields)
@@ -84,12 +93,10 @@ class GstActuator:
             p.send_event(Gst.Event.new_eos())            # lets splitmuxsink finalize the open segment
             p.set_state(Gst.State.NULL)
         if verb == "stop":
+            self._unpublish(cid)
             return True
-        live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
-        desc = DESC.format(uri=cam["source"], watchdog=self.watchdog, cam=cid, epoch=cam.get("epoch", 0),
-                           spool=self.spool, archive=self.archive, seg=self.seg, live=live)
         try:
-            p = Gst.parse_launch(desc)
+            p = Gst.parse_launch(self.describe(cam))
         except Exception as e:                        # noqa: BLE001
             log.error("camera %s: %s", cid, e)
             return False
@@ -100,7 +107,21 @@ class GstActuator:
         if p.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             return False
         self.pipelines[cid] = p
+        self._publish(cid, cam)
         return True
+
+    # The pipeline for this verb's row: the worker's DESC with the tee's loopback branch.
+    def describe(self, cam: dict) -> str:
+        live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
+        return DESC.format(uri=cam["source"], watchdog=self.watchdog, live=live)
+
+    def _publish(self, cid: int, cam: dict) -> None:
+        if self.fanout is not None and cam.get("live_port"):
+            self.fanout.publish(str(cid), cam["live_port"])
+
+    def _unpublish(self, cid: int) -> None:
+        if self.fanout is not None:
+            self.fanout.unpublish(str(cid))
 
     # Filters an element message into an observation. Messages with no structure, or named
     # `GstBinForwarded`, `splitmuxsink-fragment-opened` or `splitmuxsink-fragment-closed`, are plumbing and
@@ -140,3 +161,17 @@ class GstActuator:
     def stop_all(self) -> None:
         for cid in list(self.pipelines):
             self("stop", {"id": cid})
+
+
+class GstRecActuator(GstActuator):
+    """The recorder's: `rtspsrc` on the camera's fan-out URL, `archivesink` into the spool under the
+    recorder's epoch. No fan-out of its own; nothing here reads a camera."""
+
+    def __init__(self, spool: str, archive: str, segment_seconds: int = 600, watchdog_ms: int = 8000):
+        self.spool, self.archive, self.seg, self.watchdog = spool, archive, segment_seconds, watchdog_ms
+        self.fanout = None
+        self.pipelines, self.dead, self.posted = {}, [], []
+
+    def describe(self, cam: dict) -> str:
+        return REC_DESC.format(source=cam["source"], watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0),
+                               spool=self.spool, archive=self.archive, seg=self.seg)

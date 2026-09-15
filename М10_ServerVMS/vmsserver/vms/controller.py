@@ -18,7 +18,7 @@ server, and it is the hostname.
 # # controller.py — vmscontroller: the platform's SpecController run from `vms.subsystem.yaml`, in the VMS's
 # words
 #
-# **Role in the module.** Lesson 5. The VMS controller is not written here; it is
+# **Role in the module.** Lesson 6. The VMS controller is not written here; it is
 # `psimplatform.spec.SpecController` (see `psimplatform/spec.py`) instantiated with the VMS's spec. This
 # module contributes only vocabulary: the class `VmsController` whose constructor bakes in `SPEC`, and five
 # aliases so the tests and the console can say *camera* where the platform says *unit*. The docstring is the

@@ -34,18 +34,18 @@ That is what makes the archive a **resource**: server-bound, with no controller,
 ## Step 1 — The paths
 
 ```
-<spool>/vms/<cam>/e<epoch>/<start>Z.mp4        the open segment, and closed ones not yet promoted
-<archive>/vms/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media
-<archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl   the camera's event buckets (Step 5a)
-<archive>/vms/<cam>/manifest.jsonl             one line per media segment and per closed event bucket
+<spool>/rec/<cam>/e<epoch>/<start>Z.mp4        the open segment, and closed ones not yet promoted
+<archive>/rec/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media — the RECORDER's tree, its epoch (Lesson 5)
+<archive>/rec/<cam>/manifest.jsonl             one line per media segment; media only
+<archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl   the camera's event buckets — the WORKER's tree, its epoch (Step 5a)
 ```
 
-The first path element is the subsystem. The archive is one resource and other subsystems keep their buckets on it under their own prefix — `det/7-linecross/…`, `live/7/…` — which is why the VMS's own footage lives under `vms/` rather than at the root.
+The first path element is the subsystem, and one camera has two: `rec/7/` is its footage, written by the recorder (Lesson 5) under the recorder's epoch; `vms/7/` is its events, written by the worker that holds it (Lesson 4) under the worker's. The archive is one resource and every subsystem keeps its buckets on it under its own prefix — `det/7-linecross/…`, `live/7/…` — which is why nothing lives at the root.
 
-The epoch is in every path from the first byte. `archivesink` gets it as a property from the worker when the camera starts (Lesson 4), and `splitmuxsink`'s `format-location` puts it in the directory name. Nothing downstream — promotion, the manifest, playback — has to be told about fencing; it reads the path.
+The epoch is in every path from the first byte. `archivesink` gets it as a property from the recorder when the recording starts (Lesson 5), and `splitmuxsink`'s `format-location` puts it in the directory name. Nothing downstream — promotion, the manifest, playback — has to be told about fencing; it reads the path.
 
 ```
-parse("/a/7/e5/20260912T101000Z.mp4") -> (camera 7, epoch 5, 2026-09-12 10:10:00 UTC)
+parse("/a/rec/7/e5/20260912T101000Z.mp4") -> (camera 7, epoch 5, 2026-09-12 10:10:00 UTC)
 parse("/a/7/e5/manifest.jsonl")       -> None
 ```
 
@@ -68,7 +68,7 @@ Ten-minute segments, a worker killed at minute seven of the eighth segment:
 | | Where | What happens |
 |---|---|---|
 | six closed segments | promoted, in the archive, in the manifest | nothing; they were acknowledged |
-| one closed segment | in the spool — closed, and the worker died before `promote()` | `closed_in_spool(grace=30 s)` finds it; the restarting worker promotes it first |
+| one closed segment | in the spool — closed, and the recorder died before `promote()` | `closed_in_spool(grace=30 s)` finds it; the restarting recorder promotes it first |
 | the open segment | in the spool, being written | **lost** — up to one segment length, the number М9 Lesson 4 stated and М9 Lesson 8 repeated: *never resume it; open a new one* |
 
 `test_kill_mid_segment_open_lost_closed_kept` builds exactly that spool and asserts the counts: seven lines after the restart's promotion, and `closed_in_spool` empty afterwards. The grace — two segment lengths in М11's sweep, thirty seconds here because the test controls the clock — is what tells a closed segment from an open one without asking the element: a file nobody has written to for that long is not being written.
@@ -114,7 +114,7 @@ merged: e3, e3, e4  (resource A)  +  e5  (resource B)
 
 Where do events go, now that there is no database on the server? Ask what an event *is*: an observation — a detector fired, the camera went silent, an operator marked a moment — made by the worker that holds the camera, keyed by camera and time, never updated. That is the manifest's shape, not a table's. The first draft of this step put events *beside the open segment*, and the question that broke it was: what if the camera is not being recorded? A live-only camera, an analytics-only camera, recording on motion — and the event that says *silent* has, by definition, no segment open.
 
-So the archive's unit is corrected: it is a **time span under an epoch**, not a media file. A span may hold media (`archivesink` wrote it), events (the worker observed something), or both. The events half is a platform piece, `psimplatform/events.py`, because nothing in it is about video:
+So the archive holds two things about one camera, and they are not one thing: **media**, under `rec/<cam>/` — written by the recorder, under *its* epoch, indexed by the manifest — and **events**, under `vms/<cam>/` — written by the worker that holds the camera, under *its* epoch, indexed by the resource's event database (Lesson 10). Two trees, two writers, two epochs; a camera that is watched and never recorded has the second and not the first. The events half is a platform piece, `psimplatform/events.py`, because nothing in it is about video:
 
 ```
 <resource>/<subsystem>/<unit>/e<epoch>/<start>Z.events.jsonl     a bucket: JSON lines {t, kind, ...} for `bucket_seconds` from <start>
@@ -126,28 +126,31 @@ The worker's call is `observe(cid, kind, **fields)`, and it is valid whenever th
 
 ```
 log = event_log(archive, 7, 3)                        # camera 7, epoch 3: the worker's log for it
-log.append(t0+12.5, "motion", zone="gate")            # not recording; still an event, in vms/7/e3/<t0>Z.events.jsonl
+log.append(t0+12.5, "motion", zone="gate")            # not recorded; still an event, in vms/7/e3/<t0>Z.events.jsonl
 log.append(t0+40,   "silent")                         # the event with no segment, by definition
 log.append(t0+700,  "person", score=0.9)              # the next bucket: rolled by the clock, not by anything the VMS did
-res.close_buckets(now=t0+1300)  -> [2 events, 1 event]     spans over and quiet: the manifest line is written
-timeline(t0, t0+1200, current_epoch=4)  -> (media None, events 2, fenced) (media None, events 1, fenced)   watched, not recorded
+subsystems_under(archive) == {"vms": ["7"]};  res.cameras() == []       watched, not recorded: buckets, no rec/ tree
+Manifest(archive, 7).timeline(t0, t0+1200) == []                          the manifest indexes media, and there is none
+EventDatabase(archive).rebuild() -> 3 added;  query(cam=7) -> motion, silent, person
+res.promote(<a segment under epoch 4>)  -> rec/7/e4/20260912T101000Z.mp4       a recorder records it under ITS epoch
+timeline(t0, t0+1200, current_epoch=4)  -> [(media, epoch 4, not fenced)];  subsystems_under -> {rec: [7], vms: [7]}
 ```
 
-Then everything the segment already has, the buckets get: written in place and durable per line (closing a bucket is the *index* catching up, not an acknowledgement); the timeline counts a bucket's events onto a recorded span that overlaps it and shows an events-only span as what it is; `repair()` rebuilds both kinds of line from the files. Retention is per kind and per owner: media is the VMS's (`retain()` by `retention_days`), buckets are the **platform's** — the controller writes `vms/retention/<cam> {days: events_retention_days}` and the platform's resource job deletes the files, a month of footage and a year of events being the usual pair, which is why the camera row grew the second field; `repair()` then drops the lines whose files went. `test_events_are_buckets_on_the_resource_recording_or_not` is that list as assertions, and its last one is the point: no controller wrote an event, and nothing went to the store.
+Then everything the segment already has, the buckets get: written in place and durable per line; the console draws a bucket's events over the media spans that overlap them and on an empty timeline when there are none; `repair()` rebuilds the manifest's media lines from the files, and the event database (Lesson 10) rebuilds its rows from the buckets. Retention is per kind and per owner: media is the **recorder's** (`ArchivePolicy.retain()` by `rec/recordings/<cam>.retention_days`, thirty days without a row), buckets are the **platform's** — the VMS controller writes `vms/retention/<cam> {days: events_retention_days}` and the platform's resource job deletes the files, a month of footage and a year of events being the usual pair, which is why the two numbers live on two rows; the database forgets the rows with the file. `test_events_are_buckets_on_the_resource_recording_or_not` is that list as assertions, and its last one is the point: the recorder's retention never touches the worker's buckets, no controller wrote an event, and nothing went to the store.
 
-**Other subsystems record events the same way**, because the piece is generic: a detector's unit is a detector job with its own epoch and its own worker on a GPU server, and its buckets are `det/d-12/e3/…` on *that* server's resource. Its event about camera 7 carries `cam: 7` as a field — it does not write into camera 7's bucket, which has exactly one writer, possibly on another server. The detector subsystem (Lesson 8) writes `det/7-linecross/e1/…` through the same `EventLog`. And the resource itself is a platform job — `psimplatform/resource.py`: it heartbeats what is on its disks, serves every subsystem's buckets over HTTP, retains them by each subsystem's own rows, copies closed buckets to the next resource when `platform/mirror` is on and pulls them home after a disk is replaced, and runs whatever pass a subsystem registers on it. The VMS registers `ArchivePolicy` (repair, close, media retention). `test_the_resource_is_a_platform_job_that_mirrors_any_subsystems_buckets` runs two resources on one box with buckets from subsystems that do not exist, and the word *camera* does not appear in the file. Cross-camera and cross-subsystem search need an index; М11 builds it as a job that is a **cache**, reading every resource's buckets into SQLite and proving it is a cache by being deleted and rebuilt to the same answer. The rule, written down now while it is small: **events are observations, written by the worker holding the unit's epoch, into the unit's bucket on its server's resource; an index over them is a cache; a controller writes none of them.**
+**Other subsystems record events the same way**, because the piece is generic: a detector's unit is a detector job with its own epoch and its own worker on a GPU server, and its buckets are `det/d-12/e3/…` on *that* server's resource. Its event about camera 7 carries `cam: 7` as a field — it does not write into camera 7's bucket, which has exactly one writer, possibly on another server. The detector subsystem (Lesson 9) writes `det/7-linecross/e1/…` through the same `EventLog`. And the resource itself is a platform job — `psimplatform/resource.py`: it heartbeats what is on its disks, serves every subsystem's buckets over HTTP, retains them by each subsystem's own rows, copies closed buckets to the next resource when `platform/mirror` is on and pulls them home after a disk is replaced, and runs whatever pass a subsystem registers on it. The recorder registers `ArchivePolicy` (manifest repair, media retention) as the `rec` hook. `test_the_resource_is_a_platform_job_that_mirrors_any_subsystems_buckets` runs two resources on one box with buckets from subsystems that do not exist, and the word *camera* does not appear in the file. Cross-camera and cross-subsystem search need an index; М11 builds it as a job that is a **cache**, reading every resource's buckets into SQLite and proving it is a cache by being deleted and rebuilt to the same answer. The rule, written down now while it is small: **events are observations, written by the worker holding the unit's epoch, into the unit's bucket on its server's resource; an index over them is a cache; a controller writes none of them.**
 
 ## Step 6 — Retention is a policy on the resource
 
-There is no controller for the archive, and there should not be: the only decisions about it are a policy — keep N days per camera — and a repair. `retain(cam, days, now)` deletes the file first and rewrites the manifest second, so a crash between the two leaves a line that names nothing (which `repair()` drops) rather than a file nothing names (which would be footage the timeline cannot find):
+There is no controller for the archive, and there should not be: the only decisions about it are a policy — keep N days per recording — and a repair. `retain(cam, days, now)` deletes the file first and rewrites the manifest second, so a crash between the two leaves a line that names nothing (which `repair()` drops) rather than a file nothing names (which would be footage the timeline cannot find):
 
 ```
 three segments on 1, 10 and 19 October; retain(days=8, now=20 October) -> 2 removed; usage 1000 bytes
 ```
 
-The resource process (`python3 -m vms resource`, Lesson 9; `deploy/vmsresource.container`) runs `repair()` and then `retain()` per camera every ten minutes in its policy pass, reading each camera's `retention_days` from the config store — the policy is the operator's, the enforcement is the resource's own, and the worker is not involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
+The resource process (`python3 -m vms resource`, Lesson 10; `deploy/vmsresource.container`) runs `repair()` and then `retain()` per camera every ten minutes in its policy pass, reading each recording's `retention_days` from `rec/recordings/<cam>` in the config store — the policy is the operator's, the enforcement is the resource's own, and neither the worker nor the recorder is involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
 
-**Deliverable:** record a file-camera for ten minutes with `archivesink`; kill the worker at minute seven; show six promoted, one closed-but-unpromoted picked up on restart, the open one lost; delete the manifest and rebuild it from the archive alone; then show a timeline with a fenced epoch on it.
+**Deliverable:** record a file-camera for ten minutes with `archivesink` (the recorder's element, Lesson 5); kill the recorder at minute seven; show six promoted, one closed-but-unpromoted picked up on restart, the open one lost; delete the manifest and rebuild it from the archive alone; then show a timeline with a fenced epoch on it.
 
 ---
 
@@ -170,7 +173,8 @@ The resource process (`python3 -m vms resource`, Lesson 9; `deploy/vmsresource.c
 - The manifest is the index, beside the footage: it returns with the disks and is rebuildable from them.
 - The epoch is in every path; the timeline marks fenced footage and never deletes it; two resources merge.
 - Retention deletes the file first and the line second, on the resource process's pass, from the operator's per-camera policy.
-- Events are buckets on the resource, written by the worker holding the unit's epoch — recording or not, `silent` included — under the subsystem's prefix; counted onto media, fenced, rebuilt, retained by their own days; a platform piece any subsystem uses; indexed by a cache, never by a controller.
+- Two trees for one camera: `rec/<cam>/` media by the recorder, `vms/<cam>/` events by the worker, each under its writer's epoch; the manifest is media only.
+- Events are buckets on the resource, written by the worker holding the unit's epoch — recorded or not, `silent` included — under the subsystem's prefix; counted onto media, fenced, rebuilt, retained by their own days; a platform piece any subsystem uses; indexed by a cache, never by a controller.
 
 ## Exercises
 

@@ -1,4 +1,8 @@
-# deploy/vmsworker.nomad.hcl — the worker: DriverPack as a service job.
+# deploy/vmsworker.nomad.hcl — the worker: DriverPack as a service job. It
+# HOLDS the camera — one connection, one epoch, one fan-out (rtsp://<server>:
+# 8554/<cam>) that the recorder, the gateway and the detectors subscribe to —
+# and writes the camera's events into the resource on its server. It records
+# nothing: footage is vmsrecorder.nomad.hcl's, the job with the disks.
 # count = N and NOTHING in the VMS decides N: the operator sets the bounds,
 # the Nomad Autoscaler moves count from the workers' own load. Each
 # allocation claims slot w-<NOMAD_ALLOC_INDEX> by CAS on a Variable — the
@@ -13,7 +17,7 @@ job "vmsworker" {
     scaling {
       enabled = true
       min     = 1
-      max     = 12                                   # the servers' budget: B + n·I from М9 Lesson 7 (under `servers: distinct`, ≤ the archive servers)
+      max     = 12                                   # the servers' budget: B + n·I from М9 Lesson 7
       policy {
         cooldown            = "5m"                   # longer than a failover, so a reschedule is not read as demand
         evaluation_interval = "1m"
@@ -25,7 +29,8 @@ job "vmsworker" {
       }
     }
 
-    # a worker records into the resource on its own server: only servers that have one
+    # a worker writes its camera's EVENTS into the resource on its own server (as a detector does): only
+    # servers that have one. Footage is not its concern — that constraint is the recorder's.
     constraint {
       attribute = "${meta.archive}"
       operator  = "is_set"
@@ -33,15 +38,16 @@ job "vmsworker" {
     # spread, not distinct_hosts: Nomad puts workers on different servers when it can and doubles up when
     # it must (a dead server's worker rescheduled onto a neighbour). Whether a second worker on one server
     # CARRIES cameras is the administrator's choice on the console, not the scheduler's — `vms/policy
-    # {servers: shared | distinct}`: shared, every worker is a place to record and a dead server's worker
-    # comes back on a neighbour with its cameras; distinct, one worker per server carries cameras, a
-    # doubled-up worker idles by policy, and the CONTROLLER moves a dead server's cameras (two silences:
-    # the slot lapsed and the server's resource silent). Both readable in every placement reason.
+    # {servers: shared | distinct}`: shared (the default: a worker holds a camera, and several on one server
+    # hold different cameras) a dead server's worker comes back on a neighbour with its cameras; distinct,
+    # one worker per server carries cameras, a doubled-up worker idles by policy, and the CONTROLLER moves
+    # a dead server's cameras (two silences: the slot lapsed and the server's resource silent). Both
+    # readable in every placement reason. The recorder's own knob is rec/policy, distinct by default.
     spread {
       attribute = "${node.unique.id}"
     }
 
-    disconnect {                                     # Lesson 4: the defaults are wrong for a recorder
+    disconnect {                                     # Lesson 4: the defaults are wrong for a process that holds a camera
       lost_after           = "45s"
       replace              = true
       stop_on_client_after = "25s"                   # the holder stops at TTL − margin on its own clock anyway
@@ -56,13 +62,13 @@ job "vmsworker" {
         image        = "localhost/clustervms:latest"
         network_mode = "host"
         args         = ["python3", "-m", "cluster", "worker"]
-        volumes      = ["/data/spool:/data/spool", "/data/archive:/data/archive", "/data/media:/data/media"]
+        volumes      = ["/data/archive:/data/archive", "/data/media:/data/media"]   # no spool: it writes events, never segments
       }
       env {
         OBJECTS   = "variables://objects"          # heartbeats and the snapshot as Variables; no MinIO on this cluster
         CAPACITY  = "50"                             # this server's number; per node class in a product
-        ARCHIVE   = "${meta.archive}"                # the label the constraint above placed by, handed to the worker: it records there,
-      }                                              # and reports it in its heartbeat — the console's /servers shows the label beside the fact
+        ARCHIVE   = "${meta.archive}"                # the label the constraint above placed by, handed to the worker: its events go there,
+      }                                              # and it reports it in its heartbeat — the console's /servers shows the label beside the fact
       resources { cpu = 2000  memory = 2048 }        # B + n·I, rounded up
     }
   }

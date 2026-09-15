@@ -1,0 +1,33 @@
+# rec.subsystem.yaml — the recorder: the FOURTH subsystem, and the only one placed on top of the archive.
+#
+# A unit is one camera's recording, named by the camera: `rec/recordings/<cam>`. The recorder worker
+# (`vms/recorder.py`, `vmsrecorder@`) subscribes to the camera's fan-out from whichever VMS worker holds it
+# (the `live_url` in the VMS heartbeat — never a second connection to the camera), takes `rec/epoch/<cam>`,
+# and writes footage into `rec/<cam>/e<epoch>/` on ITS server's archive, with the manifest beside it. The
+# worker that holds the camera may be anywhere; the recorder must be where disks are — `requires: resource`
+# — and by default one per server (`servers: distinct`): a second recorder on the same disks is no second
+# place to record. Retention of the footage is this row's `retention_days`, read by `ArchivePolicy` on the
+# resource job; the camera's events are the worker's and retained by the VMS row's `events_retention_days`.
+#
+# Created by the operator: a camera exists without a recording (watched: live, detected, its events kept),
+# and records when a row is here — from the page's Record toggle, which POSTs `/rec/recordings`.
+name: rec
+unit:
+  rows: recordings                   # rec/recordings/<cam>
+  id: cam                            # one recording per camera, named by it
+  fields:
+    cam:            {type: string, required: true}   # the VMS camera id
+    retention_days: {type: int,    default: 30}      # media: the recorder's own policy, on its manifest
+    enabled:        {type: bool,   default: true}
+    labels:         {type: list}                     # where it may run: a recorder whose server has these labels (a storage tier, say)
+placement:
+  capacity:   {from: capacity, fallback: 50}         # cameras a recorder can write — its own number, from its heartbeat: disks and NIC
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   resource                               # the only subsystem that must be where the archive is
+  servers:    distinct                               # the default policy: one recorder per server carries recordings (the console may say shared)
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+snapshot: [cam, retention_days, enabled, labels]
+console:
+  running: recordings_running          # rec_recordings_running: recordings whose pipeline is writing — what the health check reads

@@ -169,7 +169,7 @@ None of the four bites in this module — one recorder, one server. All four bit
 
 Everything in this lesson is an API: `/status`, `/timeline?camera_id&start&end`, `/events`, behind `/login`. There is no page. М8 had one — the timeline and the player — but it knows exactly one stream by name and has never heard of a camera list, and this module deliberately does not bolt it on. The reason is where the footage is. Here it lives in two places at once: the closed segments still in the spool, and everything the uploader has already handed to Kinesis. A page that played "this span" would need a `/segment` route over the spool *and* М8's HLS session against KVS, and a column saying which stream a camera uploads to — a lesson and a half of plumbing for an arrangement the next module removes.
 
-So the screen arrives in [М10 Lesson 6](../М10_ServerVMS/06-the-console.md), the moment the archive is on the box: the camera list from the read model, the timeline from the manifest, playback of promoted segments straight off the resource, and the add/edit/disable/delete forms — one HTML file with three fetches, and М11 serves it unchanged. What this lesson leaves behind is what that page needs and nothing it does not: one query for the list, positions apart from reasons, `unreachable` as a state with a name, and a login.
+So the screen arrives in [М10 Lesson 7](../М10_ServerVMS/07-the-console.md), the moment the archive is on the box: the camera list from the read model, the timeline from the manifest, playback of promoted segments straight off the resource, and the add/edit/disable/delete forms — one HTML file with three fetches, and М11 serves it unchanged. What this lesson leaves behind is what that page needs and nothing it does not: one query for the list, positions apart from reasons, `unreachable` as a state with a name, and a login.
 
 **Deliverable:** the console view behind a login, and a written statement of every decision the operator is never asked to make.
 
@@ -196,14 +196,14 @@ So the screen arrives in [М10 Lesson 6](../М10_ServerVMS/06-the-console.md), t
 - `unreachable` greys the recorder out rather than showing its cameras green. Stale green is Lesson 6's lying cache, arriving through the interface.
 - The login is the course's **fourth temporary secret**, named where it appears. This is the last module with exactly one surface to protect.
 - **Site is a first-class operator concept; server is not, and recorder barely is** — but physics leaks in four places, and hiding it there would be a lie.
-- The console is an API here, on purpose: the page — list, timeline, playback, the forms — comes in М10 Lesson 6, when the footage is on the box and there is one place to play it from.
+- The console is an API here, on purpose: the page — list, timeline, playback, the forms — comes in М10 Lesson 7, when the footage is on the box and there is one place to play it from.
 
 ## Exercises
 
 1. Write the "decisions the operator is never asked to make" page. Keep it to one side of paper. Then, for each entry, name the support call it prevents.
 2. Add a condition the module has not needed yet — `within_licence` — wire it to nothing, and show it in the console. Then explain why a condition that is always true is still worth having in the model.
 3. Build the failure-grouping view: given a server with 200 cameras, produce **one** row saying the server is down rather than 200 rows saying cameras are unreachable. This is М11's console, sketched a module early.
-4. Sketch the page this lesson does not build: which of its fields come from `/status`, which from `/timeline`, and which would need a route that does not exist yet. Then read М10 Lesson 5's Step 6 and compare.
+4. Sketch the page this lesson does not build: which of its fields come from `/status`, which from `/timeline`, and which would need a route that does not exist yet. Then read М10 Lesson 6's Step 6 and compare.
 
 ## Where this is going
 

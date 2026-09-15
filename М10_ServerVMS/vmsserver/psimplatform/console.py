@@ -38,7 +38,7 @@ rule in this file.
 # # console.py — the console as data: SpecConsole over the same spec, with idempotent writes and the
 # subsystem's registered extra routes
 #
-# **Role in the module.** Lesson 5, the other half of `spec.py`. A subsystem's YAML already says what its
+# **Role in the module.** Lesson 6, the other half of `spec.py`. A subsystem's YAML already says what its
 # units are, which fields the operator owns and what leaves the cluster; that is everything a console needs
 # to list, edit and show them, so the console is one class run from the same spec. It serves `console.html`,
 # `/spec` (what the page reads first), the rows with the read model, `/where`, `/resources`, `/unplaceable`,
@@ -66,7 +66,7 @@ rule in this file.
 # - `test_the_console_over_http` walks the whole surface: POST twice with one key is one camera; the
 #   console's controller cannot `place` (`Forbidden`); PUT `{"worker": "w-9"}` is 400; `/cameras` rows show
 #   `phase running` and `server srv-1`; `/where/1` agrees with the directory; `/spec` says `rows cameras,
-#   media true`; `/metrics` contains `vms_cameras_recording 1`; `/marks` writes to `console/<instance>/e1/`;
+#   media true`; `/metrics` contains `vms_cameras_running 1`; `/marks` writes to `console/<instance>/e1/`;
 #   the page mentions `/spec`, `/timeline/`, `/segment/`, `<video>` and never the word camera outside its
 #   comment; `/timeline/1` and a ranged `/segment/` come from the VMS extra; PUT `{"enabled": false}` bumps
 #   revision to 2; DELETE marks the row and the placement waits for `unplace_deleted`.
@@ -256,7 +256,7 @@ class SpecConsole:
     # sums); `<p>_worker_load{worker}` = `1 − headroom/capacity` per live worker (assigned/capacity: what a
     # target-value policy scales on); `<p>_epoch_conflicts{worker}` counter from every heartbeat;
     # `<p>_failover_seconds{kind="worst"}`; `<p>_resources_live`; and `<p>_<running_gauge>` — the count of
-    # status entries in phase `running` on live workers (`vms_cameras_recording`). The page reads two of
+    # status entries in phase `running` on live workers (`vms_cameras_running`). The page reads two of
     # these for its status line.
     # The servers this subsystem runs on, as the placement sees them: every server a worker heartbeats from
     # or a resource heartbeats from — the archive root its workers say they record into (on a cluster the

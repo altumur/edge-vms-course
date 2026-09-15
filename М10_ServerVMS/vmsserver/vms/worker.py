@@ -1,10 +1,16 @@
-"""vmsworker — DriverPack as the worker.
+"""vmsworker — DriverPack as the worker: the process that HOLDS a camera.
 
 One process, N pipelines, its own loop. It reads its assignment
 (vms/workers/<me>) and the camera rows it names, runs М9's reconcile loop
-over them with the actuator that builds `driverpacksrc ! tee ! archivesink`,
-takes an epoch per camera by CAS when it starts one, holds a lease per
-camera, and publishes a heartbeat carrying its status. It never writes
+over them with the actuator that builds `driverpacksrc ! tee` and serves the
+tee as an RTSP fan-out (`rtsp://<server>:8554/<cam>`, in the heartbeat as
+`live_url`) — one connection to the camera, N subscribers: the recorder
+(the fourth subsystem, on a server with an archive), live gateways,
+detectors, on any server. It takes an epoch per camera by CAS when it
+starts one, holds a lease per camera, writes what it observes into the
+camera's bucket on ITS server's resource, and publishes a heartbeat
+carrying its status. It records nothing: recording is the recorder's
+(`recorder.py`), a subscriber like any other. It never writes
 configuration. Nomad (or systemd, on one box) supervises the process; the
 process supervises its pipelines; nothing supervises the loop, because the
 loop is the process.
@@ -13,7 +19,7 @@ What the environment hands a process, on a box or in an allocation:
 
     WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
                                         the claim (CAS on vms/slots/w-N) is the proof
-    NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: which resource it records into
+    NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: whose resource its events go to, and the host in `live_url`
     NOMAD_META_labels                 -> `labels` in the heartbeat: what this server can reach; the controller places by them
     NOMAD_ALLOC_ID                    -> the instance; CAPACITY -> the worker's own number, from М9 Lesson 7's probe
 """
@@ -38,7 +44,7 @@ What the environment hands a process, on a box or in an allocation:
 # `NOMAD_NODE_NAME` or the hostname (`server`: which resource it records into), `NOMAD_META_labels`
 # (`labels`: what this server can reach; the controller places by them), `NOMAD_ALLOC_ID` (the instance),
 # `CAPACITY` (the worker's own number, from М9 Lesson 7's probe). Run by `__main__.worker`; tested in
-# `tests/test_lesson4_worker.py` and used across Lesson 5's tests.
+# `tests/test_lesson4_worker.py` and used across Lesson 6's tests.
 #
 # ## Module-level names
 # - `log` — logger `vmsworker`.
@@ -85,8 +91,9 @@ from psimplatform.contract import Subsystem, Worker
 from psimplatform.objects import ObjectStore
 from psimplatform.variables import Variables
 
-from .archive import event_log
-from .config import row
+from psimplatform.events import EventLog
+
+from .config import live_url, row
 from .reconciler import CONVERGED, Reconciler
 
 log = logging.getLogger("vmsworker")
@@ -109,6 +116,7 @@ class FakeActuator:
         self.epochs: dict[int, int] = {}
         self.dead: list[int] = []
         self.posted: list[tuple[int, str, dict]] = []
+        self.started: dict[int, dict] = {}
 
     # Records the call. `stop` always succeeds and removes the id. A start/restart on a failing id fails
     # (and clears `running`); otherwise the id is running and `cam["epoch"]` is remembered — the tests read
@@ -125,6 +133,7 @@ class FakeActuator:
             return False
         self.running.add(cid)
         self.epochs[cid] = cam.get("epoch", 0)
+        self.started[cid] = cam                     # what the pipeline was built from: the row plus what `enrich` added
         return True
 
     # Returns and clears `dead` and `posted`; dead ids leave `running`. Same contract as `GstActuator.pump`.
@@ -154,12 +163,12 @@ def live_port(cid: int) -> int:
 
 
 # `WORKER_NAME` if set; else `w-<NOMAD_ALLOC_INDEX>`; else `None` — claim whatever is free, a lapsed slot
-# first.
-def slot_from_environment(env: dict) -> str | None:
-    if env.get("WORKER_NAME"):
-        return env["WORKER_NAME"]
+# first. The recorder uses the same rule with `RECORDER_NAME` and `r-`.
+def slot_from_environment(env: dict, name_env: str = "WORKER_NAME", prefix: str = "w") -> str | None:
+    if env.get(name_env):
+        return env[name_env]
     if "NOMAD_ALLOC_INDEX" in env:
-        return f"w-{int(env['NOMAD_ALLOC_INDEX'])}"
+        return f"{prefix}-{int(env['NOMAD_ALLOC_INDEX'])}"
     return None                                  # claim whatever is free — a lapsed slot first
 
 
@@ -184,7 +193,13 @@ class VmsWorker(Worker):
     claimed by that name; None means the environment's, and failing that
     "whichever slot is free" — a lapsed one first, so a replacement
     inherits its assignment. A worker on a cluster is a worker on a box
-    whose stores happen to be raft: same class, same heartbeat."""
+    whose stores happen to be raft: same class, same heartbeat. The
+    recorder (`recorder.py`) is this class over another subsystem's rows."""
+
+    SUB = VMS                       # the subsystem whose assignment and rows this worker runs
+    ROWS = "cameras"                # <sub>/<ROWS>/<id>
+    SLOT_PREFIX, NAME_ENV = "w", "WORKER_NAME"
+    parse_row = staticmethod(row)
 
     def __init__(self, name: str | None, vars_: Variables, objects: ObjectStore, actuator=None,
                  lease_ttl: float = 30.0, lease_margin: float = 5.0, clock=time.monotonic, wall=time.time,
@@ -192,9 +207,9 @@ class VmsWorker(Worker):
                  archive_root: str | None = None, bucket_seconds: int = 600, env: dict | None = None):
         env = dict(os.environ if env is None else env)
         instance = instance or env.get("NOMAD_ALLOC_ID") or None
-        super().__init__(VMS, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
-        self.claim_slot(prefer=name if name is not None else slot_from_environment(env))
-        self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource
+        super().__init__(self.SUB, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
+        self.claim_slot(prefer=name if name is not None else slot_from_environment(env, self.NAME_ENV, self.SLOT_PREFIX))
+        self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource: where its events go
         self.bucket_seconds = bucket_seconds
         self.observed: list[tuple[int, float, str]] = []
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
@@ -235,9 +250,9 @@ class VmsWorker(Worker):
         self.assignment_rev = a.rev
         rows = []
         for unit in a.units:
-            items, _ = self.vars.get(VMS.config("cameras", unit))
+            items, _ = self.vars.get(self.SUB.config(self.ROWS, unit))
             if items and items.get("deleted") != "true":
-                rows.append(row(items))
+                rows.append(self.parse_row(items))
         self.rows = rows
 
     # -- the gate ---------------------------------------------------------------
@@ -259,11 +274,18 @@ class VmsWorker(Worker):
                 cam = dict(cam, epoch=self.epochs[unit])
             if not self.may_write(unit):
                 return False
-            cam = dict(cam, live_port=live_port(cam["id"]))     # the tee's live branch: RTP to the loopback, fire-and-forget
+            cam = self.enrich(cam)                              # what the pipeline needs beyond the row: the fan-out here, the source for a recorder
+            if cam is None:
+                return False                                    # not startable now (a recorder whose camera nobody holds): the reconciler retries
             return self.actuator(verb, cam)
         ok = self.actuator("stop", cam)
         self.release(unit)
         return ok
+
+    # What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`) and the loopback
+    # port the fan-out server listens on. `None` means "cannot start now".
+    def enrich(self, cam: dict) -> dict | None:
+        return dict(cam, live_url=live_url(self.server, cam["id"]), live_port=live_port(cam["id"]))
 
     # Seconds since start on the monotonic clock — the reconciler's `now` for backoff.
     def now(self) -> float:
@@ -343,7 +365,7 @@ class VmsWorker(Worker):
             return None
         t = self.wall()
         self.observed.append((cid, t, kind))
-        return event_log(self.archive_root, cid, epoch, self.bucket_seconds).append(t, kind, **fields)
+        return EventLog(self.archive_root, self.SUB.name, str(cid), epoch, self.bucket_seconds).append(t, kind, **fields)
 
     # The bus, drained: `actuator.pump()` gives `(dead, posted)`; every posted `(cid, kind, fields)` becomes
     # `observe(...)` — a line only if I still hold the epoch; every dead camera becomes
@@ -364,7 +386,7 @@ class VmsWorker(Worker):
     # `position` (`converged | lagging | stalled`), `revision`, `observed_revision` (what is actually
     # running), `epoch` (held, or 0). This list is the heartbeat's `status`; the controller's `read_model`
     # and the console's `/cameras` show it, and `/metrics` counts `phase == running` into
-    # `vms_cameras_recording`.
+    # `vms_cameras_running`.
     def status(self) -> list[dict]:
         st = self.reconciler.status()
         out = []
@@ -373,10 +395,15 @@ class VmsWorker(Worker):
             pos, lag = st.get(cid, (CONVERGED, 0))
             phase = "running" if cid in self.reconciler.actual else ("pending" if not cam["enabled"] else
                                                                      ("failed" if cid in self.reconciler.failures else "pending"))
-            out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam["name"], "enabled": cam["enabled"], "phase": phase, "position": pos,
+            out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam.get("name", str(cid)), "enabled": cam["enabled"], "phase": phase, "position": pos,
                         "revision": cam["revision"], "observed_revision": self.reconciler.actual.get(cid, {}).get("revision", 0),
-                        "epoch": self.epochs.get(str(cid), 0), "live_port": live_port(cid)})   # where a gateway subscribes — never a viewer
+                        "epoch": self.epochs.get(str(cid), 0), **self.status_extra(cam)})
         return out
+
+    # What the heartbeat says per unit beyond the platform's fields: the worker publishes `live_url` — where a
+    # recorder, a gateway or a detector subscribes; never a viewer.
+    def status_extra(self, cam: dict) -> dict:
+        return {"live_url": live_url(self.server, cam["id"])}
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU
     # with no assignment left is full." What the autoscaler reads via the controller's `headroom()` and
@@ -398,7 +425,7 @@ class VmsWorker(Worker):
                        fenced=not self.recording_allowed, conflicts=self.conflicts(), passes=self.passes,
                        capacity=self.capacity, headroom=self.headroom(), started=self._started_wall,
                        previous_hb=self.previous_hb, previous_instance=self.previous_instance,
-                       archive=self.archive_root)                                    # where it records: on a cluster, Nomad's meta.archive, through $ARCHIVE
+                       archive=self.archive_root)                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
 
     # The loop as a process. Every `poll` seconds: `reconcile_once`, `pump_once`, `lease_pass` every `max(1,
     # (lease_ttl − lease_margin)/3)` s (≈8.3 s by default, well inside the 25 s the lease allows),

@@ -54,7 +54,7 @@ shape is generic by running a subsystem that counts seconds through it.
 #
 # ## Notes
 # - The tests enforce the boundary: `test_the_platform_knows_nothing_about_video` asserts no import from
-#   `vms/` and not the word "camera" in this file; `test_lesson7_live.py` and `test_lesson8_det.py` run two more subsystems through the
+#   `vms/` and not the word "camera" in this file; `test_lesson8_live.py` and `test_lesson9_det.py` run two more subsystems through the
 #   same `Controller`/`Worker`.
 # - Ordering that matters: a worker claims its slot before reading its assignment (the name is the row key);
 #   it takes an epoch before writing anything for a unit; it renews slot and leases on a shorter period than
@@ -105,7 +105,7 @@ class Subsystem:
         return f"{self.name}/slots/{worker}"
 
     # `[<name>/*]` — the whole prefix. This is Lesson 1's coarse ACL; `SubsystemSpec.acl_controller` narrows
-    # it in Lesson 5 once the console gets its own token.
+    # it in Lesson 6 once the console gets its own token.
     def acl_controller(self) -> list[str]:
         return [f"{self.name}/*"]
 

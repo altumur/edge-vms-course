@@ -1,21 +1,21 @@
-# Lesson 8 — Detectors: the Second Subsystem
+# Lesson 9 — Detectors: the Third Subsystem
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
-**You will build:** detectors as a subsystem — `det.subsystem.yaml`, whose unit is one model on one camera and whose capacity is streams a GPU can carry; the detector worker, running a model against the camera's RTP and writing its events into its own buckets on the resource under its own epoch; the *Detectors* panel on the camera's page, through the console's mount.
+**You will build:** detectors as a subsystem — `det.subsystem.yaml`, whose unit is one model on one camera and whose capacity is streams a GPU can carry; the detector worker, running a model against the camera's fan-out and writing its events into its own buckets on the resource under its own epoch; the *Detectors* panel on the camera's page, through the console's mount.
 **Time:** ~90 minutes.
 
 ## Why this lesson exists
 
-The two subsystems so far consume: the VMS records, the gateway shows. A detector *produces* — events, the thing Lesson 3 put beside the footage as buckets and the design record refused to make a subsystem of. This lesson is the case that settles why: the writer of camera 7's line-crossing events is the process that holds `det/epoch/7-linecross`, fenced like any writer, on its own prefix beside the VMS's; events are the shape it writes in, not a process of their own. It is also where the question *does a detector get its own console?* is answered — with a mount, not a screen.
+The subsystems so far consume: the worker holds, the recorder keeps, the gateway shows. A detector *produces* — events, the thing Lesson 3 put beside the footage as buckets and the design record refused to make a subsystem of. This lesson is the case that settles why: the writer of camera 7's line-crossing events is the process that holds `det/epoch/7-linecross`, fenced like any writer, on its own prefix beside the VMS's; events are the shape it writes in, not a process of their own. It is also where the question *does a detector get its own console?* is answered — with a mount, not a screen.
 
-> **What you can verify without hardware.** `tests/test_lesson8_det.py`: a model placed on the GPU worker only, running against the camera's RTP and writing two events under its epoch; disabled, re-enabled under the same epoch, deleted with its buckets left; a camera that stops recording leaving the model *waiting*; an unknown kind *unsupported*; the unplaceable model placed when a GPU arrives. The model itself (`FakeModel`) fires on a schedule; a decode-and-infer pipeline is bench work.
+> **What you can verify without hardware.** `tests/test_lesson9_det.py`: a model placed on the GPU worker only, running against the camera's fan-out and writing two events under its epoch; disabled, re-enabled under the same epoch, deleted with its buckets left; a camera nobody holds leaving the model *waiting*; an unknown kind *unsupported*; the unplaceable model placed when a GPU arrives. The model itself (`FakeModel`) fires on a schedule; a decode-and-infer pipeline is bench work.
 
 ## Prerequisites
 
 - **Lesson 3** — event buckets on the resource, `EventLog`, retention by `<sub>/retention/*`.
-- **Lesson 5** — `SpecController`, `labels-subset`, `/unplaceable`.
-- **Lesson 6** — the console's mount.
-- **Lesson 7** — a worker that finds a camera's RTP from the heartbeat.
+- **Lesson 6** — `SpecController`, `labels-subset`, `/unplaceable`.
+- **Lesson 7** — the console's mount.
+- **Lesson 8** — a worker that finds a camera's RTP from the heartbeat.
 
 ## Learning objectives
 
@@ -32,7 +32,7 @@ The third subsystem answers the question the other two leave open: what does a s
 
 ## Step 2 — The console fronts it; the page shows it
 
-Lesson 6, Step 5 built the mount for exactly this. `python3 -m vms console` mounts `det` beside `live`: `/det/spec`, `/det/units` with the read model from the detector workers' heartbeats, `/det/where/<name>`, `/det/unplaceable`, `/det/metrics` — `det_worker_headroom` being what the autoscaler moves `N` on. The console's token carries `det`'s operator rows, so the camera's page can add a model to this camera (`POST /det/units {name: "7-linecross", cam, kind, params}`), list this camera's models with the worker's word on each — *running · 2 events · d-2*, *waiting · camera not recording*, *unsupported* — and enable, disable or delete them through `/det/units/<name>`. Nobody opens a detector console; the person's world is cameras. And the events arrive where the person looks: the resource's event database (Lesson 9) tails `det/7-linecross/e1/…` like any bucket, so a line crossed shows as an amber tick on the camera's timeline — `linecross (det)` — beside the worker's `silent` and the operator's `mark`, and fenced the moment another detector instance takes the unit's epoch.
+Lesson 7, Step 5 built the mount for exactly this. `python3 -m vms console` mounts `det` beside `live`: `/det/spec`, `/det/units` with the read model from the detector workers' heartbeats, `/det/where/<name>`, `/det/unplaceable`, `/det/metrics` — `det_worker_headroom` being what the autoscaler moves `N` on. The console's token carries `det`'s operator rows, so the camera's page can add a model to this camera (`POST /det/units {name: "7-linecross", cam, kind, params}`), list this camera's models with the worker's word on each — *running · 2 events · d-2*, *waiting · camera not recording*, *unsupported* — and enable, disable or delete them through `/det/units/<name>`. Nobody opens a detector console; the person's world is cameras. And the events arrive where the person looks: the resource's event database (Lesson 10) tails `det/7-linecross/e1/…` like any bucket, so a line crossed shows as an amber tick on the camera's timeline — `linecross (det)` — beside the worker's `silent` and the operator's `mark`, and fenced the moment another detector instance takes the unit's epoch.
 
 ```
 POST /det/units {name: 1-linecross, cam: 1, kind: linecross}   -> 201 {labels: [gpu], worker: null}
@@ -44,7 +44,7 @@ GET  /det/unplaceable -> [{id: 1-lpr, labels: [gpu], workers_live: 1}]        no
 PUT  /det/units/1-linecross {enabled: false}  -> the model stops; the row says pending; the epoch is kept
 ```
 
-**Deliverable:** a line-crossing model added to the camera from the page, placed on the worker with a GPU label, its events under `det/1-linecross/e1/` on the resource beside the VMS's and on the camera's timeline within one tail; a second worker without the label never chosen; the model waiting, not failed, while the camera is down; `test_lesson8_det.py` green.
+**Deliverable:** a line-crossing model added to the camera from the page, placed on the worker with a GPU label, its events under `det/1-linecross/e1/` on the resource beside the VMS's and on the camera's timeline within one tail; a second worker without the label never chosen; the model waiting, not failed, while the camera is down; `test_lesson9_det.py` green.
 
 ---
 
@@ -54,7 +54,7 @@ PUT  /det/units/1-linecross {enabled: false}  -> the model stops; the row says p
 |---|---|
 | The model is placed on a worker with no GPU | Its `labels` are empty — the default is `["gpu"]`, but a `POST` with `labels: []` means *anywhere*. The reason line says which labels were reached. |
 | Events under `det/…/e2/` while `e1` is still being written | Two workers hold the unit — a reassignment window. The index fences the older epoch; the newer is current. |
-| `phase: waiting` with the camera recording | The VMS heartbeat is stale or has no `live_port` (a worker from before Lesson 7). The detector reads the heartbeat, never the worker. |
+| `phase: waiting` with the camera held | The VMS heartbeat is stale or has no `live_url` (a worker from before Lesson 4's fan-out). The detector reads the heartbeat, never the worker. |
 | Deleting the model deletes nothing on disk | Correct. Buckets are retained by `det/retention/<unit>` on the resource; the row's deletion takes the placement back and stops the model. |
 
 ## Recap
@@ -66,11 +66,11 @@ PUT  /det/units/1-linecross {enabled: false}  -> the model stops; the row says p
 
 ## Exercises
 
-1. Two models on one camera, on two workers. How many subscriptions to the camera's RTP, and what does the recording worker see?
+1. Two models on one camera, on two workers. How many subscriptions to the camera's fan-out, and what does the worker holding it see?
 2. Give `det` a `params` schema per kind instead of an opaque string. Where does the platform stop and the subsystem start?
-3. A model that should run on *every* camera (motion). Who creates the units — the operator, the console, or a controller pass? Defend the answer with the *demand-created* rule from Lesson 7.
+3. A model that should run on *every* camera (motion). Who creates the units — the operator, the console, or a controller pass? Defend the answer with the *demand-created* rule from Lesson 8.
 4. Write `det`'s retention row. Which process deletes an old bucket, and which one deletes the manifest line if there were one?
 
 ## Where this is going
 
-Three subsystems on one box, through one platform, one console, and eight units. [**Lesson 9**](09-events-the-database-that-is-a-cache.md) gives the resource its process and the events their database — the thing that answers `/events`, and why it is not a subsystem; [**Lesson 10**](10-on-the-box.md) puts all of it on the box М9 built — Quadlet units over one image, everything that must survive an OS update under `/data`, and the health check that rolls an update back when footage stops.
+Four subsystems on one box, through one platform, one console, and ten units. [**Lesson 10**](10-events-the-database-that-is-a-cache.md) gives the resource its process and the events their database — the thing that answers `/events`, and why it is not a subsystem; [**Lesson 11**](11-on-the-box.md) puts all of it on the box М9 built — Quadlet units over one image, everything that must survive an OS update under `/data`, and the health check that rolls an update back when footage stops.

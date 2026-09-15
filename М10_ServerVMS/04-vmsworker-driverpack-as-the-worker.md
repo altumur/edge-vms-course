@@ -1,7 +1,7 @@
 # Lesson 4 — `vmsworker`: DriverPack as the Worker
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
-**You will build:** the worker — one process, N pipelines, М9's loop running over an *assignment* instead of a table, an epoch per camera taken by CAS, a lease, a heartbeat carrying its status — and prove it restarts with the controller stopped and fences itself when it is the zombie.
+**You will build:** the worker — one process, N pipelines, М9's loop running over an *assignment* instead of a table, an epoch per camera taken by CAS, a lease, a heartbeat carrying its status; a process that *holds* a camera — one connection, one fan-out anyone may subscribe to, its events into the resource — and records nothing; and prove it restarts with the controller stopped and fences itself when it is the zombie.
 **Time:** ~150 minutes.
 
 ## Why this lesson exists
@@ -10,7 +10,7 @@
 
 What did not change is the loop. `vms/reconciler.py` is М9 Lesson 6's file, copied, and М9's seven tests run against it in this lesson without a change of meaning — because those tests were written against a design, and the design is what a rewrite keeps. What changed is where desired state comes from (an assignment in the platform's store, not a table in the worker's database) and what a start costs (an epoch, by CAS, and a lease).
 
-> **What you can verify without hardware.** All of it: `tests/test_lesson4_worker.py` runs М9's seven, then the worker over an assignment with the fake actuator — the epoch per camera, the edit that restarts, the reassignment that stops, the heartbeat, the restart with the controller object deleted, a nameless replacement inheriting the lapsed slot, the zombie fenced at the slot, the reassignment that is *not* a zombie, and a lease that ran out. `gstvms/actuator.py` is the real actuator, `driverpacksrc ! h264parse ! watchdog ! tee ! archivesink`, for the bench.
+> **What you can verify without hardware.** All of it: `tests/test_lesson4_worker.py` runs М9's seven, then the worker over an assignment with the fake actuator — the epoch per camera, the edit that restarts, the reassignment that stops, the heartbeat with `live_url`, the restart with the controller object deleted, a nameless replacement inheriting the lapsed slot, the zombie fenced at the slot, the reassignment that is *not* a zombie, and a lease that ran out. `gstvms/actuator.py` is the real actuator, `driverpacksrc ! h264parse ! watchdog ! tee ! rtph264pay ! udpsink` into an RTSP server on `:8554` (`gstvms/livesrv.py`), for the bench.
 
 ## Prerequisites
 
@@ -27,6 +27,7 @@ What did not change is the loop. `vms/reconciler.py` is М9 Lesson 6's file, cop
 4. Prove the controller is never on the recovery path.
 5. Tell a zombie from a reassignment when a lease is lost, and act differently on each.
 6. State what one supervisor means, and what crash isolation costs.
+7. Say what *holding* a camera means, what the worker gives out, and why it records nothing.
 
 ---
 
@@ -53,7 +54,7 @@ c = VmsWorker(None, …)                            -> "w-1"              not w-
 c.reconcile_once()                                -> [('start', 1), ('start', 2)]   epochs {1: 2, 2: 2}
 ```
 
-The replacement recorded the dead worker's cameras from the assignment and asked nobody — Step 5's property, now without a fixed name. The worker also exports `headroom` in its heartbeat (`capacity − assigned`, capacity being М9 Lesson 7's `B + n·I` measured on *its* server, `CAPACITY=` in the unit): the number the autoscaler reads in М11 to move `count`. Not CPU — a worker at forty percent CPU with no cameras left to take is full, and one at ninety percent with headroom is not a reason for another process.
+The replacement took over the dead worker's cameras from the assignment and asked nobody — Step 5's property, now without a fixed name. The worker also exports `headroom` in its heartbeat (`capacity − assigned`, capacity being М9 Lesson 7's `B + n·I` measured on *its* server, `CAPACITY=` in the unit): the number the autoscaler reads in М11 to move `count`. Not CPU — a worker at forty percent CPU with no cameras left to take is full, and one at ninety percent with headroom is not a reason for another process.
 
 ## Step 2 — Desired state is an assignment
 
@@ -91,7 +92,7 @@ def _actuate(self, verb, cam):
     ok = self.actuator("stop", cam); self.release(unit); return ok
 ```
 
-Why per camera and not per worker, as М11 did for the recorder: because a **reassignment** is the one legitimate case of two writers on one camera — the controller moves camera 7 from `w-1` to `w-2`, and for a few seconds both may be writing — and the epoch has to separate those too. A restart of a running pipeline (an edit) keeps its epoch: same writer, same segment directory. A *start* takes the next one: `archivesink` opens a new directory, and whatever the previous writer was doing lands in the old one.
+Why per camera and not per worker, as М11 did for the recorder: because a **reassignment** is the one legitimate case of two writers on one camera — the controller moves camera 7 from `w-1` to `w-2`, and for a few seconds both may be writing — and the epoch has to separate those too. A restart of a running pipeline (an edit) keeps its epoch: same writer, same bucket directory. A *start* takes the next one: the worker's events go into `vms/<cam>/e<new>/`, and whatever the previous writer was doing lands in the old one. (The recorder, Lesson 5, has its own epoch for the footage — the same rule, a different writer.)
 
 `lease_pass` renews the slot first and the camera leases second; a slot held by another instance fences everything before any epoch is read. The lease is the other half. `may_write(unit)` is a purely local decision on a monotonic clock — TTL 30, margin 5, the numbers М11 Lesson 4 derived — and a start without a live lease is refused before the actuator is asked. `test_lease_expiry_without_renewal_stops_starts` runs the clock 26 seconds forward, shows `may_write` false, and shows the next start taking a *fresh* epoch and a fresh lease rather than reusing the stale one.
 
@@ -109,23 +110,34 @@ def pump_once(self):                                                        # vm
     for cid in dead:                 self.reconciler.lost(cid, self.now()); self.observe(cid, "silent")
 ```
 
-The element never knows about buckets, epochs or files; it posts what it saw, and the worker — the process holding the camera's epoch — turns it into a line. That keeps М9's per-frame rule: detection runs inside the pipeline in C, and Python touches an event, not a frame. **The worker itself** is the second source, for what no element posts: `silent` on a lost pipeline, above. **An operator** is the third — and a mark from the console is *not* this worker's event and must not reach into it (there is no RPC to workers): it is the console's own observation, in the console's own bucket (Lesson 5, Step 6). `test_the_worker_observes_what_it_holds_recording_or_not` runs all of it with the fake actuator's `post()`, and ends with the fence at the source: a fenced instance's bus still posts, and `observe` drops it.
+The element never knows about buckets, epochs or files; it posts what it saw, and the worker — the process holding the camera's epoch — turns it into a line. That keeps М9's per-frame rule: detection runs inside the pipeline in C, and Python touches an event, not a frame. **The worker itself** is the second source, for what no element posts: `silent` on a lost pipeline, above. **An operator** is the third — and a mark from the console is *not* this worker's event and must not reach into it (there is no RPC to workers): it is the console's own observation, in the console's own bucket (Lesson 6, Step 6). `test_the_worker_observes_what_it_holds_recording_or_not` runs all of it with the fake actuator's `post()`, and ends with the fence at the source: a fenced instance's bus still posts, and `observe` drops it.
+
+## Step 3b — Holding a camera: one connection, one fan-out, no footage
+
+What does the worker *do* with a camera it holds? Less than М9's did, on purpose. It opens the one connection — a camera's RTSP session is the scarce thing, and DriverPack's whole reason to exist is to open it once and well — parses, watches for stalls, and gives the stream out:
+
+```
+driverpacksrc ! h264parse ! watchdog ! tee ! queue leaky=downstream ! rtph264pay ! udpsink host=127.0.0.1 port=20000+id
+                                          └── (a loopback RTP port, and an RTSP server on :8554 that re-serves it as rtsp://<server>:8554/<cam>)
+```
+
+The heartbeat names it: `live_url: rtsp://srv-1:8554/1` beside every running camera. Whoever wants the picture subscribes — the recorder (Lesson 5), the live gateway (Lesson 8), a detector (Lesson 9) — and the worker never learns who did; `test_fifty_viewers_one_subscription_and_the_worker_unchanged` in Lesson 8 compares its heartbeat byte for byte. The first draft of this branch was the `udpsink` alone, and it fed exactly one subscriber on one box: a gateway on another server could not reach `127.0.0.1`, and a second subscriber on the same box would have fought for the port. An RTSP server over the loopback port costs one process-local hop and serves any number of subscribers on any server, TCP-interleaved through firewalls; multicast would have been cheaper on the wire and unroutable across a real room. What the worker writes is *events*, into `vms/<cam>/e<epoch>/` on its server's resource (Step 3a) — which is why `requires: resource` is its rule too. What it does not write is footage: no `archivesink`, no spool. Recording is a subscriber like the others, placed by *its* constraint (the disks) rather than this one (the network), and that separation is Lesson 5.
 
 ## Step 4 — The heartbeat
 
 ```json
 {"worker": "w-1", "instance": "srv-1:4121:9c0f2a", "ts": 1757500000.0, "server": "srv-1", "assignment_rev": 2,
- "fenced": false, "conflicts": 0, "capacity": 50, "headroom": 47,
+ "fenced": false, "conflicts": 0, "capacity": 50, "headroom": 47, "archive": "/data/archive",
  "status": [{"id": 1, "name": "gate", "enabled": true, "phase": "running", "position": "converged",
-             "revision": 2, "observed_revision": 2, "epoch": 1}, ...]}
+             "revision": 2, "observed_revision": 2, "epoch": 1, "live_url": "rtsp://srv-1:8554/1"}, ...]}
 ```
 
-One object, `vms/w-1/heartbeat`, every ten seconds, carrying the recorder's `/status` as М9 Lesson 9 defined it — positions apart from reasons — plus the epoch per camera and the server it runs on. Nobody calls the worker for its status: the controller reads this to know which workers exist (`workers_seen`), the console reads it for the camera list, М12's read model reads the same object across clusters. This is the shape М11 Lesson 4 chose for the heartbeat and М12 Lesson 3 grew; here it is the worker's from the start.
+One object, `vms/w-1/heartbeat`, every ten seconds, carrying the recorder's `/status` as М9 Lesson 9 defined it — positions apart from reasons — plus the epoch per camera, the fan-out's URL, and the server it runs on. Nobody calls the worker for its status: the controller reads this to know which workers exist (`workers_seen`), the console reads it for the camera list, М12's read model reads the same object across clusters. This is the shape М11 Lesson 4 chose for the heartbeat and М12 Lesson 3 grew; here it is the worker's from the start.
 
 ## Step 5 — The controller is never on the recovery path
 
 ```python
-w1 = VmsWorker("w-1", ...); w1.reconcile_once()          # recording 1, 2, 3
+w1 = VmsWorker("w-1", ...); w1.reconcile_once()          # holding 1, 2, 3
 del ctl                                                   # the controller is gone
 w2 = VmsWorker("w-1", ...)                                # kill -9, restart: a fresh process under the same name
 assert w2.reconciler.actual == {}                         # it knows nothing
@@ -133,7 +145,7 @@ assert w2.reconcile_once() == [("start", 1), ("start", 2), ("start", 3)]
 assert act2.epochs == {1: 2, 2: 2, 3: 2}                  # the next epoch for each
 ```
 
-The restart read its assignment and its rows from the store and asked nobody. The old instance — if it is still alive somewhere, paused, partitioned — holds epochs 1 and will find out on its next renewal. That is the property М11's whole failover story rests on, and it is a five-line test here. `deploy/vmsworker@.container` has `Restart=always`; the platform's job is to restart the process, and the process's job is to need nothing else.
+The restart read its assignment and its rows from the store and asked nobody. Its subscribers — the recorder among them — see a new `live_url` epoch in the heartbeat and re-subscribe; the worker does not know they exist. The old instance — if it is still alive somewhere, paused, partitioned — holds epochs 1 and will find out on its next renewal. That is the property М11's whole failover story rests on, and it is a five-line test here. `deploy/vmsworker@.container` has `Restart=always`; the platform's job is to restart the process, and the process's job is to need nothing else.
 
 ## Step 6 — The zombie, and the reassignment that is not one
 
@@ -168,7 +180,7 @@ def lease_pass(self):
 
 The worker's `run()` is М9's worker's task list as one loop: reconcile, pump the buses, renew the slot and the leases every `(TTL − margin)/3`, heartbeat every ten seconds — and on an orderly stop, `release_slot()`, which is the one word that tells the controller *scale-in* rather than *crash*. There is no controller thread, no second process, no supervisor of the loop. `systemd` restarts the process if it dies, and a crash releases nothing: the slot lapses, and the restart claims it back.
 
-Which means a vendor SDK that segfaults inside a pipeline takes the loop with it — the thing М9 Lesson 9 separated controller from worker to avoid. It is acceptable here *only because* the state is outside: the store holds the assignment, the resource holds the footage, the epoch and the lease make the restart harmless, and Step 5 is the proof. Keep that dependency explicit: the day someone caches the assignment in the worker "to survive the store being slow", crash isolation is gone and nobody will notice until a restart records nothing. The per-frame rule is the other line: the prototype's `_rebase` in Lesson 2 runs in Python, and the product's does not.
+Which means a vendor SDK that segfaults inside a pipeline takes the loop with it — the thing М9 Lesson 9 separated controller from worker to avoid. It is acceptable here *only because* the state is outside: the store holds the assignment, the resource holds the events and the recorder's footage, the epoch and the lease make the restart harmless, and Step 5 is the proof. Keep that dependency explicit: the day someone caches the assignment in the worker "to survive the store being slow", crash isolation is gone and nobody will notice until a restart records nothing. The per-frame rule is the other line: the prototype's `_rebase` in Lesson 2 runs in Python, and the product's does not.
 
 **Deliverable:** М9's seven and М9 Lesson 8's four failures — pipeline death (`pump_once` → `lost()`), stall (the watchdog on the bus), store unreachable (the lease keeps writing until TTL − margin), `kill -9` — against the worker, with the tests' meaning unchanged; then the zombie on one box with two real `vmsworker` processes: `kill -STOP` the first, start the second, `kill -CONT` the first, and read the manifest.
 
@@ -184,8 +196,9 @@ Which means a vendor SDK that segfaults inside a pipeline takes the loop with it
 | A worker fences itself on every restart of its neighbour | Two units share a name. `%i` is the slot; two `vmsworker@w-1` on one box is the zombie test, on purpose. |
 | A restart takes epoch 1 again | The epoch key is per camera in the store, not per worker in memory. `take_epoch` must go through `next_epoch` — CAS — never a local counter. |
 | A moved camera fences the whole worker | `lease_pass` did not re-read the assignment before deciding, or the controller moved the camera without removing it from the old assignment. `move()` removes it from every assignment that lists it. |
-| After a reassignment both workers record for a while | Expected, and bounded by the lease numbers: ≤ TTL − margin for the old writer, into its own epoch. |
-| The fake actuator passes and the real one does not | `archivesink` did not get the `epoch` property before its first fragment — the actuator formats it into the launch string from `cam["epoch"]`. |
+| After a reassignment both workers hold the camera for a while | Expected, and bounded by the lease numbers: ≤ TTL − margin for the old writer, its events into its own epoch. |
+| The fake actuator passes and the real one does not | The RTSP server could not bind `:8554` (a second worker on the box shares it — `FanOut` is one server per process, one factory per camera), or the loopback port `20000 + id` is taken. |
+| A subscriber connects to `live_url` and gets nothing | The worker is in `waiting`/`failed` for that camera; `live_url` is published only for phase `running`. Read the heartbeat's `why`. |
 
 ## Recap
 
@@ -198,6 +211,7 @@ Which means a vendor SDK that segfaults inside a pipeline takes the loop with it
 - The controller is never on the recovery path — a restart reads and records.
 - A lost lease is a zombie if the camera is still mine, a reassignment if it is not.
 - Events are fired by the bus: an element posts, `pump()` drains, `observe()` writes — if the worker still holds the epoch.
+- Holding a camera is one connection and one fan-out (`live_url`), given out to anyone; the worker writes events and no footage.
 - One supervisor; crash isolation by external state, and only that.
 
 ## Exercises
@@ -211,4 +225,4 @@ Which means a vendor SDK that segfaults inside a pipeline takes the loop with it
 
 ## Where this is going
 
-Workers run what they are told. [**Lesson 5**](05-vmscontroller.md) builds the one that tells them: the controller — the only writer of `vms/*`, placement stored with a reason, safe at two, never needed to recover — the console over it, the failure arithmetic measured, and a second subsystem through the same platform to prove the VMS is not special.
+The worker holds the camera and records nothing. [**Lesson 5**](05-vmsrecorder-the-fourth-subsystem.md) is the process that does — a subscriber to this fan-out, placed where the disks are — and [**Lesson 6**](06-vmscontroller.md) builds the one that tells both what to hold: the controller — the only writer of placement, stored with a reason, safe at two, never needed to recover.

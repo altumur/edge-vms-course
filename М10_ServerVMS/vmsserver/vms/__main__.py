@@ -1,10 +1,11 @@
-"""python3 -m vms worker|controller|console|resource|gateway|livecontroller|detworker|detcontroller — the box's processes.
+"""python3 -m vms worker|controller|recorder|reccontroller|console|resource|gateway|livecontroller|detworker|detcontroller — the box's processes.
 
     PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
     SPOOL=/data/spool  ARCHIVE=/data/archive  MEDIA_DIR=/data/media
     WORKER_NAME=w-1                  the slot to claim (systemd: %i); unset: NOMAD_ALLOC_INDEX → w-<index>;
                                      neither: the first free slot, a lapsed one first
     CAPACITY=50                      cameras this worker can carry — exported as headroom for the autoscaler
+    RECORDER_NAME=r-1                a recorder's slot (systemd: %i); CAPACITY here is recordings — this server's disks and NIC
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
     RESOURCE_PORT=8090  RESOURCE_URL the resource process: heartbeat, the policy pass, the event database served as /events
     EVENTDB=:memory:                 where the resource keeps its event database — a cache, rebuilt on every start
@@ -92,14 +93,11 @@ for s in (signal.SIGTERM, signal.SIGINT):
 # - Opens Variables as writer `vmsworker` with the ACL `["vms/epoch/*", "vms/slots/*"]` — literally
 #   `Subsystem.acl_worker()` for `vms`: a worker takes epochs and claims its slot, and can write nothing
 #   else. A bug that tried to write a camera row would be a `Forbidden` from the store.
-# - Tries `gstvms.actuator.GstActuator(spool, archive, SEGMENT_SECONDS)`; on `ImportError` (no `gi`) logs a
-#   warning and uses `FakeActuator`, which records nothing. This is what the README means by "with
-#   GStreamer: records; without: the fake actuator".
-# - Before the worker exists, runs the restart step of М9 Lesson 4 / М10 Lesson 3:
-#   `ArchiveResource.closed_in_spool(grace_seconds=30, now)` lists segments the previous instance closed but
-#   did not promote (a `kill -9` between close and promote), and each is `promote`d now. The open segment at
-#   the time of the kill is the one that is lost.
-# - Constructs `VmsWorker(name, vars_, objects, act, capacity=$CAPACITY, archive_root=archive)` — the
+# - Tries `gstvms.actuator.GstActuator()` — `driverpacksrc ! tee`, served as the RTSP fan-out on :8554; on
+#   `ImportError` (no `gi`) logs a warning and uses `FakeActuator`, which holds nothing. The worker records
+#   nothing either way: recording is the recorder's (`recorder` below).
+# - Constructs `VmsWorker(name, vars_, objects, act, capacity=$CAPACITY, archive_root=archive)` — its events
+#   go to this server's resource under `vms/<cam>/` — the
 #   constructor claims the slot — logs the claimed name and instance, and calls `w.run(stop=stop)`. `run`
 #   releases the slot on the way out, so SIGTERM is an orderly stop (scale-in), while a kill leaves the slot
 #   to lapse.
@@ -107,19 +105,48 @@ def worker() -> None:
     name = os.environ.get("WORKER_NAME") or (f"w-{os.environ['NOMAD_ALLOC_INDEX']}" if "NOMAD_ALLOC_INDEX" in os.environ else None)
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsworker", acl={"vmsworker": ["vms/epoch/*", "vms/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
-    spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive")
+    archive = os.environ.get("ARCHIVE", "/data/archive")
     try:
         from gstvms.actuator import GstActuator
-        act = GstActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))
+        act = GstActuator()
     except ImportError:
-        logging.warning("no GStreamer: the fake actuator records nothing")
+        logging.warning("no GStreamer: the fake actuator holds nothing")
         act = FakeActuator()
-    res = ArchiveResource(spool, archive)
-    for p in res.closed_in_spool(grace_seconds=30, now=__import__("time").time()):     # what the last instance closed but did not promote
-        res.promote(p)
     w = VmsWorker(name, vars_, objects, act, capacity=int(os.environ.get("CAPACITY", "50")), archive_root=archive)
     logging.info("worker %s (instance %s) claimed its slot", w.name, w.instance)
     w.run(stop=stop)
+
+
+# Builds `vmsrecorder` — the fourth subsystem's worker, the only one placed on top of the archive:
+# - the slot: `RECORDER_NAME`, else `r-$NOMAD_ALLOC_INDEX`, else whichever is free; Variables as writer
+#   `vmsrecorder` with `["rec/epoch/*", "rec/slots/*"]`.
+# - `gstvms.actuator.GstRecActuator(spool, archive, SEGMENT_SECONDS)` — `rtspsrc ! archivesink` per
+#   recording, subscribed to the worker's fan-out; without GStreamer the fake, which records nothing.
+# - `RecWorker(...)`: promotes what the last instance closed but did not promote, then runs — the worker's
+#   loop, plus a re-subscription when a camera's holder moves, plus promotion on every pass.
+def recorder() -> None:
+    from .recorder import RecWorker
+    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsrecorder", acl={"vmsrecorder": ["rec/epoch/*", "rec/slots/*"]})
+    objects = FsObjectStore(os.path.join(root, "objects"))
+    spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive")
+    try:
+        from gstvms.actuator import GstRecActuator
+        act = GstRecActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))
+    except ImportError:
+        logging.warning("no GStreamer: the fake actuator records nothing")
+        act = FakeActuator()
+    r = RecWorker(None, vars_, objects, act, archive=ArchiveResource(spool, archive), capacity=int(os.environ.get("CAPACITY", "50")))
+    logging.info("recorder %s (instance %s) claimed its slot; promoted %d", r.name, r.instance, r.promoted)
+    r.run(stop=stop)
+
+
+def reccontroller() -> None:
+    """The fourth subsystem's controller: the platform's class from rec.subsystem.yaml, placing recordings on
+    recorders — one per server, where the archive is. No code of its own."""
+    from psimplatform.spec import SpecController
+    from .config import REC_SPEC
+    vars_ = FileVariables(os.path.join(root, "config"), writer="reccontroller", acl={"reccontroller": REC_SPEC.acl_controller()})
+    _controller_loop(SpecController(REC_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
 
 
 # Builds `vmscontroller` and runs the placement pass every 5 s:
@@ -219,14 +246,15 @@ def console() -> None:
     from .config import SPEC
     from .console import serve
     from psimplatform.spec import SpecController
-    from .config import DET_SPEC, LIVE_SPEC
+    from .config import DET_SPEC, LIVE_SPEC, REC_SPEC
     vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
-                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
+                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
-                live_ctl=SpecController(LIVE_SPEC, vars_, objects), mounts={"det": SpecController(DET_SPEC, vars_, objects)})
+                live_ctl=SpecController(LIVE_SPEC, vars_, objects),
+                mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects)})
     logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
     stop.wait()
     srv.shutdown()
@@ -274,5 +302,5 @@ def resource() -> None:
 
 
 if __name__ == "__main__":
-    {"worker": worker, "controller": controller, "console": console, "resource": resource,
+    {"worker": worker, "controller": controller, "recorder": recorder, "reccontroller": reccontroller, "console": console, "resource": resource,
      "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller}[sys.argv[1]]()

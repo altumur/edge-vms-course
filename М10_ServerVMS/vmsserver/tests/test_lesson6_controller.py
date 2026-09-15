@@ -1,4 +1,4 @@
-"""Lesson 5 — vmscontroller: the only writer; refusals; placement with its
+"""Lesson 6 — vmscontroller: the only writer; refusals; placement with its
 property tests; two controllers; the read model; the failure arithmetic."""
 import json
 import os
@@ -15,7 +15,7 @@ def test_crud_by_cas_and_what_it_refuses():
     box = Box(); ctl = VmsController(box.vars, box.objects, wall=box.wall)
     r = ctl.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
     assert r["id"] == 1 and r["revision"] == 1 and ctl.camera(1)["name"] == "gate"
-    assert ctl.update_camera(1, {"retention_days": 14})["revision"] == 2
+    assert ctl.update_camera(1, {"events_retention_days": 14})["revision"] == 2
     for bad in ({"worker": "w-1"}, {"revision": 9}, {"phase": "running"}, {"epoch": 3}, {"placement": {}}):
         try:
             ctl.update_camera(1, bad); raise AssertionError("must refuse")
@@ -181,7 +181,7 @@ def test_the_console_over_http():
         assert where["worker"] == where["directory"] == "w-1"                         # the placement says, the assignments agree
         spec = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/spec"))      # what the page reads first: the YAML, not code
         assert spec["rows"] == "cameras" and spec["media"] and {f["name"] for f in spec["fields"]} >= {"name", "source", "enabled"}
-        assert b"vms_cameras_recording 1" in urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics").read()
+        assert b"vms_cameras_running 1" in urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics").read()   # held and streaming; recording is rec's gauge
         # an operator's mark is the CONSOLE's event: its own bucket, never a worker's
         req = urllib.request.Request(f"http://127.0.0.1:{port}/marks", data=json.dumps({"cam": 1, "note": "left the bag"}).encode(),
                                      method="POST", headers={"Idempotency-Key": "k3", "X-User": "murat"})
@@ -199,7 +199,7 @@ def test_the_console_over_http():
         seg = segment_path(box.spool, 1, 1, datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)); os.makedirs(os.path.dirname(seg), exist_ok=True)
         open(seg, "wb").write(bytes(range(256))); ArchiveResource(box.spool, box.archive).promote(seg)
         tl = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/timeline/1"))
-        assert len(tl) == 1 and tl[0]["media"] == "vms/1/e1/20260912T100000Z.mp4"
+        assert len(tl) == 1 and tl[0]["media"] == "rec/1/e1/20260912T100000Z.mp4"
         req = urllib.request.Request(f"http://127.0.0.1:{port}/segment/{tl[0]['media']}", headers={"Range": "bytes=10-19"})
         with urllib.request.urlopen(req) as r:
             assert r.status == 206 and r.read() == bytes(range(10, 20)) and r.headers["Content-Range"] == "bytes 10-19/256"

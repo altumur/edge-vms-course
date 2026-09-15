@@ -31,7 +31,7 @@ class Box:
 
 def cam(i, revision=1, enabled=True, **kw):
     return {"id": i, "name": f"cam{i}", "source": f"driverpack://file/cam{i}.mp4", "enabled": enabled,
-            "retention_days": kw.get("retention_days", 30), "priority": 100, "revision": revision}
+            "priority": 100, "revision": revision, **kw}
 
 
 class FakeStore:

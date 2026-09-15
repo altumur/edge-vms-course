@@ -118,3 +118,60 @@ def test_the_lease_stops_writing_before_the_replacement_may_start():
     c.clock.advance(2);  assert not a.may_write("1")                       # 26 s without a renewal: it stops itself
     assert a.lease_pass() == []                                            # renewal succeeds (nobody took the epoch)...
     assert a.may_write("1")                                                # ...and it may write again — it was never fenced
+
+
+def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_written():
+    """Two subsystems fail over from one dead server, each by its own rule. The
+    WORKER (`shared`): Nomad's replacement w-1 claims the slot on srv-b and holds
+    the camera under the next epoch — Lesson 4's power pull. The RECORDER
+    (`distinct` by default): a rescheduled r-1 on srv-b would idle beside r-2 by
+    policy, so the rec controller moves the recording to the recorder that is
+    there, and it re-subscribes to the camera's new fan-out. The footage written
+    on srv-a stays on srv-a's disks under e1 — unavailable until it returns,
+    never rebuilt, never lost; the timeline names both."""
+    import os
+    from datetime import datetime, timezone
+    from cluster.resource import cluster_resource, resources_seen
+    from cluster.timeline import merged_timeline
+    from psimplatform.spec import SpecController
+    from vms.archive import Manifest, Segment, segment_path
+    from vms.config import REC_SPEC, live_url
+    c, ctl, a, act_a = _recording(1)
+    rs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
+    for r in rs.values(): r.heartbeat()
+    rec = SpecController(REC_SPEC, c.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), c.objects, wall=c.wall)
+    assert rec.policy() == {"servers": "distinct"} and ctl.policy() == {"servers": "shared"}   # each subsystem's own default
+    r1, r2 = c.recorder(1, "srv-a"), c.recorder(2, "srv-b"); r1.heartbeat_once(); r2.heartbeat_once()
+    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1"})           # the operator: record camera 1
+    assert rec.ensure_placed()[0].worker == "r-1" and r1.reconcile_once() == [("start", 1)]
+    assert r1.actuator.started[1]["source"] == live_url("srv-a", 1) and r1.actuator.started[1]["epoch"] == 1
+    r1.heartbeat_once()
+    t = c.wall(); srv_a = c.servers["srv-a"]
+    p = segment_path(srv_a.archive, 1, 1, datetime.fromtimestamp(t - 600, timezone.utc)); os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(b"x" * 1000); Manifest(srv_a.archive, 1).append(Segment(1, 1, t - 600, t, os.path.relpath(p, srv_a.archive), 1000))
+    rs["srv-a"].heartbeat()
+    assert resources_seen(c.objects)["srv-a"]["units"] == {"rec": ["1"]}                       # footage: the recorder's tree
+    # srv-a dies: w-1 and r-1 both silent, and so is srv-a's resource. Nomad's replacement w-1 comes up on srv-b
+    c.wall.advance(LOST_AFTER + 3); r2.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    act_b = FakeActuator(); b = c.worker(1, "srv-b", actuator=act_b)
+    assert b.name == "w-1" and b.reconcile_once() == [("start", 1)] and act_b.epochs == {1: 2}   # the worker: Nomad's slot, the next epoch
+    b.heartbeat_once()
+    assert rec.gone_servers() == {} and rec.redistribute() == []                                 # the recorder: one lost_after is a crash, not a server
+    assert r2.reconcile_once() == [] and r2.rows == []                                           # r-2 has nothing yet
+    c.wall.advance(LOST_AFTER + 3); b.heartbeat_once(); r2.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    assert rec.gone_servers() == {"r-1": "srv-a"}
+    assert [(m[1], m[2]) for m in rec.redistribute()] == [("r-1", "r-2")]
+    assert rec.placement("1").reason.startswith("server srv-a gone: slot r-1 lapsed and its resource silent; ") and rec.placement("1").reason.endswith("; on srv-b")
+    assert r2.reconcile_once() == [("start", 1)] and r2.actuator.started[1]["source"] == live_url("srv-b", 1) and r2.actuator.started[1]["epoch"] == 2
+    r2.heartbeat_once()
+    assert rec.workers_seen()["r-2"].status[0]["source"] == "rtsp://srv-b:8554/1" and rec.where("1") == "r-2"
+    # the timeline: e1 on srv-a unavailable by name; e2 will be on srv-b — and srv-a's footage comes back with its disks
+    class R:
+        def read(self, url, cam): return Manifest(c.servers[url.rsplit("/", 1)[1]].archive, cam).read()
+    tl = merged_timeline(resources_seen(c.objects), R(), 1, t - 2000, t + 1, current_epoch=2, now=c.wall())
+    assert tl["segments"] == [] and tl["unreachable"] == ["srv-a"] and "not lost" in tl["note"]
+    rs["srv-a"].heartbeat()
+    tl = merged_timeline(resources_seen(c.objects), R(), 1, t - 2000, t + 1, current_epoch=2, now=c.wall())
+    assert [(s["server"], s["epoch"], s["fenced"]) for s in tl["segments"]] == [("srv-a", 1, True)] and tl["unreachable"] == []
+    a2 = c.recorder(1, "srv-a"); a2.heartbeat_once()
+    assert a2.name == "r-1" and a2.reconcile_once() == [] and rec.redistribute() == [] and rec.where("1") == "r-2"   # a place to record returned; nothing moves back

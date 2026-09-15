@@ -17,7 +17,7 @@ cameras, next_id, retention — and never placement.
 # routes
 # only a VMS has
 #
-# **Role in the module.** Lesson 5. Everything an operator's console needs to list, create, edit and delete
+# **Role in the module.** Lesson 6. Everything an operator's console needs to list, create, edit and delete
 # cameras, show where they run, export metrics and take marks is `psimplatform.console.SpecConsole` reading
 # `vms.subsystem.yaml` (see `psimplatform/console.py`); nothing in this file knows what a camera's fields
 # are. What the VMS adds is the bytes: `GET /timeline/<id>?from&to` (segments and event buckets from this
@@ -35,7 +35,7 @@ cameras, next_id, retention — and never placement.
 # - `test_the_console_over_http` walks the whole surface through this `serve`: an idempotent POST is one
 #   camera; the console's `VmsController` cannot `place` (its token); `PUT {"worker": "w-9"}` is 400;
 #   `/cameras` shows `phase running`, `server srv-1`; `/where/1` agrees with the assignments; `/spec` says
-#   `rows cameras, media true`; `/metrics` has `vms_cameras_recording 1`; a mark lands in
+#   `rows cameras, media true`; `/metrics` has `vms_cameras_running 1`; a mark lands in
 #   `console/<unit>/e1/…` and `subsystems_under(archive)` shows only `console` — never `vms/1/`, whose
 #   bucket has one writer; the page never says "camera" outside its HTML comment; then `/timeline/1`, a
 #   ranged `/segment/`, a 404, a PUT that bumps `revision` to 2, and a DELETE whose placement waits for

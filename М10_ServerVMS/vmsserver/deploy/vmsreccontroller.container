@@ -1,0 +1,23 @@
+# /etc/containers/systemd/vmsreccontroller.container — the rec subsystem's
+# controller: the platform's SpecController run from rec.subsystem.yaml, one
+# per box (one per cluster in М11), no code of its own. Places recordings on
+# the recorder with the most headroom — where an archive is, one recorder per
+# server by policy; takes them back when the console deletes them. No port;
+# its token writes rec/workers/*, rec/placement/*, rec/slots/*.
+[Unit]
+Description=VMS rec controller — the only writer of rec placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms reccontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

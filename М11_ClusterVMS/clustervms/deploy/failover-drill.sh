@@ -48,13 +48,13 @@ for i in $(seq 1 "$RUNS"); do
   [ -n "$after" ] || { echo "run $i: $WORKER did not come back within 180 s"; exit 1; }
   t1=$(date +%s)
   secs="$(curl -s "http://$CONSOLE/metrics" | awk -v w="$WORKER" '$0 ~ "vms_failover_seconds" {print $2; exit}')"
-  echo "run $i: $WORKER recording on $after after wall-clock $((t1 - t0))s; vms_failover_seconds ${secs:-?}"
+  echo "run $i: $WORKER holding its cameras on $after after wall-clock $((t1 - t0))s; vms_failover_seconds ${secs:-?}"
   worst="$(python3 -c "print(max($worst, $((t1 - t0))))")"
 
   nomad node drain -disable -yes "$old" >/dev/null
   sleep 30
   conflicts="$(curl -s "http://$CONSOLE/metrics" | awk -v w="$WORKER" '$0 ~ "vms_epoch_conflicts\\{worker=\"" w "\"" {print $2; exit}')"
-  echo "run $i: $old returned; vms_epoch_conflicts{$WORKER}: ${conflicts:-?}   (the old instance fenced, its footage kept under its epoch)"
+  echo "run $i: $old returned; vms_epoch_conflicts{$WORKER}: ${conflicts:-?}   (the old instance fenced, its events kept under its epoch; the recorder re-subscribed)"
 done
 echo
 echo "failover worst case over $RUNS runs: ${worst}s   <- the datasheet number; the console's vms_failover_seconds is the worker's own measurement"

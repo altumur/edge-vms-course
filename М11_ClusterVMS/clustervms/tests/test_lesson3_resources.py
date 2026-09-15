@@ -1,11 +1,13 @@
 """Lesson 3 — what stays on the server, and what does not. Configuration is
-already in raft (the RPO is zero); footage stays on the resource; the
-manifest returns with it; a timeline spans two resources and names the
-one that is unreachable."""
+already in raft (the RPO is zero); footage stays on the resource — under
+rec/<cam>, the recorder's tree; the manifest returns with it; a timeline
+spans two resources and names the one that is unreachable."""
 import json
 import os
 from cluster.controller import ClusterController
 from cluster.resource import cluster_resource, resources_seen
+from psimplatform.spec import SpecController
+from vms.config import REC_SPEC
 from cluster.timeline import merged_timeline
 from datetime import datetime, timezone
 from vms.archive import Manifest, Segment, segment_path
@@ -50,7 +52,7 @@ def test_a_timeline_spans_two_resources_and_names_the_unreachable_one():
     hbs = {s: cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall) for s, srv in c.servers.items()}
     for hb in hbs.values(): hb.heartbeat()
     seen = resources_seen(c.objects)
-    assert seen["srv-a"]["units"] == {"vms": ["7"]} and seen["srv-c"]["units"] == {} and seen["srv-a"]["usage"] > 2000   # media + the manifest
+    assert seen["srv-a"]["units"] == {"rec": ["7"]} and seen["srv-c"]["units"] == {} and seen["srv-a"]["usage"] > 2000   # media + the manifest, the recorder's tree
     tl = merged_timeline(seen, DirReader(c), 7, t - 2000, t, current_epoch=4, now=c.wall())
     assert [(s["server"], s["epoch"], s["fenced"]) for s in tl["segments"]] == [("srv-a", 3, True), ("srv-a", 3, True), ("srv-b", 4, False)]
     assert tl["unreachable"] == []
@@ -67,12 +69,13 @@ def test_a_timeline_spans_two_resources_and_names_the_unreachable_one():
 
 def test_the_resource_policy_needs_neither_worker_nor_controller():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall)
-    ctl.create_camera({"source": "driverpack://file/1.mp4", "retention_days": 1})
+    ctl.create_camera({"source": "driverpack://file/1.mp4"})
+    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1", "retention_days": 1})   # retention is the RECORDING's row
     srv = c.servers["srv-a"]; t = c.wall()
     _segment(srv, 1, 1, t - 3 * 86400); _segment(srv, 1, 1, t - 3600)
     os.remove(os.path.join(srv.archive, Manifest(srv.archive, 1).read()[1].path))   # a file gone behind the manifest's back
     rep = cluster_resource(srv.resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall).pass_()
-    assert rep == {"vms.added": 0, "vms.dropped": 1, "vms.closed": 0, "vms.media_removed": 1, "removed": 0, "enabled": False, "mirrored": 0, "peers": []}
+    assert rep == {"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0, "enabled": False, "mirrored": 0, "peers": []}
     assert Manifest(srv.archive, 1).read() == []
 
 

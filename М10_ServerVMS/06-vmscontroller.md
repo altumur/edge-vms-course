@@ -1,7 +1,7 @@
-# Lesson 5 — `vmscontroller`
+# Lesson 6 — `vmscontroller`
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
-**You will build:** the controller — the only writer of `vms/*`, camera CRUD and placement by CAS, stored with a reason, safe at two, never needed to recover, never deciding how many workers there are — the failure arithmetic measured process by process, and the controller as data — a YAML the platform runs, so that the next subsystems need no controller of their own. The console is Lesson 6; live video and detectors are Lessons 7 and 8; the box is Lesson 9.
+**You will build:** the controller — the only writer of `vms/*`, camera CRUD and placement by CAS, stored with a reason, safe at two, never needed to recover, never deciding how many workers there are — the failure arithmetic measured process by process, and the controller as data — a YAML the platform runs, so that the next subsystems need no controller of their own. The console is Lesson 7; live video and detectors are Lessons 7 and 8; the box is Lesson 10.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists
@@ -10,7 +10,7 @@ Somebody has to write configuration, and the module's answer is: exactly one thi
 
 It is also the process most likely to be built wrong, because "one controller" invites state. So the lesson spends its second half on the two properties that keep it honest — it holds nothing and is correct by CAS; it is never on the recovery path — and its last step on making the controller a description rather than a program — the YAML that Lessons 7 and 8 will reuse for two more subsystems without writing a controller for either.
 
-> **What you can verify without hardware.** All of it: `tests/test_lesson5_controller.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock. Every output below came out of them.
+> **What you can verify without hardware.** All of it: `tests/test_lesson6_controller.py` — refusals, stored placement, *adding a worker moves nothing*, two controllers racing to place forty cameras, capacity read from the workers' heartbeats, budgeted rebalance, scale-in redistributing a released slot and a crash moving nothing, the failure arithmetic with the clock. Every output below came out of them.
 
 ## Prerequisites
 
@@ -137,9 +137,9 @@ placement: {capacity: {from: capacity, fallback: 50}, headroom: {from: headroom}
 snapshot:  [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]
 ```
 
-What is *not* in a spec is what a unit *does* — that is the worker, and the worker is the subsystem. So what a new subsystem writes is a YAML and a worker, and the proof is not a toy: Lesson 7 adds live video, whose unit is a camera's fan-out and whose capacity is viewers, and Lesson 8 adds detectors, whose unit is a model on a camera and whose events are their own buckets on the resource — two subsystems that look nothing like recording, through this class, with no controller code for either. `test_the_platform_knows_nothing_about_video` keeps the boundary literal: nothing under `psimplatform/` imports the VMS or says the word *camera*.
+What is *not* in a spec is what a unit *does* — that is the worker, and the worker is the subsystem. So what a new subsystem writes is a YAML and a worker, and the proof is not a toy: Lesson 8 adds live video, whose unit is a camera's fan-out and whose capacity is viewers, and Lesson 9 adds detectors, whose unit is a model on a camera and whose events are their own buckets on the resource — two subsystems that look nothing like recording, through this class, with no controller code for either. `test_the_platform_knows_nothing_about_video` keeps the boundary literal: nothing under `psimplatform/` imports the VMS or says the word *camera*.
 
-**Deliverable:** one box, one controller. `POST /cameras` (through the console of Lesson 6, or `create_camera` from a shell) starts a recording within one worker pass; stop the controller and show recording and a worker restart unaffected; kill the worker and show the edit made meanwhile applied on restart; and a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, the names in one YAML, and nothing else.
+**Deliverable:** one box, one controller. `POST /cameras` (through the console of Lesson 7, or `create_camera` from a shell) starts a recording within one worker pass; stop the controller and show recording and a worker restart unaffected; kill the worker and show the edit made meanwhile applied on restart; and a written statement of what the platform knows about the VMS — a prefix, an assignment shape, a heartbeat shape, the names in one YAML, and nothing else.
 
 ---
 
@@ -174,4 +174,4 @@ What is *not* in a spec is what a unit *does* — that is the worker, and the wo
 
 ## Where this is going
 
-One box runs the platform's shape: two stores, a controller run from a description, a worker, a resource. Nobody has looked at a screen yet. [**Lesson 6**](06-the-console.md) gives the operator one — its own process, its own token, and the same YAML the controller runs from.
+One box runs the platform's shape: two stores, a controller run from a description, a worker, a resource. Nobody has looked at a screen yet. [**Lesson 7**](07-the-console.md) gives the operator one — its own process, its own token, and the same YAML the controller runs from.

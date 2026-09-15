@@ -29,7 +29,7 @@ until its rebuild is done rather than answering short.
 # ================================================================================================
 # # eventdatabase.py — the event "database", which is a cache: one SQLite table per resource, over its own tree
 #
-# **Role in the module.** Lesson 9 on the box, Lesson 3 on the cluster: the reader of `events.py`. Events are
+# **Role in the module.** Lesson 10 on the box, Lesson 3 on the cluster: the reader of `events.py`. Events are
 # written by workers into per-unit buckets on their server's resource; search needs a database over them,
 # and this is it — but one PER RESOURCE, not one per cluster: the resource job runs an `EventDatabase` over
 # its own root (own buckets and the `.mirror/<server>/` copies it holds) and answers `GET /events` from it.

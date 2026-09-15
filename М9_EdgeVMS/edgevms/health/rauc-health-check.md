@@ -28,11 +28,14 @@ Prints `health: <reason>` to stderr and exits 1. Every refusal goes through it, 
 ### 2 + 3, source one: М10's VMS console
 `curl -fsS --max-time 5 "$VMS_CONSOLE/metrics"` must succeed *and* the body must contain a `vms_workers_live ` series — that series is how the script tells the М10 console apart from the М9 recorder console, which listens on the same port but exports `recorder_*` names. Inside the branch:
 - `val()` — awk lookup of one series by exact name in `$METRICS`, printing `MISSING` if absent.
-- `vms_workers_live` and `vms_cameras_recording` must both exist, else "missing a required series".
+- `vms_workers_live` and `vms_cameras_running` must both exist, else "missing a required series".
 - `live >= 1`, else "no worker is live": the console is up and nobody is home.
 - `configured` — `GET $VMS_CONSOLE/cameras`, JSON, count of entries in `configured` whose `enabled` is not false (the М10 console's `/<rows>` reply is `{rows, configured}`; see `М10_ServerVMS/vmsserver/vms/console.py.md`). If curl or the JSON parse fails it is `MISSING` → fail "answered /metrics but not /cameras".
 - `configured == 0` → pass and say so: no cameras, no footage to prove, rows 1–2 only. A stated product decision.
-- `recording >= 1`, else "N camera(s) configured, none recording".
+- `running >= 1`, else "N camera(s) configured, none held".
+- `recordings` — `GET $VMS_CONSOLE/rec/recordings`, the recorder's rows through the console's mount (М10 Lesson 5); `0` → pass, "no recordings configured — footage test vacuous" (a camera may be watched and never recorded).
+- `recording` — `rec_recordings_running` from `GET $VMS_CONSOLE/rec/metrics`; missing → fail; `>= 1`, else "N recording(s) configured, none running".
+- the segment test reads `$ARCHIVE/rec` — the recorder's tree, `rec/<cam>/e<epoch>/` — not `vms/`, which holds the worker's event buckets.
 - `find "$ARCHIVE/vms" -name '*.mp4' -newermt "-${WINDOW} seconds"` must find something: a segment promoted into the archive resource within the window, read from the disk on this box — "not a heartbeat that could be lying". Passes with a summary line.
 
 ### Source two: М9's own recorder

@@ -38,12 +38,12 @@ if systemctl --failed --no-legend 2>/dev/null | grep -q .; then
     fail "failed units present"
 fi
 
-# 2 + 3. The VMS first (М10): the console answers, a worker is live, footage is in the archive.
+# 2 + 3. The VMS first (М10): the console answers, a worker is live and holding, a recorder is writing, footage is in the archive.
 if METRICS="$(curl -fsS --max-time 5 "$VMS_CONSOLE/metrics" 2>/dev/null)" && printf '%s\n' "$METRICS" | grep -q '^vms_workers_live '; then
     val() { printf '%s\n' "$METRICS" | awk -v k="$1" '$1==k {print $2; found=1} END {if (!found) print "MISSING"}'; }
     live="$(val vms_workers_live)"
-    recording="$(val vms_cameras_recording)"
-    [ "$live" != "MISSING" ] && [ "$recording" != "MISSING" ] || fail "the console answered but is missing a required series"
+    running="$(val vms_cameras_running)"
+    [ "$live" != "MISSING" ] && [ "$running" != "MISSING" ] || fail "the console answered but is missing a required series"
     [ "$live" -ge 1 ] || fail "the console answers but no worker is live"
     configured="$(curl -fsS --max-time 5 "$VMS_CONSOLE/cameras" 2>/dev/null \
         | python3 -c 'import sys,json; d=json.load(sys.stdin); print(sum(1 for c in d.get("configured", []) if c.get("enabled", True)))' 2>/dev/null || echo MISSING)"
@@ -53,12 +53,24 @@ if METRICS="$(curl -fsS --max-time 5 "$VMS_CONSOLE/metrics" 2>/dev/null)" && pri
         echo "health: OK (VMS: no cameras configured — footage test vacuous)"
         exit 0
     fi
-    [ "$recording" -ge 1 ] || fail "$configured camera(s) configured, none recording"
+    [ "$running" -ge 1 ] || fail "$configured camera(s) configured, none held"
+    # Recording is the recorder's (М10 Lesson 5): rows under /rec/recordings, the gauge on the console's mount.
+    recordings="$(curl -fsS --max-time 5 "$VMS_CONSOLE/rec/recordings" 2>/dev/null \
+        | python3 -c 'import sys,json; d=json.load(sys.stdin); print(sum(1 for c in d.get("configured", []) if c.get("enabled", True)))' 2>/dev/null || echo MISSING)"
+    [ "$recordings" != "MISSING" ] || fail "the console answered /cameras but not /rec/recordings"
+    if [ "$recordings" -eq 0 ]; then
+        echo "health: OK (VMS: $live worker(s), $running of $configured held; no recordings configured — footage test vacuous)"
+        exit 0
+    fi
+    RECMETRICS="$(curl -fsS --max-time 5 "$VMS_CONSOLE/rec/metrics" 2>/dev/null)" || fail "the console answered /metrics but not /rec/metrics"
+    recording="$(printf '%s\n' "$RECMETRICS" | awk '$1=="rec_recordings_running" {print $2; found=1} END {if (!found) print "MISSING"}')"
+    [ "$recording" != "MISSING" ] || fail "/rec/metrics is missing rec_recordings_running"
+    [ "$recording" -ge 1 ] || fail "$recordings recording(s) configured, none running"
     # Footage IS being written: a segment promoted into the archive resource within the window —
-    # the disk, on this box, not a heartbeat that could be lying.
-    find "$ARCHIVE/vms" -name '*.mp4' -newermt "-${WINDOW} seconds" 2>/dev/null | grep -q . \
-        || fail "no segment promoted into $ARCHIVE/vms in the last ${WINDOW}s ($recording recording)"
-    echo "health: OK (VMS: $live worker(s), $recording of $configured recording, a segment within ${WINDOW}s)"
+    # the disk, on this box, not a heartbeat that could be lying. The recorder's tree: rec/<cam>/e<epoch>/.
+    find "$ARCHIVE/rec" -name '*.mp4' -newermt "-${WINDOW} seconds" 2>/dev/null | grep -q . \
+        || fail "no segment promoted into $ARCHIVE/rec in the last ${WINDOW}s ($recording recording)"
+    echo "health: OK (VMS: $live worker(s), $running of $configured held, $recording of $recordings recording, a segment within ${WINDOW}s)"
     exit 0
 fi
 

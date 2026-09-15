@@ -1,7 +1,8 @@
-"""One camera's timeline across the resources it recorded into.
+"""One camera's timeline across the resources its recording was written into.
 
-A camera that failed over has footage on two servers: the dead one's until
-the failure, the new one's after. The console asks every resource that
+A recording that failed over has footage on two servers: the dead one's until
+the failure, the new one's after (the recorder moved; the worker holding the
+camera may not have). The console asks every resource that
 reports the camera for its manifest and merges. A resource whose heartbeat
 is stale is *unreachable*: its ranges are listed from the last thing known
 about it — the manifest it served last time, if we cached it, or nothing —
@@ -33,7 +34,7 @@ def merged_timeline(resources: dict[str, dict], reader, cam: int, t0: float, t1:
     now = time.time() if now is None else now
     segs, unreachable = [], []
     for server, hb in sorted(resources.items()):
-        if str(cam) not in hb.get("units", {}).get("vms", []):     # the platform's heartbeat: units per subsystem
+        if str(cam) not in hb.get("units", {}).get("rec", []):     # the platform's heartbeat: units per subsystem — footage is the recorder's tree, rec/<cam>
             continue
         if now - float(hb["ts"]) > lost_after:
             unreachable.append(server)

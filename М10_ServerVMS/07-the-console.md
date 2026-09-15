@@ -1,4 +1,4 @@
-# Lesson 6 — The Console
+# Lesson 7 — The Console
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
 **You will build:** the console — its own process with its own token, the operator's rows and never placement; the page, built from `/spec`; the console as data, `SpecConsole` from the same YAML the controller runs from; a retry answered the same by any instance; and one console process that mounts every subsystem it fronts.
@@ -6,15 +6,15 @@
 
 ## Why this lesson exists
 
-Lesson 5 left the box with a controller nobody can talk to. Somebody has to serve the operator, and the module's answer is the same shape as everywhere else: a process that holds nothing, reads heartbeats, writes the operator's rows by CAS through the platform's class, and could not place a camera if it tried — its token does not allow it. The console is also where the course first has a screen since М8, and the page is deliberately small: one file, no framework, playing what the resource holds one segment at a time, because the web tier's problems must never reach the recorder.
+Lesson 6 left the box with a controller nobody can talk to. Somebody has to serve the operator, and the module's answer is the same shape as everywhere else: a process that holds nothing, reads heartbeats, writes the operator's rows by CAS through the platform's class, and could not place a camera if it tried — its token does not allow it. The console is also where the course first has a screen since М8, and the page is deliberately small: one file, no framework, playing what the resource holds one segment at a time, because the web tier's problems must never reach the recorder.
 
-The lesson's second half is the claim that made the controller a YAML in Lesson 5 applied to the console: everything a console needs — the rows' name, how a unit is identified, the operator's fields, what counts as running — is already in the spec, so the console is one class for every subsystem, and one process can front several of them.
+The lesson's second half is the claim that made the controller a YAML in Lesson 6 applied to the console: everything a console needs — the rows' name, how a unit is identified, the operator's fields, what counts as running — is already in the spec, so the console is one class for every subsystem, and one process can front several of them.
 
-> **What you can verify without hardware.** `tests/test_lesson5_controller.py::test_the_console_over_http` (the whole surface on a real port), `test_a_retry_that_lands_on_another_console_is_one_camera`, and `tests/test_lesson8_det.py::test_one_console_mounts_every_subsystem_it_fronts`. The page itself needs a browser; everything it calls is tested.
+> **What you can verify without hardware.** `tests/test_lesson6_controller.py::test_the_console_over_http` (the whole surface on a real port), `test_a_retry_that_lands_on_another_console_is_one_camera`, and `tests/test_lesson9_det.py::test_one_console_mounts_every_subsystem_it_fronts`. The page itself needs a browser; everything it calls is tested.
 
 ## Prerequisites
 
-- **Lesson 5** — the controller and `SpecController`; the two ACLs.
+- **Lesson 6** — the controller and `SpecController`; the two ACLs.
 - **Lesson 3** — the manifest and the promoted segment: what the page plays.
 - **М12 Lesson 3** (read ahead) — the read model from heartbeats and *who serves browsers*; this lesson is the one-box version.
 
@@ -43,7 +43,7 @@ GET  /timeline/7?from&to             -> the manifest, fenced segments marked
 POST /marks {"cam": 1, "note": …}   -> 201 {subsystem: console, unit: <host:pid>, bucket: console/<host:pid>/e1/…}
                                         the operator's observation is the CONSOLE's event, never a worker's (Lesson 4, Step 3a)
 GET  /metrics                        -> vms_epoch_conflicts, vms_workers_live, vms_worker_headroom{worker="w-1"} 49,
-                                        vms_headroom, vms_worker_load{worker="w-1"} 0.020, vms_cameras_recording 1   the autoscaler scrapes this
+                                        vms_headroom, vms_worker_load{worker="w-1"} 0.020, vms_cameras_running 1     the autoscaler scrapes this
 GET  /                               -> the page (psimplatform/console.html), built from /spec
 DELETE /cameras/1                    -> 200 {deleted: 1}; the row is marked deleted, its assignment goes, its footage stays until retention
 GET  /segment/vms/1/e1/<start>Z.mp4  -> the bytes of one promoted segment, Range honoured — what the page's <video> asks for
@@ -59,7 +59,7 @@ GET  /segment/vms/1/e1/<start>Z.mp4  -> the bytes of one promoted segment, Range
 
 ## Step 3 — The console as data
 
-**The console as data, like the controller.** Lesson 5, Step 6 made the controller a spec; the console is the same move. Everything a console needs — what the rows are called, how a unit is identified, which fields an operator may set and their types, what "running" means for the gauge — is already in `vms.subsystem.yaml`, so `SpecConsole(ctl)` serves the page, `/spec`, `/cameras`, `/where`, `/metrics` with the `vms_` prefix, `/marks` and the three writes with the spec's refusals, and knows nothing about video. What the VMS adds is registered, not subclassed: `extra(handler, method, path, query)` gets every request the generic routes did not claim, and `vms/console.py` answers two of them from the archive. A subsystem with no media registers nothing and gets a console with no timeline. The ACL is the spec's too: `acl_console()` and `acl_controller()` are derived from the same file, so adding a field or a derived row never touches a policy by hand.
+**The console as data, like the controller.** Lesson 6, Step 6 made the controller a spec; the console is the same move. Everything a console needs — what the rows are called, how a unit is identified, which fields an operator may set and their types, what "running" means for the gauge — is already in `vms.subsystem.yaml`, so `SpecConsole(ctl)` serves the page, `/spec`, `/cameras`, `/where`, `/metrics` with the `vms_` prefix, `/marks` and the three writes with the spec's refusals, and knows nothing about video. What the VMS adds is registered, not subclassed: `extra(handler, method, path, query)` gets every request the generic routes did not claim, and `vms/console.py` answers two of them from the archive. A subsystem with no media registers nothing and gets a console with no timeline. The ACL is the spec's too: `acl_console()` and `acl_controller()` are derived from the same file, so adding a field or a derived row never touches a policy by hand.
 
 ## Step 4 — A retry that lands on another console
 
@@ -77,9 +77,9 @@ GET /det/units       -> the det subsystem's rows with the read model; POST /det/
 
 ## Step 6 — The ticks on the timeline come from somewhere else
 
-The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, why none of that is a subsystem — and the page's events list, live feed and Mark button — are [Lesson 9](09-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
+The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, why none of that is a subsystem — and the page's events list, live feed and Mark button — are [Lesson 10](10-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
 
-**Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 10) serving the page; a camera added from the page, edited, disabled and deleted; a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
+**Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 11) serving the page; a camera added from the page, edited, disabled and deleted; *Record* pressed — a row under `rec/recordings/` through the mount at `/rec/…`, placed by the rec controller — and a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
 
 ---
 
@@ -101,7 +101,7 @@ The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this 
 - `SpecConsole` runs from the same YAML as `SpecController`; the live and det subsystems get a console with no console code.
 - The idempotency key is a Variable, so any instance answers a retry the same way; the console runs on every server with nothing in front.
 - One process mounts every subsystem it fronts: the VMS at `/`, the others under their names.
-- The console holds no event database: `/events` asks the resources and merges, fenced by every subsystem's epochs (Lesson 9).
+- The console holds no event database: `/events` asks the resources and merges, fenced by every subsystem's epochs (Lesson 10).
 
 ## Exercises
 
@@ -112,4 +112,4 @@ The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this 
 
 ## Where this is going
 
-The operator has a screen, and the screen plays yesterday. [**Lesson 7**](07-live-video-the-second-subsystem.md) gives it *now* — and finds that live video is not a feature of the console but a subsystem of its own, with workers scaled by the audience.
+The operator has a screen, and the screen plays yesterday. [**Lesson 8**](08-live-video-the-second-subsystem.md) gives it *now* — and finds that live video is not a feature of the console but a subsystem of its own, with workers scaled by the audience.

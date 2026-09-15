@@ -18,7 +18,7 @@ NOTES — what this page is, its regions and its state (each script function is 
 
 # console.html — the console's one page, for any subsystem: built from /spec, no framework, no build step
 
-**Role in the module.** Lesson 5. Served by `console.py` at `/`. The page reads `/spec` first — the
+**Role in the module.** Lesson 6. Served by `console.py` at `/`. The page reads `/spec` first — the
 subsystem's name, what its rows are called, how a unit is identified, which fields the operator owns and
 whether there is media — and builds the unit list, the add form and the edit form from that. Nothing on this
 page names a camera: the VMS is the spec that says `rows: cameras`, `media: true`; live and det are other specs
@@ -51,7 +51,9 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 - `main`
   - `#title` — the selected unit's label, or "Pick one".
   - `#meta` — phase · worker · server · epoch · placement reason · "last known state" when stale.
-        - `#media` (only when `spec.media`) — a legend (recorded / events only / fenced), `#timeline` (spans
+        - `#recbox` — the unit's recording, from `/rec/recordings` when the console mounts `rec`: Record (with days to keep) /
+    Stop recording, and the recorder's word on it (phase, worker, server).
+  - `#media` (only when `spec.media`) — a legend (recorded / fenced), `#timeline` (spans
       and ticks), `#axis` with `#t0`, `#t1` and the `#last24` / `#all` window buttons, `#note` (the
       cluster's `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption,
       `#livefeed` (the events arriving while watching live, newest first), `#evhead` (the events heading,
@@ -177,7 +179,7 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
   <h1 id="title">Pick one</h1>
   <div id="meta"></div>
   <div id="media">
-    <div class="legend"><small><span style="background:var(--media)"></span>recorded <span style="background:var(--events)"></span>events only (watched, not recorded) <span style="background:var(--fenced)"></span>fenced — an older epoch</small></div>
+    <div class="legend"><small><span style="background:var(--media)"></span>recorded (the recorder's footage, by epoch) <span style="background:var(--fenced)"></span>fenced — an older epoch; ticks are events, from every subsystem</small></div>
     <div id="timeline"></div>
     <div id="axis"><span id="t0"></span><button id="last24">last 24 h</button><button id="all">everything</button><button id="live">Live</button><span id="t1"></span></div>
     <div id="note"></div>
@@ -194,6 +196,17 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
     </div>
     <div class="legend" id="evlegend"><small></small></div>
     <ul id="events"></ul>
+  </div>
+  <div id="recbox" style="display:none">
+    <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Recording</strong><span id="recstate"></span>
+      <form id="recstart" style="margin:0;padding:0;border:0;display:flex;gap:6px;align-items:center">
+        <label style="display:flex;gap:4px;align-items:center">keep <input type="number" name="retention_days" value="30" min="1" style="width:4em"> days</label>
+        <button type="submit">Record</button>
+      </form>
+      <button type="button" id="recstop" style="display:none">Stop recording</button>
+      <small>the rec subsystem, when the console mounts it: a recording is a unit placed where an archive is, fed by the worker's fan-out</small>
+      <div class="err" id="recerr"></div>
+    </div>
   </div>
   <div id="dets" style="display:none">
     <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Detectors</strong><small>models on this unit — the det subsystem, when the console mounts it: placed on GPU-labelled workers, its events on the timeline</small></div>
@@ -301,7 +314,7 @@ async function select(id) {
                             c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
   for (const li of $('#units').children) li.classList.toggle('on', li.dataset.id === String(id));
   fillEdit(c);
-  loadDets();
+  loadDets(); loadRec();
   if (spec.media) await loadTimeline();
 }
 
@@ -549,6 +562,31 @@ function stopLive() {
 }
 $('#live').onclick = () => { if (current) startLive(); };
 
+// -- recording: the `rec` subsystem, mounted by the console at /rec. A recording is a unit named by this
+// unit's id, created with the console's token; placement is the rec controller's pass — on a recorder, where
+// an archive is — and the row's phase (running / waiting / pending) is the recorder's word from its heartbeat.
+// No recording: the unit is held (live, detectors, events) and not recorded.
+let rec = null;                                                       // the /rec/spec reply, or false when the console mounts no rec
+async function loadRec() {
+  if (rec === null) { try { const r = await fetch('/rec/spec'); rec = r.ok ? await r.json() : false; } catch (_) { rec = false; } }
+  $('#recbox').style.display = rec && current != null ? 'block' : 'none';
+  if (!rec || current == null) return;
+  const d = await (await fetch('/rec/recordings')).json();
+  const row = (d.rows || []).find(r => String(r.id) === String(current)) || (d.configured || []).find(r => String(r.id) === String(current));
+  $('#recstart').style.display = row ? 'none' : 'flex'; $('#recstop').style.display = row ? '' : 'none';
+  $('#recstate').textContent = row ? `${row.phase || 'placed'}${row.why ? ' · ' + row.why : ''}${row.worker ? ' · ' + row.worker + (row.server ? ' on ' + row.server : '') : ' · unplaced'} · keep ${row.retention_days} days`
+                                   : 'not recorded — watched: live, detectors and events only';
+}
+$('#recstart').onsubmit = async e => {
+  e.preventDefault(); $('#recerr').textContent = '';
+  try { await send('POST', '/rec/recordings', { cam: String(current), retention_days: parseInt(e.target.elements.retention_days.value, 10) || 30 }); loadRec(); }
+  catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
+};
+$('#recstop').onclick = async () => {
+  if (!confirm('Stop recording? The footage stays on the archive until retention removes it.')) return;
+  try { await send('DELETE', `/rec/recordings/${encodeURIComponent(current)}`); loadRec(); } catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
+};
+
 // -- detectors: the `det` subsystem, mounted by the console at /det. A det unit is one model on this unit,
 // named `<cam>-<kind>` here, created with the console's token; placement is the det controller's pass,
 // and the row's phase (running / waiting / pending / unsupported) is the worker's word from its heartbeat.
@@ -624,5 +662,5 @@ async function loadResources() {
 window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
-loadSpec().then(() => { loadUnits(); loadResources(); setInterval(() => { loadUnits(); loadDets(); loadResources(); }, 10000); setInterval(loadEvents, 5000); });
+loadSpec().then(() => { loadUnits(); loadResources(); setInterval(() => { loadUnits(); loadDets(); loadRec(); loadResources(); }, 10000); setInterval(loadEvents, 5000); });
 </script>

@@ -35,7 +35,6 @@ unit:
     # media retention: the VMS's own policy, applied by `ArchiveResource.retain` (`ArchivePolicy.pass_`
     # reads it straight from `vms/cameras/<cam>`; `__main__.retain` reads it through `config.row`). The
     # controller only stores it.
-    retention_days:        {type: int,    default: 30}        # media: the VMS's own policy, on its manifest
     # bucket retention: the platform's, via the derived row below. Events are small and kept a year where
     # footage is kept a month.
     events_retention_days: {type: int,    default: 365}       # buckets: the platform's, via the derived row below
@@ -84,20 +83,20 @@ placement:
 # `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the
 # copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller
 # pass.
-snapshot: [name, source, enabled, retention_days, events_retention_days, priority, labels, ref]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref]
 console:
-  # the name of the running gauge: `metrics_text()` emits `vms_cameras_recording <n>` for status entries in
-  # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_recording 1`); `/spec`
+  # the name of the running gauge: `metrics_text()` emits `vms_cameras_running <n>` for status entries in
+  # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_running 1`); `/spec`
   # sends it as `metrics.running` so the page's status line knows which metric to read. Default would have
   # been `units_running`.
-  running: cameras_recording           # vms_cameras_recording: the gauge for cameras in phase "running"
+  running: cameras_running             # vms_cameras_running: cameras held — streaming to whoever subscribes; recording is rec's gauge
 
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
 # # vms.subsystem.yaml — the VMS's controller, as a spec: what `SpecController` and `SpecConsole` run from
 #
-# **Role.** Lesson 5. The one file a subsystem gives the platform. `vms/config.py` loads it into
+# **Role.** Lesson 6. The one file a subsystem gives the platform. `vms/config.py` loads it into
 # `SubsystemSpec` at import (`SPEC`); `VmsController` is `SpecController(SPEC, …)` and the console is
 # `SpecConsole` over the same controller (see `psimplatform/spec.py` and `console.py` for what each class
 # does with each section). Its header comment draws the line: "Everything the controller does for this

@@ -125,8 +125,9 @@ def test_a_dead_resource_makes_the_answer_incomplete_by_name_not_wrong():
 def test_the_resource_policy_retains_each_subsystems_buckets_by_its_own_row():
     from cluster.controller import ClusterController
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall); srv = c.servers["srv-a"]
-    ctl.create_camera({"source": "driverpack://file/7.mp4", "retention_days": 1, "events_retention_days": 30})
+    ctl.create_camera({"source": "driverpack://file/7.mp4", "events_retention_days": 30})       # the camera's events: the VMS row's knob
     assert c.vars.get("vms/retention/1")[0] == {"days": "30"}                     # the VMS's policy for its unit, as a row the platform reads
+    assert c.vars.get("rec/recordings/1")[0] is None                              # no recording: the camera is watched, its footage nobody's
     now = c.wall()
     p1 = _observe(c, "srv-a", "vms", "1", 1, now - 40 * 86400, "motion")       # older than the VMS's policy
     p2 = _observe(c, "srv-a", "vms", "1", 1, now - 3600, "motion")             # recent
@@ -134,9 +135,9 @@ def test_the_resource_policy_retains_each_subsystems_buckets_by_its_own_row():
     for p in (p1, p2, p3): os.utime(p, (now - 100, now - 100))
     res = cluster_resource(srv.resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall)
     rep = res.pass_()
-    assert rep["vms.added"] == 2 and rep["removed"] == 2 and os.path.exists(p2) and not os.path.exists(p1) and not os.path.exists(p3)
-    assert len(Manifest(srv.archive, 1).buckets()) == 2                         # the VMS's lines: its pass ran before the platform removed the file...
-    assert res.pass_()["vms.dropped"] == 1 and len(Manifest(srv.archive, 1).buckets()) == 1   # ...and drops it on the next pass
+    assert rep["removed"] == 2 and os.path.exists(p2) and not os.path.exists(p1) and not os.path.exists(p3)
+    assert rep["rec.added"] == 0 and rep["rec.media_removed"] == 0 and Manifest(srv.archive, 1).read() == []   # the recorder's pass: no footage here, nothing to do
+    assert not os.path.exists(os.path.join(srv.archive, "rec"))                   # events are the worker's tree (vms/); footage would be the recorder's (rec/)
 
 
 def test_the_events_knob_is_a_peer_copy_and_the_owner_restores():
@@ -181,7 +182,7 @@ def test_the_events_knob_is_a_peer_copy_and_the_owner_restores():
     shutil.rmtree(c.servers["srv-a"].archive); os.makedirs(c.servers["srv-a"].archive)
     hbs["srv-a"].heartbeat()
     r = pol["srv-a"].restore()
-    assert r["pulled"] == 2 and r["vms.added"] == 1                                                  # its two closed buckets are home; the vms manifest line rebuilt
+    assert r["pulled"] == 2 and r["rec.added"] == 0                                                  # its two closed buckets are home; no footage was ever here (rec/ is the recorder's)
     assert [b.path for b in buckets_under(c.servers["srv-a"].archive, "vms", "7", B)] == [ev[0]["bucket"]]
     hbs["srv-a"].heartbeat()
     assert _index(c, rs, "srv-a")["added"] == 2                                                      # its job restarts: the index over the restored tree

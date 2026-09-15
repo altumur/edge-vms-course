@@ -28,7 +28,7 @@
 # ================================================================================================
 [Unit]
 # `%i` is substituted per instance in `systemctl status`.
-Description=VMS worker %i — pipelines against its assignment
+Description=VMS worker %i — holds its cameras: DriverPack, the fan-out, the events
 # ordering only; the worker needs no network on one box (file stores), but the console's port and М11's
 # stores will.
 After=network.target
@@ -49,14 +49,14 @@ EnvironmentFile=/data/config/vms.env
 # the two stores, read-write: the worker writes `vms/epoch/*`, `vms/slots/*` (its token) and its heartbeat
 # object. `:z` relabels for SELinux, shared.
 Volume=/data/platform:/data/platform:z
-# where `archivesink` writes segments; `closed_in_spool` reads it at start.
-Volume=/data/spool:/data/spool:z
-# read-write: the worker is the only writer of segments (promote) and of the camera's event buckets; the
-# test asserts this mount has no `ro`.
+# no spool: the worker records nothing — the recorder does (`vmsrecorder@.container`). Read-write here
+# because the camera's event buckets, `vms/<cam>/e<epoch>/`, are the worker's, on this server's resource;
+# it never writes under `rec/`.
 Volume=/data/archive:/data/archive:z
 # the files `driverpack://file/<name>` plays; read-only, the worker never writes media.
 Volume=/data/media:/data/media:ro,z
-# no port mapping; the worker opens nothing, and in М11 the gateway branch will.
+# host network: the RTSP fan-out listens on :8554 (`live_url` in the heartbeat) — what the recorder, the
+# gateways and the detectors subscribe to, from this box or another server.
 Network=host
 # SIGTERM lets every splitmuxsink finalize its open segment and the worker
 # release its slot; SIGKILL loses exactly that segment (М10 Lesson 3) and
