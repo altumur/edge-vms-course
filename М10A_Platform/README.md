@@ -40,10 +40,10 @@
 | 13 | [`SpecController` III — молчания, ручки, снимок](13-speccontroller-the-silences.md) | `resource_state`, `without_resource`, `idle_by_policy`, `gone_servers`, `redistribute`, `rebalance`; политики `servers: shared \| distinct`; `read_model`, `snapshot`, `failover_seconds`. |
 | 14 | [События: бакеты на ресурсе](14-events-buckets-on-a-resource.md) | Написать `events.py` целиком: путь бакета, `EventLog.append`, `read_bucket`, `buckets_under`, `subsystems_under` — форму данных, у которой один писатель по построению. |
 | 15 | [База, которая является кэшем](15-the-database-that-is-a-cache.md) | `EventDatabase` над собственным деревом ресурса — `rebuild`, `tail`, `query`, `forget` — и `MergedIndex`: то, что есть у консоли вместо базы. |
-| 16 | Ресурс как работа платформы | `Resource`: регистрация чужих проходов, heartbeat, хранение по строке каждой подсистемы, зеркало к соседу и возврат домой после замены диска; `serve` с его маршрутами. |
-| 17 | Консоль как данные | `SpecConsole`: `describe`, `dispatch` и чтения — `/spec`, `/<rows>`, `/where`, `/unplaceable`, `/events`; идемпотентный ключ, который живёт в хранилище, а не в памяти процесса. |
-| 18 | Один процесс, несколько подсистем | Записи, `/metrics`, `/servers`, `/policy`, `/marks` и `Mount` — корень на `/` и остальные под своими именами. |
-| 19 | Страница | 666 строк `console.html`: список и формы, собранные из `/spec`; таймлайн, метки событий, плеер с диапазонными запросами, переключатели оператора и администратора. |
+| 16 | [Ресурс как работа платформы](16-the-resource-as-a-platform-job.md) | `Resource`: регистрация чужих проходов, heartbeat, хранение по строке каждой подсистемы, зеркало к соседу и возврат домой после замены диска; `serve` с его маршрутами. |
+| 17 | [Консоль как данные](17-the-console-as-data.md) | `SpecConsole`: `describe`, `dispatch` и чтения — `/spec`, `/<rows>`, `/where`, `/unplaceable`, `/events`; идемпотентный ключ, который живёт в хранилище, а не в памяти процесса. |
+| 18 | [Один процесс, несколько подсистем](18-one-process-several-subsystems.md) | Записи, `/metrics`, `/servers`, `/policy`, `/marks` и `Mount` — корень на `/` и остальные под своими именами. |
+| 19 | [Страница](19-the-page.md) | 666 строк `console.html`: список и формы, собранные из `/spec`; таймлайн, метки событий, плеер с диапазонными запросами, переключатели оператора и администратора. |
 
 ## Демо, от которого модуль построен назад
 
