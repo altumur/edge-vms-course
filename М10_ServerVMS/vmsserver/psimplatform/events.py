@@ -133,13 +133,30 @@ class EventLog:
         return p
 
 
-# All lines of one bucket parsed; a missing file is an empty list.
+# All lines of one bucket parsed; a missing file is an empty list. A line that does not parse is SKIPPED,
+# not fatal: `append` writes and flushes without `fsync`, so a crash or a power loss can leave the last line
+# half-written, and losing the whole bucket for one torn line would lose ten minutes of observations where
+# one record was actually damaged. The accepted loss is then the same shape as it is for footage — the open
+# thing, not the day (М10B Lesson 6). `torn` counts them, so a resource whose buckets keep tearing says so
+# instead of quietly returning less.
+torn = 0
+
+
 def read_bucket(path: str) -> list[dict]:
+    global torn
+    out = []
     try:
         with open(path) as f:
-            return [json.loads(l) for l in f if l.strip()]
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except ValueError:                    # a half-written last line: the writer died mid-append
+                    torn += 1
     except FileNotFoundError:
         return []
+    return out
 
 
 # Every bucket file for a unit, from the files alone — what repair and the resource's `/buckets` route read.

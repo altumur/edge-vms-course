@@ -112,3 +112,31 @@ def test_the_database_is_a_cache_and_retention_takes_the_rows_with_the_file():
     assert res.retain() == 1                                                              # the file went — and the rows with it
     assert [e["t"] for e in m.query(0, 1e12, cam=7)["events"]] == [box.wall() - 100]
     assert box.vars.list("vms/events") == [] and box.objects.list("vms/events") == []     # nothing about events in any store
+
+
+def test_a_torn_last_line_loses_the_line_not_the_bucket():
+    """`append` writes and flushes without `fsync`, so a crash can leave the last line
+    half-written. That is the accepted loss — and it must be the same SHAPE as the one
+    for footage: the open thing, not the day. A bucket of ten minutes' observations is
+    not thrown away because one record was damaged; the torn line is skipped and
+    counted, and the database built over it holds everything that did land."""
+    import psimplatform.events as ev
+    from psimplatform.events import EventLog, read_bucket
+    from tests.conftest import Box
+
+    box = Box()
+    log = EventLog(box.archive, "vms", "8123", 7, 600)
+    for i in range(5):
+        p = log.append(1000.0 + i, "motion", score=i)
+    with open(p, "a") as f:                                   # the writer died mid-append
+        f.write('{"t": 1005.0, "kind": "mot')
+
+    before = ev.torn
+    rows = read_bucket(p)
+    assert [r["score"] for r in rows] == [0, 1, 2, 3, 4]      # every whole line survives
+    assert ev.torn == before + 1                              # and the damage is counted, not silent
+
+    db = EventDatabase(box.archive, "srv-1", ":memory:", lambda: 2000.0, 600)
+    db.rebuild()
+    assert len(db.query(0, 1e12, cam=None, kind=None, subsystem="vms", unit="8123",
+                        current_epochs={("vms", "8123"): 7})["events"]) == 5
