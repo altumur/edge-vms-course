@@ -31,6 +31,13 @@ job "resource" {
         volumes      = ["/data/spool:/data/spool", "/data/archive:/data/archive"]
       }
       env {
+        # The runtime's part of the seam (`psimplatform/runtime.py`): the neutral names the loop
+        # reads, filled here from Nomad's own. This file already knows the orchestrator — the
+        # worker must not. A k8s manifest fills the same four from an ordinal and a fieldRef.
+        SLOT_INDEX  = "${NOMAD_ALLOC_INDEX}"
+        SERVER_NAME = "${node.unique.name}"
+        LABELS      = "${meta.labels}"
+        INSTANCE_ID = "${NOMAD_ALLOC_ID}"
         OBJECTS      = "variables://objects"       # its heartbeat as a Variable; no MinIO on this cluster
         RESOURCE_URL = "http://${attr.unique.network.ip-address}:8090"   # where peers PUT mirrors and the console asks /events, /manifest, /segment
         NOMAD_NODE_NAME = "${node.unique.name}"

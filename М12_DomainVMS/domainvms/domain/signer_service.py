@@ -25,11 +25,13 @@ from .agent import DomainPublisher
 from .identity import AuthError, IdentityStore
 from .signer import Signer
 from .tokens import RevocationList, verify
+import cluster as _cluster  # noqa: F401  — registers the `nomad://` scheme
+from psimplatform.variables import open_vars
 
 
 def main() -> None:
     domain = os.environ.get("DOMAIN_ID", "domain")
-    vars_ = NomadVariables(addr=os.environ.get("NOMAD_ADDR"))
+    vars_ = open_vars(os.environ.get("CONFIG_URL") or "nomad://" + os.environ.get("NOMAD_ADDR", "127.0.0.1:4646").replace("http://", ""))
     objects = open_store(os.environ.get("OBJECT_STORE_URL", "file:///data/domain"))
     signer = Signer(domain, vars_)
     ids = IdentityStore(signer, vars_, objects, publish_floor=float(os.environ.get("IDENTITY_PUBLISH_FLOOR", "60")))

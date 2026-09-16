@@ -90,6 +90,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from psimplatform import runtime
 from psimplatform.console import SendMixin
 from psimplatform.contract import Subsystem, Worker
 from psimplatform.objects import ObjectStore
@@ -234,16 +235,12 @@ def live_port(cid: int) -> int:
 # `WORKER_NAME` if set; else `w-<NOMAD_ALLOC_INDEX>`; else `None` — claim whatever is free, a lapsed slot
 # first. The recorder uses the same rule with `RECORDER_NAME` and `r-`.
 def slot_from_environment(env: dict, name_env: str = "WORKER_NAME", prefix: str = "w") -> str | None:
-    if env.get(name_env):
-        return env[name_env]
-    if "NOMAD_ALLOC_INDEX" in env:
-        return f"{prefix}-{int(env['NOMAD_ALLOC_INDEX'])}"
-    return None                                  # claim whatever is free — a lapsed slot first
+    return runtime.slot(env, name_env, prefix)   # None: claim whatever is free — a lapsed slot first
 
 
-# `NOMAD_META_labels` split on commas, empties dropped.
+# `LABELS` split on commas, empties dropped — what this server can reach, as the runtime said it.
 def labels_from_environment(env: dict) -> list[str]:
-    return [l for l in env.get("NOMAD_META_labels", "").split(",") if l]
+    return runtime.labels(env)
 
 
 # `name` is a slot. Given (systemd's `%i`, Nomad's alloc index) it is claimed by that name — taken outright,
@@ -276,7 +273,7 @@ class VmsWorker(Worker):
                  archive_root: str | None = None, bucket_seconds: int = 600, env: dict | None = None,
                  device_factory=None):
         env = dict(os.environ if env is None else env)
-        instance = instance or env.get("NOMAD_ALLOC_ID") or None
+        instance = instance or runtime.instance(env)
         super().__init__(self.SUB, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
         self.claim_slot(prefer=name if name is not None else slot_from_environment(env, self.NAME_ENV, self.SLOT_PREFIX))
         self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource: where its events go
@@ -294,9 +291,9 @@ class VmsWorker(Worker):
         self.reconciler = Reconciler(self, self._actuate)
         self.recording_allowed = True
         self.fenced_reason: str | None = None
-        self.server = server or env.get("NOMAD_NODE_NAME") or env.get("NOMAD_NODE_ID") or socket.gethostname()
+        self.server = runtime.server(env, server)
         self.labels = labels_from_environment(env)
-        self.alloc = env.get("NOMAD_ALLOC_ID", "")
+        self.alloc = runtime.instance(env) or ""          # published as `alloc` for the readers that already know that name
         self.started_at = clock()
         self._started_wall = self.wall()
         self.passes = 0

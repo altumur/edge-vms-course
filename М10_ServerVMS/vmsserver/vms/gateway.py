@@ -30,6 +30,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from psimplatform import runtime
 from psimplatform.console import SendMixin, heartbeats
 from psimplatform.contract import Worker
 from psimplatform.spec import SpecController
@@ -77,12 +78,12 @@ class LiveGateway(Worker):
                  peer_factory=None, env: dict | None = None):
         env = dict(os.environ if env is None else env)
         super().__init__(LIVE, None, vars_, objects, clock=clock, wall=wall)
-        self.claim_slot(prefer=name if name is not None else env.get("GATEWAY_NAME") or (f"g-{env['NOMAD_ALLOC_INDEX']}" if "NOMAD_ALLOC_INDEX" in env else None))
+        self.claim_slot(prefer=name if name is not None else runtime.slot(env, "GATEWAY_NAME", "g"))
         self.ctl = ctl                                              # the live SpecController with the gateway's token: deletes its own idle units
         self.url = url or env.get("GATEWAY_URL", "")
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "100"))
-        self.server = server or env.get("NOMAD_NODE_NAME") or os.uname().nodename
-        self.labels = [l for l in env.get("NOMAD_META_labels", "").split(",") if l]
+        self.server = runtime.server(env, server)
+        self.labels = runtime.labels(env)
         self.peer_factory = peer_factory or FakePeer
         self.upstreams: dict[str, Upstream] = {}
         self.sessions: dict[str, tuple[str, object]] = {}          # session id -> (cam, peer)

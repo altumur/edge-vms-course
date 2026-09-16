@@ -21,6 +21,12 @@ import threading
 import time
 
 import cluster  # noqa: F401  — puts М10's vmsserver on sys.path
+from psimplatform import runtime
+from psimplatform.variables import open_vars
+
+# The store seam. `nomad://` is registered by `cluster/variables.py`; the default keeps the
+# cluster working with no new environment, and a k8s site changes this one variable.
+CONFIG_URL = os.environ.get("CONFIG_URL") or "nomad://" + os.environ.get("NOMAD_ADDR", "127.0.0.1:4646").replace("http://", "")
 
 from cluster.objectstore import open_store
 from cluster.variables import NomadVariables
@@ -42,7 +48,7 @@ def worker() -> None:
         act = GstActuator()
     except ImportError:
         logging.warning("no GStreamer: the fake actuator holds nothing"); act = None
-    w = ClusterWorker(NomadVariables(), objects, act)
+    w = ClusterWorker(open_vars(CONFIG_URL), objects, act)
     logging.info("worker %s on %s (alloc %s) claimed its slot; labels %s", w.name, w.server, w.alloc, w.labels)
     w.run(stop=stop)                              # SIGTERM from Nomad → release_slot(): scale-in, not a crash
 
@@ -57,7 +63,7 @@ def recorder() -> None:
         act = GstRecActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))
     except ImportError:
         logging.warning("no GStreamer: the fake actuator records nothing"); act = None
-    r = ClusterRecorder(NomadVariables(), objects, act, archive=ArchiveResource(spool, archive))
+    r = ClusterRecorder(open_vars(CONFIG_URL), objects, act, archive=ArchiveResource(spool, archive))
     logging.info("recorder %s on %s (alloc %s) claimed its slot; labels %s", r.name, r.server, r.alloc, r.labels)
     r.run(stop=stop)
 
@@ -67,7 +73,7 @@ def reccontroller() -> None:
     resource answers, one recorder per server by default (rec/policy)."""
     from psimplatform.spec import SpecController
     from vms.config import REC_SPEC
-    ctl = SpecController(REC_SPEC, NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")))
+    ctl = SpecController(REC_SPEC, open_vars(CONFIG_URL), objects, capacity=int(os.environ.get("CAPACITY", "50")))
     while not stop.is_set():
         try:
             ctl.ensure_placed(); ctl.redistribute(); ctl.unplace_deleted()
@@ -79,7 +85,7 @@ def reccontroller() -> None:
 def controller() -> None:
     """count = 1, the only writer of placement. No HTTP: nothing asks it anything."""
     from cluster.controller import ClusterController
-    ctl = ClusterController(NomadVariables(), objects, capacity=int(os.environ.get("CAPACITY", "50")),
+    ctl = ClusterController(open_vars(CONFIG_URL), objects, capacity=int(os.environ.get("CAPACITY", "50")),
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
     while not stop.is_set():
         try:
@@ -97,7 +103,7 @@ def console() -> None:
     from cluster.controller import ClusterController
     from psimplatform.spec import SpecController
     from vms.config import REC_SPEC
-    vars_ = NomadVariables()
+    vars_ = open_vars(CONFIG_URL)
     ctl = ClusterController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")),
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
     srv = serve(ctl, os.environ.get("CONSOLE_HOST", "0.0.0.0"), int(os.environ.get("CONSOLE_PORT", "8080")),
@@ -113,9 +119,9 @@ def resource() -> None:
     from cluster.resource import cluster_resource, vms_routes
     from psimplatform.resource import serve
     arch = ArchiveResource(spool, archive)
-    server = os.environ.get("NOMAD_NODE_NAME") or os.uname().nodename
+    server = runtime.server(os.environ)
     url = os.environ.get("RESOURCE_URL", f"http://{server}:8090")
-    res = cluster_resource(arch, server, url, NomadVariables(), objects, database=os.environ.get("EVENTDB", ":memory:"))
+    res = cluster_resource(arch, server, url, open_vars(CONFIG_URL), objects, database=os.environ.get("EVENTDB", ":memory:"))
     srv = serve(res, "0.0.0.0", int(os.environ.get("RESOURCE_PORT", "8090")), extra=vms_routes(arch))
     res.heartbeat(); logging.info("restore: %s", res.restore())    # back with an empty disk? pull my buckets from my peers first
     res.database.start()                                              # a cache over MY tree: rebuilt after restore, tailed every 3 s

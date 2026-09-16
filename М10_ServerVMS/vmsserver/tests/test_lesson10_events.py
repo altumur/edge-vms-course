@@ -57,7 +57,7 @@ def test_three_subsystems_events_reach_one_timeline_through_the_resource_process
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
         gpu = DetWorker("d-1", box.vars.as_writer("detworker", ["det/epoch/*", "det/slots/*"]), box.objects, capacity=8,
-                        clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive, env={"NOMAD_META_labels": "gpu"})
+                        clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive, env={"LABELS": "gpu"})
         gpu.heartbeat_once()
         call(base, "POST", "/det/units", {"name": "1-linecross", "cam": "1", "kind": "linecross"}, {"Idempotency-Key": "k1"})
         det_ctl.ensure_placed(); gpu.reconcile_once()

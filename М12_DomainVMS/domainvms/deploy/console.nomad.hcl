@@ -26,7 +26,7 @@ job "console" {
         data        = <<-EOT
           # One line per cluster the console aggregates. The cluster-level
           # console lists its own cluster only; the domain's lists all.
-          CLUSTERS=north=http://nomad.north:4646|http://minio.north:9000/cluster-restore,south=http://nomad.south:4646|http://minio.south:9000/cluster-restore
+          CLUSTERS=north=nomad://nomad.north:4646|http://minio.north:9000/cluster-restore,south=nomad://nomad.south:4646|http://minio.south:9000/cluster-restore
           LOST_AFTER=45
           REFRESH_INTERVAL=5
         EOT

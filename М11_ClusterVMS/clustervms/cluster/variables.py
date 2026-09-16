@@ -19,6 +19,7 @@ from typing import Protocol
 
 
 from psimplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
+from psimplatform.variables import register_scheme
 
 
 class Variables(Protocol):
@@ -26,6 +27,15 @@ class Variables(Protocol):
     def put(self, path: str, items: dict, cas: int | None = None) -> int: ...
     def list(self, prefix: str) -> list[str]: ...
     def delete(self, path: str, cas: int | None = None) -> None: ...
+
+
+# `nomad://host:port` — the scheme this module answers for. Registered at the bottom of the file, so a
+# process that imports `cluster` can say `CONFIG_URL=nomad://…` and the platform never names Nomad.
+# `writer`/`acl` are ignored here: on a cluster the ACL is the task's own workload identity, enforced by
+# the server, not by the client (which is the point of a real store).
+def _open_nomad(url: str, writer: str | None = None, acl: dict | None = None) -> "NomadVariables":
+    rest = url.split("://", 1)[1]
+    return NomadVariables(addr=f"http://{rest}" if rest else None)
 
 
 class NomadVariables:
@@ -129,3 +139,6 @@ class FakeVariables:
                 raise Conflict(f"cas={cas} but ModifyIndex={current}")
             self._items.pop(path, None)
             self._raft_index += 1
+
+
+register_scheme("nomad", _open_nomad)

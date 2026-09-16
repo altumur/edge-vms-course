@@ -19,6 +19,7 @@ import logging
 import os
 import time
 
+from psimplatform import runtime
 from psimplatform.console import heartbeats
 from psimplatform.contract import Worker
 from psimplatform.events import EventLog
@@ -53,11 +54,11 @@ class DetWorker(Worker):
                  env: dict | None = None):
         env = dict(os.environ if env is None else env)
         super().__init__(DET, None, vars_, objects, clock=clock, wall=wall)
-        self.claim_slot(prefer=name if name is not None else env.get("DET_NAME") or (f"d-{env['NOMAD_ALLOC_INDEX']}" if "NOMAD_ALLOC_INDEX" in env else None))
+        self.claim_slot(prefer=name if name is not None else runtime.slot(env, "DET_NAME", "d"))
         self.models = models if models is not None else {"motion": FakeModel, "linecross": FakeModel, "lpr": FakeModel}
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "8"))
-        self.server = server or env.get("NOMAD_NODE_NAME") or os.uname().nodename
-        self.labels = [l for l in env.get("NOMAD_META_labels", "gpu").split(",") if l]
+        self.server = runtime.server(env, server)
+        self.labels = runtime.labels(env, "gpu")
         self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource: where the buckets go
         self.running: dict[str, object] = {}                                     # unit -> model
         self.status_by_unit: dict[str, dict] = {}

@@ -85,8 +85,8 @@ class Running:
 
     def add_worker(self, name: str, server: str, capacity: int = 50) -> ClusterWorker:
         self.alloc += 1
-        env = {"NOMAD_ALLOC_INDEX": name.split("-")[1], "NOMAD_NODE_NAME": server, "NOMAD_ALLOC_ID": f"{self.c.name}-alloc-{self.alloc}",
-               "NOMAD_META_labels": ",".join(sorted(self.c.reaches))}
+        env = {"SLOT_INDEX": name.split("-")[1], "SERVER_NAME": server, "INSTANCE_ID": f"{self.c.name}-alloc-{self.alloc}",
+               "LABELS": ",".join(sorted(self.c.reaches))}
         w = ClusterWorker(self.c.vars, self.c.objects, FakeActuator(), env=env, clock=self.wall, wall=self.wall, capacity=capacity)
         w.heartbeat_once()
         self.workers[name] = w

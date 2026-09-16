@@ -37,7 +37,7 @@ def _box():
 
 def _det(box, name, labels="gpu", capacity=8):
     d = DetWorker(name, box.vars.as_writer("detworker", ["det/epoch/*", "det/slots/*"]), box.objects, capacity=capacity,
-                  clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive, env={"NOMAD_META_labels": labels})
+                  clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive, env={"LABELS": labels})
     d.heartbeat_once()
     return d
 

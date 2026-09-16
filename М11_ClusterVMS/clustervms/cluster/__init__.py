@@ -23,3 +23,5 @@ for cand in (os.environ.get("VMSSERVER_PATH", ""),
     if cand and os.path.isdir(cand) and cand not in sys.path:
         sys.path.append(cand)          # append, not insert: our own tests/ must win
         break
+
+from . import variables as _variables  # noqa: E402,F401  — registers the `nomad://` scheme with the platform

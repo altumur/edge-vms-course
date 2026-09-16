@@ -99,11 +99,12 @@ def main() -> None:
     import signal
     import threading
 
-    from cluster.variables import NomadVariables
+    import cluster as _cluster  # noqa: F401  — registers the `nomad://` scheme
+    from psimplatform.variables import open_vars
 
     cluster = os.environ.get("CLUSTER", os.environ.get("NOMAD_REGION", "local"))
-    agent = DomainAgent(cluster, NomadVariables(addr=os.environ["DOMAIN_NOMAD_ADDR"]),
-                        NomadVariables(addr=os.environ.get("NOMAD_ADDR")))
+    agent = DomainAgent(cluster, open_vars(os.environ["DOMAIN_CONFIG_URL"]),
+                        open_vars(os.environ.get("CONFIG_URL") or "nomad://" + os.environ.get("NOMAD_ADDR", "127.0.0.1:4646").replace("http://", "")))
     interval = float(os.environ.get("SYNC_INTERVAL", "30"))
     stop = threading.Event()
     for s in (signal.SIGTERM, signal.SIGINT):

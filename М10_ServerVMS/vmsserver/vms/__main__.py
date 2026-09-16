@@ -74,7 +74,7 @@ import sys
 import threading
 
 from psimplatform.objects import FsObjectStore
-from psimplatform.variables import FileVariables
+from psimplatform.variables import open_vars
 
 from .archive import ArchiveResource
 from .controller import VmsController
@@ -82,6 +82,10 @@ from .worker import FakeActuator, VmsWorker
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(levelname)s %(message)s")
 root = os.environ.get("PLATFORM_DIR", "/data/platform")
+# The store seam: a process is told a URL and nothing else (`psimplatform.variables.open_vars`). On a box
+# this is `file://` — in-process, no daemon, no hop. `CONFIG_URL=nomad://…` in a cluster, `k8s://…` later;
+# not one of those names appears in the loop.
+CONFIG_URL = os.environ.get("CONFIG_URL") or "file://" + os.path.join(root, "config")
 stop = threading.Event()
 for s in (signal.SIGTERM, signal.SIGINT):
     signal.signal(s, lambda *_: stop.set())
@@ -102,8 +106,9 @@ for s in (signal.SIGTERM, signal.SIGINT):
 #   releases the slot on the way out, so SIGTERM is an orderly stop (scale-in), while a kill leaves the slot
 #   to lapse.
 def worker() -> None:
-    name = os.environ.get("WORKER_NAME") or (f"w-{os.environ['NOMAD_ALLOC_INDEX']}" if "NOMAD_ALLOC_INDEX" in os.environ else None)
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsworker", acl={"vmsworker": ["vms/epoch/*", "vms/slots/*"]})
+    from psimplatform import runtime
+    name = runtime.slot(os.environ, "WORKER_NAME", "w")
+    vars_ = open_vars(CONFIG_URL, writer="vmsworker", acl={"vmsworker": ["vms/epoch/*", "vms/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     archive = os.environ.get("ARCHIVE", "/data/archive")
     try:
@@ -138,7 +143,7 @@ def worker() -> None:
 #   loop, plus a re-subscription when a camera's holder moves, plus promotion on every pass.
 def recorder() -> None:
     from .recorder import RecWorker
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsrecorder", acl={"vmsrecorder": ["rec/epoch/*", "rec/slots/*"]})
+    vars_ = open_vars(CONFIG_URL, writer="vmsrecorder", acl={"vmsrecorder": ["rec/epoch/*", "rec/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive")
     try:
@@ -164,7 +169,7 @@ def reccontroller() -> None:
     recorders — one per server, where the archive is. No code of its own."""
     from psimplatform.spec import SpecController
     from .config import REC_SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="reccontroller", acl={"reccontroller": REC_SPEC.acl_controller()})
+    vars_ = open_vars(CONFIG_URL, writer="reccontroller", acl={"reccontroller": REC_SPEC.acl_controller()})
     _controller_loop(SpecController(REC_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
 
 
@@ -193,7 +198,7 @@ def _controller_loop(ctl) -> None:
 
 def controller() -> None:
     from .config import SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmscontroller", acl={"vmscontroller": SPEC.acl_controller()})
+    vars_ = open_vars(CONFIG_URL, writer="vmscontroller", acl={"vmscontroller": SPEC.acl_controller()})
     objects = FsObjectStore(os.path.join(root, "objects"))
     _controller_loop(VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50"))))
 
@@ -203,7 +208,7 @@ def livecontroller() -> None:
     gateways by viewer headroom. No code of its own."""
     from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="livecontroller", acl={"livecontroller": LIVE_SPEC.acl_controller()})
+    vars_ = open_vars(CONFIG_URL, writer="livecontroller", acl={"livecontroller": LIVE_SPEC.acl_controller()})
     _controller_loop(SpecController(LIVE_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
 
 
@@ -212,7 +217,7 @@ def detcontroller() -> None:
     GPU-labelled detector workers by stream headroom. No code of its own."""
     from psimplatform.spec import SpecController
     from .config import DET_SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="detcontroller", acl={"detcontroller": DET_SPEC.acl_controller()})
+    vars_ = open_vars(CONFIG_URL, writer="detcontroller", acl={"detcontroller": DET_SPEC.acl_controller()})
     _controller_loop(SpecController(DET_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
 
 
@@ -220,7 +225,7 @@ def detworker() -> None:
     """A detector worker: a worker of the `det` subsystem. Its token writes its slot, its epochs and its
     heartbeat; its events go into det/<unit>/e<epoch>/ on this server's resource."""
     from .detector import DetWorker
-    vars_ = FileVariables(os.path.join(root, "config"), writer="detworker", acl={"detworker": ["det/epoch/*", "det/slots/*"]})
+    vars_ = open_vars(CONFIG_URL, writer="detworker", acl={"detworker": ["det/epoch/*", "det/slots/*"]})
     d = DetWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")), capacity=int(os.environ.get("CAPACITY", "8")),
                   archive_root=os.environ.get("ARCHIVE", "/data/archive"))
     logging.info("detector %s (instance %s) claimed its slot; models: %s", d.name, d.instance, ",".join(d.models))
@@ -233,7 +238,7 @@ def gateway() -> None:
     from psimplatform.spec import SpecController
     from .config import LIVE_SPEC
     from .gateway import LiveGateway
-    vars_ = FileVariables(os.path.join(root, "config"), writer="livegateway",
+    vars_ = open_vars(CONFIG_URL, writer="livegateway",
                           acl={"livegateway": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     host, port = os.environ.get("GATEWAY_HOST", "127.0.0.1"), int(os.environ.get("GATEWAY_PORT", "8082"))
@@ -266,7 +271,7 @@ def console() -> None:
     from .console import serve
     from psimplatform.spec import SpecController
     from .config import DET_SPEC, LIVE_SPEC, REC_SPEC
-    vars_ = FileVariables(os.path.join(root, "config"), writer="vmsconsole",
+    vars_ = open_vars(CONFIG_URL, writer="vmsconsole",
                           acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
@@ -299,7 +304,7 @@ def resource() -> None:
     from psimplatform.resource import serve
     from .resource import vms_resource, vms_routes
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
-    vars_ = FileVariables(os.path.join(root, "config"))
+    vars_ = open_vars(CONFIG_URL)
     objects = FsObjectStore(os.path.join(root, "objects"))
     host, port = os.environ.get("RESOURCE_HOST", "127.0.0.1"), int(os.environ.get("RESOURCE_PORT", "8090"))
     res = vms_resource(archive, socket.gethostname(), os.environ.get("RESOURCE_URL", f"http://{host}:{port}"), vars_, objects,

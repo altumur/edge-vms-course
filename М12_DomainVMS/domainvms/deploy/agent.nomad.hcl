@@ -15,7 +15,7 @@ job "domain-agent" {
       template {
         data        = <<-EOT
           CLUSTER={{ env "NOMAD_REGION" }}
-          DOMAIN_NOMAD_ADDR=http://nomad.north:4646     # the domain cluster, read through federation forwarding
+          DOMAIN_CONFIG_URL=nomad://nomad.north:4646   # the domain cluster, read through federation forwarding; a scheme, not a vendor
           NOMAD_ADDR=http://127.0.0.1:4646              # this cluster, written
           SYNC_INTERVAL=30
         EOT

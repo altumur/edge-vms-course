@@ -38,7 +38,7 @@ def _box():
 def _gateway(box, name, capacity=100, labels="", url=""):
     g = LiveGateway(name, box.vars.as_writer("livegateway", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects,
                     ctl=SpecController(LIVE_SPEC, box.vars.as_writer("livegateway", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects, wall=box.wall),
-                    capacity=capacity, clock=box.clock, wall=box.wall, server="srv-1", env={"NOMAD_META_labels": labels})
+                    capacity=capacity, clock=box.clock, wall=box.wall, server="srv-1", env={"LABELS": labels})
     g.serve("127.0.0.1", 0); g.heartbeat_once()
     return g
 

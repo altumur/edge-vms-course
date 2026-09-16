@@ -80,6 +80,38 @@ def _safe(path: str) -> str:
 # The store. Holds only paths (`root`, `dir`, `index_file`, `lock_file`) plus an optional writer identity
 # and ACL map; it keeps no cache, so any number of instances over the same directory — in one process or
 # many — are equivalent.
+# -- the seam: which store is behind the contract, said as a URL ------------------------------------
+# A process is told `CONFIG_URL` and nothing else. `file://` is in-process — on a box there is no daemon,
+# no hop and no second quorum, which is the whole reason this is a factory and not a service. Every other
+# scheme is registered by the package that implements it (`cluster/variables.py` registers `nomad://` at
+# import), so the platform names no vendor and adding Kubernetes later adds a file, not a branch here.
+#
+# This is the same seam Objects already have in М11 (`open_store(OBJECTS)`); Config just never got it, and
+# that is why swapping the store meant editing sixteen constructors in three modules and two languages.
+_SCHEMES: dict[str, object] = {}
+
+
+def register_scheme(scheme: str, factory) -> None:
+    """`factory(url, writer=…, acl=…) -> Variables`. A backend registers itself at import."""
+    _SCHEMES[scheme] = factory
+
+
+def open_vars(url: str, writer: str | None = None, acl: dict[str, list[str]] | None = None):
+    """`file:///data/platform/config` · `nomad://127.0.0.1:4646` · whatever else registered.
+
+    A bare path is read as `file://` so the box keeps working with no URL at all."""
+    if "://" not in url:
+        return FileVariables(url, writer, acl)
+    scheme, rest = url.split("://", 1)
+    if scheme == "file":
+        return FileVariables(rest or "/", writer, acl)
+    factory = _SCHEMES.get(scheme)
+    if factory is None:
+        known = ", ".join(sorted(["file"] + list(_SCHEMES)))
+        raise ValueError(f"no Variables backend for {scheme}://  (have: {known})")
+    return factory(url, writer=writer, acl=acl)
+
+
 class FileVariables:
     # `root` is the store directory; `<root>/vars/` is created. `writer` is this handle's identity (None
     # means unrestricted). `acl` is `{writer: [allowed prefixes]}`; when both `writer` and a non-empty `acl`

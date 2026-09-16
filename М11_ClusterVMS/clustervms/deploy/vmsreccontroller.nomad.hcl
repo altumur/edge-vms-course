@@ -18,6 +18,13 @@ job "vmsreccontroller" {
         args         = ["python3", "-m", "cluster", "reccontroller"]
       }
       env {
+        # The runtime's part of the seam (`psimplatform/runtime.py`): the neutral names the loop
+        # reads, filled here from Nomad's own. This file already knows the orchestrator — the
+        # worker must not. A k8s manifest fills the same four from an ordinal and a fieldRef.
+        SLOT_INDEX  = "${NOMAD_ALLOC_INDEX}"
+        SERVER_NAME = "${node.unique.name}"
+        LABELS      = "${meta.labels}"
+        INSTANCE_ID = "${NOMAD_ALLOC_ID}"
         OBJECTS = "variables://objects"
       }
       resources { cpu = 200  memory = 128 }

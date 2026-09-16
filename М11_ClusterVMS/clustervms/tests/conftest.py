@@ -42,11 +42,13 @@ class Cluster:
         self.allocs = 0
 
     def env(self, index: int, server: str, alloc: str | None = None) -> dict:
-        """What Nomad puts in an allocation's environment."""
+        """What a RUNTIME puts in an allocation's environment — the neutral names of
+        `psimplatform.runtime`, which the jobspec fills from Nomad's own. The loop never
+        sees a vendor's name; the file that already knows the orchestrator does the mapping."""
         self.allocs += 1
-        return {"NOMAD_ALLOC_INDEX": str(index), "NOMAD_NODE_NAME": server,
-                "NOMAD_META_labels": self.servers[server].labels,
-                "NOMAD_ALLOC_ID": alloc or f"alloc-{self.allocs:04d}"}
+        return {"SLOT_INDEX": str(index), "SERVER_NAME": server,
+                "LABELS": self.servers[server].labels,
+                "INSTANCE_ID": alloc or f"alloc-{self.allocs:04d}"}
 
     def worker(self, index: int, server: str, capacity: int = 50, actuator=None, alloc=None) -> ClusterWorker:
         w = ClusterWorker(self.vars.as_writer(f"vmsworker", ["vms/epoch/*", "vms/slots/*"]), self.objects,
