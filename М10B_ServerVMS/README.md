@@ -25,8 +25,8 @@
 | 4 | [`vmsworker` II — держать камеру](04-vmsworker-holding-the-camera.md) | `enrich` и две ветви раздачи (`live_url`, `live_shm`), `observe`, `pump_once`, `status`, `heartbeat`, `lease_pass`, `fence`, `run`; зомби и переназначение, которое зомби не является. |
 | 5 | [`driverpacksrc`](05-driverpacksrc.md) | Написать элемент GStreamer на Python; разобрать `driverpack://file/<имя>` и отказать вендорской форме по имени; зациклить файл с пересчётом PTS. |
 | 6 | [`archivesink`](06-archivesink.md) | `splitmuxsink` в спул, эпоха в каждом пути, `format-location`; что начинает `fragment-closed` и почему порядок подтверждения именно такой. |
-| 7 | Архив I — два дерева и перенос | Пути, `Segment`, `Manifest.append/read`, `ArchiveResource.promote`; убийство на седьмой минуте и что именно теряется. |
-| 8 | Архив II — починка, хранение, таймлайн | `repair` из одних файлов, `retain` по строке записи, `timeline` с отсечёнными эпохами, `ArchivePolicy` — проход, который регистратор вешает на ресурс. |
+| 7 | [Архив I — два дерева и перенос](07-the-archive-two-trees.md) | Пути, `Segment`, `Manifest.append/read`, `ArchiveResource.promote`; убийство на седьмой минуте и что именно теряется. |
+| 8 | [Архив II — починка, хранение, таймлайн](08-the-archive-repair-retention-timeline.md) | `repair` из одних файлов, `retain` по строке записи, `timeline` с отсечёнными эпохами, `ArchivePolicy` — проход, который регистратор вешает на ресурс. |
 | 9 | Актуаторы и раздача | `GstActuator` с двумя ветвями `tee`, `GstRecActuator` с двумя источниками, `FanOut` на GstRtspServer; почему раздача — это RTSP, а не multicast, и когда это разделяемая память. |
 | 10 | `vmsrecorder` | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
 | 11 | Процесс ресурса | `vms_routes` (`/manifest`, `/segment` с Range) и `vms_resource` — `Resource` из М10A с политикой регистратора и базой событий; цикл процесса. |

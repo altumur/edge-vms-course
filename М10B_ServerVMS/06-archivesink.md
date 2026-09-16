@@ -87,7 +87,7 @@ worker when it starts the camera; it is in every path this element writes.
 
 Задержимся здесь, потому что это одно из решений, к которым модуль возвращается.
 
-Путь сегмента: `<spool>/vms/<camera>/e<epoch>/<start>Z.mp4`.
+Путь сегмента: `<spool>/rec/<camera>/e<epoch>/<start>Z.mp4`. Префикс — `rec`, а не `vms`: видео принадлежит подсистеме записи (урок 10), и лежит оно в её дереве. В дереве `vms/<camera>/` на этом же ресурсе лежат бакеты событий, которые пишет держатель камеры. Два дерева, одна камера — урок 7 разбирает это подробно.
 
 Что даёт эпоха **в пути**, а не в метаданных:
 
@@ -220,9 +220,9 @@ gst-launch-1.0 driverpacksrc uri=driverpack://file/lobby.mp4 ! h264parse \
 Через десять минут:
 
 ```
-/data/spool/vms/7/e3/2026-09-15T14:20:00Z.mp4   ← пишется
-/data/archive/vms/7/e3/2026-09-15T14:10:00Z.mp4 ← закрыт и перенесён
-/data/archive/vms/7/manifest.jsonl              ← строка о нём
+/data/spool/rec/7/e3/20260915T142000Z.mp4     ← пишется
+/data/archive/rec/7/e3/20260915T141000Z.mp4   ← закрыт и перенесён
+/data/archive/rec/7/manifest.jsonl            ← строка о нём
 ```
 
 Убейте процесс — потеряется первый файл. Остановите аккуратно — не потеряется ничего.
