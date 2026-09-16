@@ -16,7 +16,9 @@ package vms
 
 import (
 	_ "embed"
+	"net/url"
 	"strconv"
+	"strings"
 
 	p "vmsserver/psimplatform"
 )
@@ -36,6 +38,7 @@ var RecSpec = mustSpec(recSpecYAML)
 const (
 	LivePortBase = 20000      // a camera's RTP port on its worker's loopback: the RTSP fan-out's one subscriber
 	RTSPPort     = 8554       // the worker's RTSP server: rtsp://<server>:8554/<cam>
+	PlaybackPort = 8083       // the holder's playback surface: HTTP, because a browser must be able to seek it
 	ShmDir       = "/run/vms" // the tee's shared-memory branch: <ShmDir>/<cam>.shm — a subscriber on the SAME server reads it
 )
 
@@ -50,6 +53,59 @@ func LiveShm(cid int, shmDir string) string {
 }
 
 func LivePort(cid int) int { return LivePortBase + cid }
+
+// DeviceOf: the thing DriverPack connects to. Cameras sharing it share one
+// session — `driverpack://acme/10.0.0.50/ch/17` and `…/ch/18` are two channels
+// of one NVR; a camera with an SD card is a device with one channel. Pure
+// parsing: the vendor's own addressing stays opaque, only the grouping is ours.
+func DeviceOf(source string) string {
+	u, err := url.Parse(source)
+	if err != nil || u.Scheme != "driverpack" {
+		return source
+	}
+	parts := pathParts(u.Path)
+	if u.Host == "file" {
+		if len(parts) > 0 {
+			return "file/" + parts[0]
+		}
+		return "file"
+	}
+	if len(parts) > 0 {
+		return u.Host + "/" + parts[0]
+	}
+	return u.Host
+}
+
+// ChannelOf: `driverpack://<vendor>/<host>/ch/<n>` -> "<n>"; "" when the device
+// has one channel.
+func ChannelOf(source string) string {
+	u, err := url.Parse(source)
+	if err != nil {
+		return ""
+	}
+	parts := pathParts(u.Path)
+	if u.Host != "file" && len(parts) >= 3 && parts[1] == "ch" {
+		return parts[2]
+	}
+	return ""
+}
+
+func pathParts(path string) []string {
+	out := []string{}
+	for _, seg := range strings.Split(path, "/") {
+		if seg != "" {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+// PlaybackURL: where a camera's OWN archive is served from — the holder's
+// playback door. HTTP, not the RTSP fan-out: a browser has to seek inside it,
+// and the recorder fetches ranges from the same door.
+func PlaybackURL(server string, cid int) string {
+	return "http://" + server + ":" + strconv.Itoa(PlaybackPort) + "/playback/" + strconv.Itoa(cid)
+}
 
 func mustSpec(text string) *p.SubsystemSpec {
 	v, err := p.ParseYAML(text)
@@ -86,13 +142,19 @@ type Camera struct {
 	LiveURL, LiveShm    string // the worker: what it gives out
 	LivePort            int
 	SourceServer, Via   string // the recorder: where the stream comes from, and how (shm | rtsp)
-	Spool, Archive      string
+	// "always" (the default) or "on-demand". A channel of an NVR kept only for its
+	// archive needs no live pipeline: the worker still HOLDS the device — its
+	// session, its playback, its coverage — and reports the camera as `held`.
+	// Thirty-two channels imported for their footage would otherwise be
+	// thirty-two streams nobody watches.
+	Live           string
+	Spool, Archive string
 }
 
 func CameraOf(r p.Row) Camera {
 	return Camera{ID: r.Int("id"), Name: r.String("name"), Source: r.String("source"), Enabled: r.Bool("enabled"),
 		EventsRetentionDays: r.Int("events_retention_days"), Priority: r.Int("priority"),
-		Revision: r.Int("revision"), Labels: r.List("labels"), Ref: r.String("ref")}
+		Revision: r.Int("revision"), Labels: r.List("labels"), Ref: r.String("ref"), Live: r.String("live")}
 }
 
 func RowOf(c Camera) p.Row {

@@ -25,7 +25,11 @@ func TestYAMLSubsetReadsTheSpec(t *testing.T) {
 		t.Fatal(d)
 	}
 	pl := m["placement"].(map[string]any)
-	if pl["constraint"] != "labels-subset" || pl["rebalance"].(map[string]any)["dead_band"] != 0.10 || len(m["snapshot"].([]any)) != 7 {
-		t.Fatal(pl)
+	if pl["constraint"] != "labels-subset" || pl["rebalance"].(map[string]any)["dead_band"] != 0.10 || len(m["snapshot"].([]any)) != 8 {
+		t.Fatal(pl, m["snapshot"])
+	}
+	// the field Lesson 15 added: a channel held for its archive and nothing else
+	if fields["live"].(map[string]any)["default"] != "always" {
+		t.Fatal(fields["live"])
 	}
 }

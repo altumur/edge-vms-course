@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -145,6 +146,28 @@ func (l *EventLog) Append(t float64, kind string, fields map[string]any) (string
 	return p, err
 }
 
+// torn counts the lines that did not parse. Append writes and flushes without
+// fsync, so a crash or a power loss can leave the last line half-written, and
+// losing a whole bucket for one torn line would lose ten minutes of
+// observations where one record was actually damaged. The accepted loss is the
+// same shape as it is for footage: the open thing, not the day. Counting them
+// is what keeps the skip honest — a resource whose buckets keep tearing says
+// so instead of quietly returning less.
+var (
+	tornMu sync.Mutex
+	torn   int
+)
+
+// TornLines: how many unparseable lines this process has skipped. A gauge for
+// the resource's /metrics, not a decision.
+func TornLines() int {
+	tornMu.Lock()
+	defer tornMu.Unlock()
+	return torn
+}
+
+// ReadBucket: all lines of one bucket parsed; a missing file is an empty list,
+// and a line that does not parse is SKIPPED and counted, never fatal.
 func ReadBucket(path string) []Event {
 	f, err := os.Open(path)
 	if err != nil {
@@ -152,6 +175,7 @@ func ReadBucket(path string) []Event {
 	}
 	defer f.Close()
 	var out []Event
+	n := 0
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
 	for sc.Scan() {
@@ -161,7 +185,14 @@ func ReadBucket(path string) []Event {
 		var e Event
 		if json.Unmarshal(sc.Bytes(), &e) == nil {
 			out = append(out, e)
+		} else {
+			n++ // a half-written last line: the writer died mid-append
 		}
+	}
+	if n > 0 {
+		tornMu.Lock()
+		torn += n
+		tornMu.Unlock()
 	}
 	return out
 }

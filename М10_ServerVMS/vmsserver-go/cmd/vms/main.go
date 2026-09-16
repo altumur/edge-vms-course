@@ -3,7 +3,10 @@
 //	PLATFORM_DIR=/data/platform     the platform's stores (config/, objects/)
 //	SPOOL=/data/spool  ARCHIVE=/data/archive   the recorder's two roots; the worker uses ARCHIVE for its events only
 //	SHM_DIR=/run/vms                 the worker's shared-memory fan-out branch, read by a recorder on this box
-//	WORKER_NAME=w-1 / RECORDER_NAME=r-1   the slot to claim (systemd: %i); unset: NOMAD_ALLOC_INDEX → w-<index>;
+//	CONFIG_URL                       the store, as a URL: file://<PLATFORM_DIR>/config by default — in-process,
+//	                                 no daemon, no hop. nomad://host:port in a cluster, k8s://ns/prefix at a k8s
+//	                                 site; no loop in this binary names an orchestrator (psimplatform/runtime.go)
+//	WORKER_NAME=w-1 / RECORDER_NAME=r-1   the slot to claim (systemd: %i); unset: SLOT_INDEX → w-<index>;
 //	                                 neither: the first free slot, a lapsed one first
 //	CAPACITY=50                      cameras this worker can hold (a recorder: recordings it can write) — exported as headroom
 //	CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
@@ -29,6 +32,21 @@ func env(k, def string) string {
 	return def
 }
 
+// openVars is the store seam, said once: a URL and an identity, never a class
+// name. Whichever backend answers that URL, the loops below are the same.
+func openVars(root, writer string, allowed ...string) p.Variables {
+	url := env("CONFIG_URL", "file://"+filepath.Join(root, "config"))
+	acl := map[string][]string(nil)
+	if writer != "" {
+		acl = map[string][]string{writer: allowed}
+	}
+	v, err := p.OpenVars(url, writer, acl)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return v
+}
+
 func main() {
 	root := env("PLATFORM_DIR", "/data/platform")
 	stop := make(chan struct{})
@@ -40,12 +58,8 @@ func main() {
 	spool, archive := env("SPOOL", "/data/spool"), env("ARCHIVE", "/data/archive")
 	switch env1(os.Args) {
 	case "worker":
-		name := os.Getenv("WORKER_NAME")
-		if name == "" && os.Getenv("NOMAD_ALLOC_INDEX") != "" {
-			name = "w-" + os.Getenv("NOMAD_ALLOC_INDEX")
-		}
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmsworker", "vms/epoch/*", "vms/slots/*")
+		name := p.SlotName(nil, "WORKER_NAME", "w")
+		vars := openVars(root, "vmsworker", "vms/epoch/*", "vms/slots/*")
 		log.Println("no GStreamer in the Go port: the fake actuator holds nothing")
 		w, err := vms.NewVmsWorker(name, vars, objects, vms.NewFakeActuator(), vms.VmsWorkerOptions{Capacity: capacity, ArchiveRoot: archive})
 		if err != nil {
@@ -54,8 +68,7 @@ func main() {
 		log.Printf("worker %s (instance %s) claimed its slot", w.Name, w.Instance)
 		w.Run(2*time.Second, stop)
 	case "recorder": // the only writer of footage: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on THIS box's archive
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmsrecorder", "rec/epoch/*", "rec/slots/*")
+		vars := openVars(root, "vmsrecorder", "rec/epoch/*", "rec/slots/*")
 		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
 		r, err := vms.NewRecWorker(os.Getenv("RECORDER_NAME"), vars, objects, vms.NewFakeActuator(), vms.NewArchiveResource(spool, archive, 600, nil),
 			vms.VmsWorkerOptions{Capacity: capacity})
@@ -65,8 +78,7 @@ func main() {
 		log.Printf("recorder %s (instance %s) claimed its slot", r.Name, r.Instance)
 		r.Run(2*time.Second, stop)
 	case "reccontroller": // count = 1, the only writer of rec placement: recordings onto recorders whose resource answers, beside the camera's worker when there is room
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmsreccontroller", vms.RecSpec.ACLController()...)
+		vars := openVars(root, "vmsreccontroller", vms.RecSpec.ACLController()...)
 		ctl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")
 		for {
 			if _, err := ctl.EnsurePlaced(nil); err != nil {
@@ -80,8 +92,7 @@ func main() {
 			}
 		}
 	case "controller": // count = 1, the only writer of placement; no HTTP — nothing asks it anything
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmscontroller", vms.Spec.ACLController()...)
+		vars := openVars(root, "vmscontroller", vms.Spec.ACLController()...)
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
 		for {
 			if _, err := ctl.EnsurePlaced(nil); err != nil { // deleted rows unplaced; new cameras onto the workers it sees
@@ -96,8 +107,7 @@ func main() {
 			}
 		}
 	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
-		vars = vars.AsWriter("vmsconsole", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
+		vars := openVars(root, "vmsconsole", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
 		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil,
@@ -109,10 +119,10 @@ func main() {
 		<-stop
 		srv.Close()
 	case "resource": // the archive has no controller — it has a policy pass, a heartbeat, its HTTP, and the event database
-		vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
+		vars := openVars(root, "") // the resource writes no configuration: read-only is its whole identity
 		ar := vms.NewArchiveResource(spool, archive, 600, nil)
 		host, port := env("RESOURCE_HOST", "127.0.0.1"), env("RESOURCE_PORT", "8090")
-		hostname, _ := os.Hostname()
+		hostname := p.ServerOfEnv(nil, "")
 		r := vms.NewVmsResource(ar, hostname, env("RESOURCE_URL", "http://"+host+":"+port), vars, objects, nil, nil)
 		srv, ln, err := p.Serve(r, host+":"+port, vms.ResourceRoutes(ar))
 		if err != nil {

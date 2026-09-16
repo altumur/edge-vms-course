@@ -58,7 +58,7 @@ func TestPromoteIsTheAcknowledgementOrder(t *testing.T) {
 	box := testbox.NewBox()
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, nil)
 	pth := writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:00:00", 1000, ts("2026-09-12T10:10:00"))
-	seg, err := res.Promote(pth, 0)
+	seg, err := res.Promote(pth, 0, "live")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,14 @@ func TestKillMidSegmentOpenLostClosedKept(t *testing.T) {
 	now := ts("2026-09-12T12:00:00")
 	for m := 0; m < 60; m += 10 { // 6 closed, promoted in time
 		pth := writeSegment(t, box.Spool, 7, 3, utc("2026-09-12T11:00:00").Add(time.Duration(m)*time.Minute).Format("2006-01-02T15:04:05"), 1000, now-3600+float64(m+10)*60)
-		res.Promote(pth, 0)
+		res.Promote(pth, 0, "live")
 	}
 	late := writeSegment(t, box.Spool, 7, 3, "2026-09-12T12:00:00", 1000, now-60)   // closed, worker died before promote
 	writeSegment(t, box.Spool, 7, 3, "2026-09-12T12:10:00", 10, now-5)              // the open one
 	if got := res.ClosedInSpool(30, now); !reflect.DeepEqual(got, []string{late}) { // what the restart promotes
 		t.Fatal(got)
 	}
-	res.Promote(late, 0)
+	res.Promote(late, 0, "live")
 	if len(vms.NewManifest(box.Archive, 7).Read()) != 7 {
 		t.Fatal("seven")
 	}
@@ -102,7 +102,7 @@ func TestManifestRebuiltFromTheFilesAlone(t *testing.T) {
 	box := testbox.NewBox()
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, nil)
 	for _, m := range []string{"10:00:00", "10:10:00", "10:20:00"} {
-		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T"+m, 1000, 0), 0)
+		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T"+m, 1000, 0), 0, "live")
 	}
 	orig := vms.NewManifest(box.Archive, 7).Read()
 	os.Remove(vms.NewManifest(box.Archive, 7).Path) // the index did not travel
@@ -127,9 +127,9 @@ func TestManifestRebuiltFromTheFilesAlone(t *testing.T) {
 func TestTimelineMarksAFencedEpochAndSpansTwoResources(t *testing.T) {
 	box := testbox.NewBox()
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, nil)
-	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:00:00", 1000, ts("2026-09-12T10:10:00")), 0)
-	res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:20:00")), 0)
-	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:15:00")), 0) // the zombie's
+	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:00:00", 1000, ts("2026-09-12T10:10:00")), 0, "live")
+	res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:20:00")), 0, "live")
+	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:15:00")), 0, "live") // the zombie's
 	tl := vms.NewManifest(box.Archive, 7).Timeline(ts("2026-09-12T10:05:00"), ts("2026-09-12T10:30:00"), 4)
 	var got [][2]any
 	for _, s := range tl {
@@ -140,7 +140,7 @@ func TestTimelineMarksAFencedEpochAndSpansTwoResources(t *testing.T) {
 	}
 	// a second resource (another server) holds later footage: the console merges two manifests
 	other := vms.NewArchiveResource(box.Spool+"2", box.Archive+"2", 600, nil)
-	other.Promote(writeSegment(t, other.Spool, 7, 5, "2026-09-12T10:20:00", 1000, ts("2026-09-12T10:30:00")), 0)
+	other.Promote(writeSegment(t, other.Spool, 7, 5, "2026-09-12T10:20:00", 1000, ts("2026-09-12T10:30:00")), 0, "live")
 	merged := append(vms.NewManifest(box.Archive, 7).Timeline(0, 1e12, 0), vms.NewManifest(other.Root, 7).Timeline(0, 1e12, 0)...)
 	var epochs []int
 	for _, s := range merged {
@@ -156,7 +156,7 @@ func TestRetentionIsAPolicyOnTheResource(t *testing.T) {
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, nil)
 	now := ts("2026-10-20T00:00:00")
 	for _, day := range []string{"01", "10", "19"} {
-		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-10-"+day+"T10:00:00", 1000, ts("2026-10-"+day+"T10:10:00")), 0)
+		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-10-"+day+"T10:00:00", 1000, ts("2026-10-"+day+"T10:10:00")), 0, "live")
 	}
 	if res.Retain(7, 8, now) != 2 { // cutoff 12 Oct: the 1st and the 10th go
 		t.Fatal("retain")
@@ -204,7 +204,7 @@ func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
 	}
 	eqs(t, kinds, []string{"motion", "silent", "person"})
 	// now a recorder records the camera under ITS epoch, into rec/: the timeline has a span, the events are still the worker's
-	seg, _ := res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, t0+1200), 0)
+	seg, _ := res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, t0+1200), 0, "live")
 	if seg.Path != "rec/7/e4/20260912T101000Z.mp4" || len(res.Cameras()) != 1 {
 		t.Fatal(seg)
 	}

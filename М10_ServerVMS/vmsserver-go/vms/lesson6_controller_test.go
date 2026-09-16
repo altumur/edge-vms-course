@@ -381,7 +381,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 		t.Fatal(spec)
 	}
 	seg := writeSegment(t, box.Spool, 1, 1, "2026-09-12T10:00:00", 256, 0)
-	vms.NewArchiveResource(box.Spool, box.Archive, 600, nil).Promote(seg, 0)
+	vms.NewArchiveResource(box.Spool, box.Archive, 600, nil).Promote(seg, 0, "live")
 	_, _, raw := call(t, "GET", base+"/timeline/1", nil, nil)
 	var tl []map[string]any
 	json.Unmarshal(raw, &tl)
@@ -439,7 +439,7 @@ func TestARetryThatLandsOnAnotherConsoleIsOneCamera(t *testing.T) {
 		t.Fatal(items)
 	}
 	// in flight: console B holds the claim and has not answered yet; A waits for B's reply rather than writing
-	box.Vars.Put("vms/idem/k-2", p.Items{"state": "pending", "at": "0"}, 0)
+	box.Vars.Put("vms/idem/k-2", p.Items{"state": "pending", "at": "0"}, p.Absent)
 	done := make(chan map[string]any, 1)
 	go func() {
 		_, r, _ := call(t, "POST", b1+"/cameras", body, map[string]string{"Idempotency-Key": "k-2"})
@@ -472,5 +472,36 @@ func TestARetryThatLandsOnAnotherConsoleIsOneCamera(t *testing.T) {
 	}
 	if _, r, _ := call(t, "POST", b2+"/cameras", body, map[string]string{"Idempotency-Key": "k-1"}); r["id"] != 2.0 { // a forgotten key is a new request, by design
 		t.Fatal(r)
+	}
+}
+
+func TestAReleasedSlotIsNotGivenNewCameras(t *testing.T) {
+	// The bug this fixes: Redistribute knew a released slot was leaving and moved
+	// its cameras off — and the SAME pass could hand it a brand-new camera,
+	// because the placement pool was built from "seen and heartbeating" and a
+	// process on its way out is both. Leaving is not a capacity.
+	box := testbox.NewBox()
+	ctl := vms.NewVmsController(box.Vars, box.Objects, 4, box.Wall.Now)
+	var ws []*vms.VmsWorker
+	for i := 0; i < 2; i++ {
+		w := worker(t, box, "", vms.NewFakeActuator(), vms.VmsWorkerOptions{Capacity: 4})
+		w.HeartbeatOnce()
+		ws = append(ws, w)
+	}
+	mustCreate(t, ctl, src(1))
+	ctl.EnsurePlaced(nil)
+	ws[0].ReleaseSlot() // scale-in: w-1 is stopping, and still heartbeating while it does
+	ws[0].HeartbeatOnce()
+	ws[1].HeartbeatOnce()
+	ctl.Redistribute(nil)
+	mustCreate(t, ctl, src(2)) // a camera added DURING the scale-in
+	ctl.EnsurePlaced(nil)
+	for _, c := range []int{1, 2} {
+		if w := ctl.Where(c); w != "w-2" {
+			t.Fatalf("camera %d went to %q: a released slot took a new camera", c, w)
+		}
+	}
+	if len(ctl.Assignment("w-1").Units) != 0 {
+		t.Fatal(ctl.Assignment("w-1"))
 	}
 }

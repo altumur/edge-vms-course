@@ -29,9 +29,46 @@ import (
 // Items is one Variable's payload. Nomad stores strings; so do we.
 type Items map[string]string
 
-// NoCAS asks for an unconditional write. Every write that matters passes
-// the ModifyIndex it read instead.
-const NoCAS int64 = -1
+// Index is a version of a path in the store, and it is OPAQUE: compare it
+// for equality, hand it back on the next write, and do nothing else with it.
+// Nomad's ModifyIndex is a number; Kubernetes' resourceVersion is a string
+// its API conventions forbid a client to interpret. So the platform never
+// orders indexes, never subtracts them and never counts with them — which is
+// the one clause that decides whether a second backend is possible at all.
+// (Python says this as `Index = str | int`; Go says it as a comparable
+// struct, so the compiler refuses the arithmetic outright.)
+type Index struct {
+	v   string
+	set bool
+}
+
+// NoCAS is the zero Index: write unconditionally, whatever the path holds.
+// Every write that matters passes the Index it read instead.
+var NoCAS = Index{}
+
+// Absent is what Get returns for a path that does not exist — and, passed as
+// cas, "this path must not exist yet": create-only, the first claimant wins.
+var Absent = Index{set: true}
+
+// Idx wraps a backend's own version token. Only a backend calls it.
+func Idx(v string) Index { return Index{v: v, set: true} }
+
+// String is for logs and error messages, never for a decision.
+func (i Index) String() string {
+	if !i.set {
+		return "(no cas)"
+	}
+	if i.v == "" {
+		return "(absent)"
+	}
+	return i.v
+}
+
+// Exists: this Index names a version, so the path was there when it was read.
+func (i Index) Exists() bool { return i.set && i.v != "" }
+
+// Conditional: this Index is a condition on the write, rather than NoCAS.
+func (i Index) Conditional() bool { return i.set }
 
 // ErrConflict: the cas index did not match the current ModifyIndex.
 var ErrConflict = errors.New("cas conflict: the ModifyIndex moved")
@@ -42,10 +79,10 @@ var ErrForbidden = errors.New("forbidden: this writer may not write that path")
 // Variables is the config store. Get returns (nil, 0, nil) for a path that
 // does not exist — absence is a value, not an error.
 type Variables interface {
-	Get(path string) (Items, int64, error)
-	Put(path string, items Items, cas int64) (int64, error)
+	Get(path string) (Items, Index, error)
+	Put(path string, items Items, cas Index) (Index, error)
 	List(prefix string) ([]string, error)
-	Delete(path string, cas int64) error
+	Delete(path string, cas Index) error
 }
 
 // Str stringifies an item value the way Python's str() did on put.
@@ -83,6 +120,60 @@ func safe(path string) (string, error) {
 		return "", fmt.Errorf("bad path %q", path)
 	}
 	return path, nil
+}
+
+// -- the seam: which store is behind the contract, said as a URL ------------
+// A process is told CONFIG_URL and nothing else. `file://` is in-process — on
+// a box there is no daemon, no hop and no second quorum, which is the whole
+// reason this is a factory and not a service. Every other scheme is registered
+// by the package that implements it (М11's cluster package registers
+// `nomad://` at init), so the platform names no vendor and adding Kubernetes
+// adds a file rather than a branch here.
+type VarsFactory func(url, writer string, acl map[string][]string) (Variables, error)
+
+var schemes = map[string]VarsFactory{}
+
+// RegisterScheme: a backend registers itself from its own package's init.
+func RegisterScheme(scheme string, factory VarsFactory) { schemes[scheme] = factory }
+
+// OpenVars: `file:///data/platform/config` · `nomad://127.0.0.1:4646` ·
+// whatever else registered. A bare path is read as `file://` so the box keeps
+// working with no URL at all.
+func OpenVars(url, writer string, acl map[string][]string) (Variables, error) {
+	scheme, rest, found := strings.Cut(url, "://")
+	if !found {
+		return openFileVars(url, writer, acl)
+	}
+	if scheme == "file" {
+		if rest == "" {
+			rest = "/"
+		}
+		return openFileVars(rest, writer, acl)
+	}
+	factory, ok := schemes[scheme]
+	if !ok {
+		known := []string{"file"}
+		for s := range schemes {
+			known = append(known, s)
+		}
+		sort.Strings(known)
+		return nil, fmt.Errorf("no Variables backend for %s://  (have: %s)", scheme, strings.Join(known, ", "))
+	}
+	return factory(url, writer, acl)
+}
+
+func openFileVars(root, writer string, acl map[string][]string) (Variables, error) {
+	v, err := NewFileVariables(root)
+	if err != nil {
+		return nil, err
+	}
+	if writer != "" {
+		v.Writer = writer
+		for k, a := range acl {
+			v.ACL[k] = append([]string(nil), a...)
+		}
+	}
+	return v, nil
 }
 
 // FileVariables is a config store with the semantics Nomad Variables promise
@@ -150,60 +241,60 @@ type fileVar struct {
 	Index int64             `json:"index"`
 }
 
-func (v *FileVariables) Get(path string) (Items, int64, error) {
+func (v *FileVariables) Get(path string) (Items, Index, error) {
 	p, err := v.file(path)
 	if err != nil {
-		return nil, 0, err
+		return nil, Absent, err
 	}
 	b, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, 0, nil
+		return nil, Absent, nil
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, Absent, err
 	}
 	var d fileVar
 	if err := json.Unmarshal(b, &d); err != nil {
-		return nil, 0, err
+		return nil, Absent, err
 	}
-	return Items(d.Items), d.Index, nil
+	return Items(d.Items), Idx(strconv.FormatInt(d.Index, 10)), nil
 }
 
-func (v *FileVariables) Put(path string, items Items, cas int64) (int64, error) {
+func (v *FileVariables) Put(path string, items Items, cas Index) (Index, error) {
 	if v.Writer != "" && len(v.ACL) > 0 && !Allowed(path, v.ACL[v.Writer]) {
-		return 0, fmt.Errorf("%w: %s may not write %s", ErrForbidden, v.Writer, path)
+		return Absent, fmt.Errorf("%w: %s may not write %s", ErrForbidden, v.Writer, path)
 	}
 	p, err := v.file(path)
 	if err != nil {
-		return 0, err
+		return Absent, err
 	}
 	l, err := v.lock()
 	if err != nil {
-		return 0, err
+		return Absent, err
 	}
 	defer l.Close()
 	_, current, err := v.Get(path)
 	if err != nil {
-		return 0, err
+		return Absent, err
 	}
-	if cas != NoCAS && cas != current {
-		return 0, fmt.Errorf("%w: %s: cas=%d but ModifyIndex=%d", ErrConflict, path, cas, current)
+	if cas.Conditional() && cas != current {
+		return Absent, fmt.Errorf("%w: %s: cas=%s but the store is at %s", ErrConflict, path, cas, current)
 	}
-	idx, err := v.nextIndex()
+	n, err := v.nextIndex()
 	if err != nil {
-		return 0, err
+		return Absent, err
 	}
 	if items == nil {
 		items = Items{}
 	}
-	b, _ := json.Marshal(fileVar{Items: items, Index: idx})
+	b, _ := json.Marshal(fileVar{Items: items, Index: n})
 	if err := os.WriteFile(p+".tmp", b, 0o644); err != nil {
-		return 0, err
+		return Absent, err
 	}
-	return idx, os.Rename(p+".tmp", p)
+	return Idx(strconv.FormatInt(n, 10)), os.Rename(p+".tmp", p)
 }
 
-func (v *FileVariables) Delete(path string, cas int64) error {
+func (v *FileVariables) Delete(path string, cas Index) error {
 	p, err := v.file(path)
 	if err != nil {
 		return err
@@ -217,8 +308,8 @@ func (v *FileVariables) Delete(path string, cas int64) error {
 	if err != nil {
 		return err
 	}
-	if cas != NoCAS && cas != current {
-		return fmt.Errorf("%w: %s: cas=%d but ModifyIndex=%d", ErrConflict, path, cas, current)
+	if cas.Conditional() && cas != current {
+		return fmt.Errorf("%w: %s: cas=%s but the store is at %s", ErrConflict, path, cas, current)
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

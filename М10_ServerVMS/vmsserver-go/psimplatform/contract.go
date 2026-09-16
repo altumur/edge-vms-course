@@ -437,11 +437,11 @@ func NewWorker(sub Subsystem, vars Variables, objects ObjectStore, o WorkerOptio
 	return w
 }
 
-// ClaimSlot: become somebody. With prefer (Nomad's NOMAD_ALLOC_INDEX,
-// systemd's %i) take that slot, by CAS, even from a holder that has not
-// lapsed — the scheduler is the authority on which process is the current
-// one. Without it, take a lapsed slot — its assignment is waiting — before
-// an unused number.
+// ClaimSlot: become somebody. With prefer (whatever runtime.SlotName made of
+// SLOT_INDEX or a <ROLE>_NAME) take that slot, by CAS, even from a holder that
+// has not lapsed — the runtime is the authority on which process is the
+// current one. Without it, take a lapsed slot — its assignment is waiting —
+// before an unused number.
 func (w *Worker) ClaimSlot(prefer string) (string, error) {
 	prefix := w.Sub.Name + "/slots/"
 	now := w.Wall()

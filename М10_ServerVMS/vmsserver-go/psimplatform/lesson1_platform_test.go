@@ -19,24 +19,32 @@ import (
 
 func TestTheConfigStoreSurvivesARestartAndRefusesAStaleCAS(t *testing.T) {
 	box := testbox.NewBox()
-	idx, err := box.Vars.Put("vms/cameras/7", p.Items{"name": "gate", "revision": "1"}, 0)
-	if err != nil || idx != 1001 {
+	// create-only: the path must not exist yet. Nothing here reads the index as a
+	// number — it is opaque, and the test may only compare it for equality.
+	idx, err := box.Vars.Put("vms/cameras/7", p.Items{"name": "gate", "revision": "1"}, p.Absent)
+	if err != nil || !idx.Exists() {
 		t.Fatal(idx, err)
+	}
+	if _, err := box.Vars.Put("vms/cameras/7", p.Items{"name": "again"}, p.Absent); !errors.Is(err, p.ErrConflict) {
+		t.Fatal("create-only must refuse a second creation")
 	}
 	again, _ := p.NewFileVariables(box.Vars.Root) // a new process, same directory
 	items, idx2, _ := again.Get("vms/cameras/7")
 	if !reflect.DeepEqual(items, p.Items{"name": "gate", "revision": "1"}) || idx2 != idx {
 		t.Fatal(items, idx2)
 	}
-	if _, err := again.Put("vms/cameras/7", p.Items{"name": "x"}, idx-1); !errors.Is(err, p.ErrConflict) {
-		t.Fatal("must conflict")
+	moved, err := again.Put("vms/cameras/7", p.Items{"name": "x"}, idx) // the index I read: mine
+	if err != nil || moved == idx {
+		t.Fatal(moved, err)
 	}
-	if n, _ := again.Put("vms/cameras/7", p.Items{"name": "x"}, idx); n != 1002 {
-		t.Fatal(n)
+	// `idx` is now stale — and staleness is equality against the current version,
+	// never "smaller than". There is no arithmetic to do on an opaque index.
+	if _, err := again.Put("vms/cameras/7", p.Items{"name": "y"}, idx); !errors.Is(err, p.ErrConflict) {
+		t.Fatal("must conflict")
 	}
 	l, _ := again.List("vms/")
 	none, z, _ := again.Get("nope")
-	if !reflect.DeepEqual(l, []string{"vms/cameras/7"}) || none != nil || z != 0 {
+	if !reflect.DeepEqual(l, []string{"vms/cameras/7"}) || none != nil || z != p.Absent || z.Exists() {
 		t.Fatal(l, none, z)
 	}
 }
@@ -318,5 +326,72 @@ func TestTheResourceIsAPlatformJobThatMirrorsAnySubsystemsBuckets(t *testing.T) 
 	box.Wall.Advance(3 * 86400)
 	if res["srv-a"].Retain() != 1 || len(p.BucketsUnder(roots["srv-a"], "other", "y", 600)) != 0 { // each subsystem's days, from its own row
 		t.Fatal("retain")
+	}
+}
+
+func TestTheCatalogueAnswersOnlyForHoldersThatAreStillHere(t *testing.T) {
+	// Heartbeats is the READ MODEL: it shows every worker's last heartbeat
+	// whatever its age, because a console must be able to say "silent for four
+	// minutes". Holders is what a caller uses before it goes and TALKS to one —
+	// a subscriber, a playback door, a backfill fetch. Handing those a silent
+	// worker is how a gateway ends up subscribing to a process that is gone.
+	objects, _ := p.NewFsObjectStore(t.TempDir())
+	sub := p.Subsystem{Name: "vms"}
+	beat := func(w string, ts float64, status []map[string]any) {
+		objects.Put(sub.HeartbeatKey(w), p.Heartbeat{Worker: w, Ts: ts, Status: status}.ToBytes())
+	}
+	beat("w-1", 1000, []map[string]any{{"id": "7", "phase": "running", "live_url": "rtsp://srv-a:8554/7"}})
+	beat("w-2", 900, []map[string]any{{"id": "8", "phase": "held"}}) // 120 s ago: gone
+	now := 1020.0
+
+	if got := p.Heartbeats(objects, "vms/"); len(got) != 2 {
+		t.Fatal("the read model shows both, however old:", got)
+	}
+	hs := p.Holders(objects, "vms/", now, 45)
+	if len(hs) != 1 {
+		t.Fatal(hs)
+	}
+	if _, ok := hs["w-1"]; !ok {
+		t.Fatal(hs)
+	}
+
+	h, ok := p.HolderOf(objects, "vms/", "7", now, p.HolderQuery{})
+	if !ok || h.Worker != "w-1" || p.Str(h.Status["live_url"]) != "rtsp://srv-a:8554/7" {
+		t.Fatal(h, ok)
+	}
+	if _, ok := p.HolderOf(objects, "vms/", "8", now, p.HolderQuery{}); ok {
+		t.Fatal("a silent holder must not be an answer")
+	}
+	// phase narrows it: a recorder subscribes only to a fan-out that is running
+	if _, ok := p.HolderOf(objects, "vms/", "7", now, p.HolderQuery{Phase: "held"}); ok {
+		t.Fatal("phase must narrow")
+	}
+	if _, ok := p.HolderOf(objects, "vms/", "7", now, p.HolderQuery{Phase: "running"}); !ok {
+		t.Fatal("phase must match")
+	}
+	// field narrows it: no door published, no answer — rather than a broken URL
+	if _, ok := p.HolderOf(objects, "vms/", "7", now, p.HolderQuery{Field: "playback_url"}); ok {
+		t.Fatal("a missing field must narrow")
+	}
+}
+
+func TestATornLastLineCostsTheLineAndNotTheBucket(t *testing.T) {
+	// Append writes and flushes without fsync, so a crash can leave the last line
+	// half-written. Losing ten minutes of observations because one record was
+	// damaged is the wrong trade — the same shape as it is for footage: the open
+	// thing, not the day. Skipping silently would be the wrong trade too, so the
+	// skips are counted.
+	path := filepath.Join(t.TempDir(), "20250101T000000Z.events.jsonl")
+	os.WriteFile(path, []byte(`{"t":1,"kind":"started"}`+"\n"+`{"t":2,"kind":"position"}`+"\n"+`{"t":3,"ki`), 0o644)
+	before := p.TornLines()
+	got := p.ReadBucket(path)
+	if len(got) != 2 || got[0].Kind() != "started" || got[1].Kind() != "position" {
+		t.Fatal(got)
+	}
+	if p.TornLines() != before+1 {
+		t.Fatal("a torn line must be counted:", before, p.TornLines())
+	}
+	if p.ReadBucket(filepath.Join(t.TempDir(), "nope.jsonl")) != nil {
+		t.Fatal("a missing bucket is empty, not an error")
 	}
 }

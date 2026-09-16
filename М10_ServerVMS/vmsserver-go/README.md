@@ -6,7 +6,9 @@
 vmsserver-go/
   go.mod                       module vmsserver; standard library only
   psimplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
-    variables.go               Variables: the interface (Get/Put/List/Delete, ModifyIndex, cas) and FileVariables (one box, files, flock)
+    variables.go               Variables: the interface (Get/Put/List/Delete) over an OPAQUE Index, FileVariables (one box, files, flock),
+                               and the seam — OpenVars(url, writer, acl) + RegisterScheme, so a process is told CONFIG_URL and nothing else
+    runtime.go                 what a runtime hands a process, under neutral names: <ROLE>_NAME, SLOT_INDEX, SERVER_NAME, LABELS, INSTANCE_ID
     objects.go                 ObjectStore: the interface and FsObjectStore
     epoch.go                   NextEpoch by CAS; Lease (Renew = read my epoch; MayWrite on a monotonic clock)
     contract.go                Subsystem, Assignment, Heartbeat, Slot; Controller (Write by CAS, WorkersSeen, Assign*, Slots, Retire);
@@ -29,22 +31,29 @@ vmsserver-go/
                                recorder registers with the resource, retention by rec/recordings/<cam>
     worker.go                  VmsWorker: the slot, server, labels and capacity from the environment (a box or an allocation); the gate (an epoch
                                per start); holds the camera — live_url and live_shm in its status, events, no footage; LeasePass, Fence,
-                               Observe, PumpOnce, Status, Headroom, Run; the hooks (Enrich, StatusExtra, BeforePass, AfterPump) the recorder fills
+                               Observe, PumpOnce, Status, Headroom, Run; the hooks (Enrich, StatusExtra, BeforePass, AfterPump) the recorder fills;
+                               and the DEVICE: one session per device however many channels are assigned, DeviceStatus, Playback, the `held` phase
+    device.go                  Device and FakeDevice: N channels, an archive of its own, a session budget — what DriverPack connects to
+    playback.go                the holder's second surface: GET /playback/<cam>?from&to and /devices — HTTP, because a browser must seek it
+    backfill.go                the recorder closing OUR gaps from the device's archive: OurCoverage, Gaps, InWindow, Backfill(budget), Fetch
     recorder.go                RecWorker: VmsWorker over rec/recordings/*; Source from the VMS heartbeat — shm:// on the same server, rtsp://
-                               elsewhere; Resubscribe when the camera's holder moves; PromoteClosed; rec_recordings_running
+                               elsewhere; Resubscribe when the camera's holder moves; PromoteClosed; rec_recordings_running, rec_segments_backfilled
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
-    console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> and /segment/<path> with Range;
+    console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> (ours, and the device's
+                               in the holes), /segment/<path> with Range, /segment?cam (the holder's door, named not proxied), POST /backfill;
                                the recorder mounted at /rec/… (psimplatform.Mount)
     resource.go                the resource process: NewVmsResource — the platform's Resource with the recorder's ArchivePolicy registered and an EventDatabase attached; ResourceRoutes
                                (/manifest, /segment) — the same function clustervms-go runs as the resource job
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
   cmd/vms/main.go              vms worker|controller|recorder|reccontroller|console|resource — the box's processes, with the fake actuator
-  *_test.go                    46 tests, in the packages they test; -race clean
+  *_test.go                    65 tests, in the packages they test; -race clean — including variables_contract_test.go, the contract EVERY
+                               backend must keep, runnable against another with CONTRACT_URL
 ```
 
 ```bash
-go test ./...                    # 46 tests, ~150 ms
+go test ./...                    # 65 tests, ~500 ms
+CONTRACT_URL=nomad://127.0.0.1:4646 go test ./psimplatform -run Contract   # the same contract, another backend
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```
@@ -60,8 +69,19 @@ Read each Go file beside its Python twin: the names are the same and so are the 
 | `VmsWorker(Worker)`, `ClusterWorker(VmsWorker)` | struct embedding: `*p.Worker` inside `VmsWorker` inside `ClusterWorker` | Same layering; where Python overrode `place()` / `heartbeat_once()`, Go passes the override explicitly (`EnsurePlacedWith(c, placer)`, `Run(…, heartbeat)`). |
 | `sqlite3` under the event index | a slice and a `seen` map, one mutex | The index is a cache either way; the standard library has no SQLite and a cache that admits to being one needs no file. |
 | `yaml.safe_load` of the spec | `ParseYAML`, a subset: block and flow collections, scalars, comments | A spec that needs anchors or multi-line scalars has stopped being a spec; the parser is 150 lines and the VMS's file is embedded in the binary. |
+| `Index = str | int` | `type Index struct{v string; set bool}` — comparable, with `Absent` and `NoCAS` | Python states the opacity in a type alias; Go makes the compiler enforce it. `idx-1` does not compile, which is exactly the mistake a Kubernetes backend cannot survive. |
 | `threading.Thread × 4` racing `next_epoch` | four goroutines, `-race` clean | The Python test proves CAS under the GIL; the Go test proves it under real concurrency. |
 | exceptions (`Conflict`, `Forbidden`, `Refused`) | `ErrConflict`, `ErrForbidden`, `*Refused` with `errors.Is` / `errors.As` | Every `except Exception: log` became an explicit `if err != nil` — most of the extra lines. |
 | `json.dumps` of a heartbeat | `map[string]any` → `encoding/json` | Byte-compatible: a Go worker's heartbeat is read by the Python controller and the other way round (the М11 port checks it against the Python fixtures' shape). |
 
 Not here, and not in the Python either: the GStreamer actuator and `archivesink` (in a Go worker they become a *client* of a C++ media process — М9 Lesson 7's per-frame rule survives cgo). `cmd/vms` runs both processes with the fake actuator: everything about slots, epochs, leases, placement, events and the console is real; nothing records.
+
+## The orchestrator is an install-time choice here too
+
+Both ports keep the same three seams, because a seam in one language and not the other is not a seam:
+
+- **the store is a URL** — `p.OpenVars(url, writer, acl)` with `p.RegisterScheme`; `cmd/vms` reads `CONFIG_URL` (default `file://<PLATFORM_DIR>/config`) in one helper, so the seven direct `NewFileVariables` constructions are down to the one in `testbox` — a test box, honestly the file backend;
+- **the environment has neutral names** — `psimplatform/runtime.go`: `<ROLE>_NAME`, `SLOT_INDEX`, `SERVER_NAME`, `LABELS`, `INSTANCE_ID`. No `NOMAD_*` is read anywhere in the loop; a jobspec or a manifest maps into these;
+- **the index is opaque** — and in Go the compiler is the one enforcing it. `Index` is a comparable struct with no arithmetic on it, so the mistake Kubernetes' string `resourceVersion` punishes cannot be written.
+
+`psimplatform/variables_contract_test.go` is what turns that into a claim: ten tests in five clauses, driven against the file store, against an in-memory store whose version is `rv-<n>`, and — through `CONTRACT_URL` — against any backend a site actually has. The last of them drives the real CAS loops (`NextEpoch`, `ClaimSlot`, `ReleaseSlot`) over the non-numeric store, which is where an ordering or an increment would show.

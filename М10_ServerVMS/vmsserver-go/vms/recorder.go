@@ -18,8 +18,8 @@ package vms
 // distinct` by default — and when its server dies the controller moves its
 // recordings to a server whose resource answers.
 //
-//	RECORDER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: r-<index>
-//	NOMAD_NODE_NAME (or the hostname)  -> `server`: whose archive it writes into, and whose shared memory it may read
+//	RECORDER_NAME / SLOT_INDEX         -> the slot to claim: r-<index>
+//	SERVER_NAME (or the hostname)      -> `server`: whose archive it writes into, and whose shared memory it may read
 //	SPOOL, ARCHIVE                     -> the archive resource's two roots on this server
 //	CAPACITY                           -> recordings this server's disks and NIC can take — its own number
 
@@ -43,6 +43,15 @@ type RecWorker struct {
 	Promoted     int
 	Waiting      map[int]bool
 	Sources      map[int]string // what each running pipeline subscribed to
+	// Backfill (Lesson 16): the hours in LOCAL time it may run in, how far back
+	// it may reach, how fresh it must NOT touch, and the seam tolerance that
+	// stops 144 seams a day from looking like 144 gaps.
+	Window         [2]int // {0,0}: any hour
+	KeepDays       float64
+	Settle         float64
+	Stitch         float64
+	BackfillBudget int // ranges per pass; 0 = only what an operator asks for
+	Backfilled     int
 }
 
 func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actuator, archive *ArchiveResource, o VmsWorkerOptions) (*RecWorker, error) {
@@ -64,10 +73,11 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 	if err != nil {
 		return nil, err
 	}
-	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[int]bool{}, Sources: map[int]string{}}
-	w.Enrich, w.StatusExtra, w.BeforePass, w.AfterPump, w.StatusFix = r.enrich, r.statusExtra, func() { r.Resubscribe() }, func() { r.PromoteClosed() }, r.statusFix
+	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[int]bool{}, Sources: map[int]string{},
+		KeepDays: 30, Settle: 900, Stitch: 2}
+	w.Enrich, w.StatusExtra, w.BeforePass, w.AfterPump, w.StatusFix = r.enrich, r.statusExtra, func() { r.Resubscribe() }, r.afterPump, r.statusFix
 	for _, pth := range archive.ClosedInSpool(r.GraceSeconds, w.Wall()) { // what the last instance closed but did not promote
-		archive.Promote(pth, 0)
+		archive.Promote(pth, 0, "live")
 		r.Promoted++
 	}
 	return r, nil
@@ -75,25 +85,22 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 
 // Source: (server, source) of the worker holding the camera, from its heartbeat; "" if nobody does. The
 // source is the worker's shared-memory branch when that worker is on THIS server, its RTSP fan-out otherwise.
+// Source: (server, source) of the worker holding the camera, from its
+// HEARTBEAT — never a call to the worker. The source is that worker's
+// shared-memory branch (live_shm) when it is on THIS server — the same bytes
+// with no RTSP hop, no fan-out process on the recording path — and its RTSP
+// fan-out (live_url) otherwise. A holder that has gone silent is no answer:
+// that is what the catalogue's freshness filter is for.
 func (r *RecWorker) Source(cam int) (server, source string) {
-	hbs := p.Heartbeats(r.Objects, "vms/")
-	names := []string{}
-	for w := range hbs {
-		names = append(names, w)
+	h, ok := p.HolderOf(r.Objects, "vms/", strconv.Itoa(cam), r.Wall(), p.HolderQuery{Phase: "running", Field: "live_url"})
+	if !ok {
+		return "", ""
 	}
-	sort.Strings(names)
-	for _, w := range names {
-		for _, st := range hbs[w].Status {
-			if p.Str(st["id"]) == strconv.Itoa(cam) && p.Str(st["phase"]) == "running" && p.Str(st["live_url"]) != "" {
-				server = hbs[w].ExtraString("server", "?")
-				if server == r.Server && p.Str(st["live_shm"]) != "" {
-					return server, p.Str(st["live_shm"])
-				}
-				return server, p.Str(st["live_url"])
-			}
-		}
+	server = h.HB.ExtraString("server", "?")
+	if server == r.Server && p.Str(h.Status["live_shm"]) != "" {
+		return server, p.Str(h.Status["live_shm"])
 	}
-	return "", ""
+	return server, p.Str(h.Status["live_url"])
 }
 
 func via(source string) string {
@@ -161,10 +168,20 @@ func (r *RecWorker) Resubscribe() []int {
 	return moved
 }
 
+// afterPump: promote what the pipelines closed, and — only if an operator set a
+// budget — spend it on the gaps. Bounded, and inside the window: it shares the
+// device's uplink with live.
+func (r *RecWorker) afterPump() {
+	r.PromoteClosed()
+	if r.BackfillBudget > 0 {
+		r.Backfill(r.BackfillBudget, 0, false)
+	}
+}
+
 func (r *RecWorker) PromoteClosed() int {
 	n := 0
 	for _, pth := range r.Archive.ClosedInSpool(r.GraceSeconds, r.Wall()) {
-		r.Archive.Promote(pth, 0)
+		r.Archive.Promote(pth, 0, "live")
 		n++
 	}
 	r.Promoted += n
@@ -173,5 +190,6 @@ func (r *RecWorker) PromoteClosed() int {
 
 func (r *RecWorker) MetricsText() string {
 	return "# TYPE rec_recordings_running gauge\nrec_recordings_running " + strconv.Itoa(len(r.Reconciler.Actual)) + "\n" +
-		"# TYPE rec_segments_promoted counter\nrec_segments_promoted " + strconv.Itoa(r.Promoted) + "\n"
+		"# TYPE rec_segments_promoted counter\nrec_segments_promoted " + strconv.Itoa(r.Promoted) + "\n" +
+		"# TYPE rec_segments_backfilled counter\nrec_segments_backfilled " + strconv.Itoa(r.Backfilled) + "\n"
 }

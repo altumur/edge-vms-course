@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,10 +83,22 @@ type Segment struct {
 	End   float64 `json:"end"`
 	Path  string  `json:"path"` // relative to the archive root
 	Bytes int64   `json:"bytes"`
+	// Source: "live" — we recorded it off the fan-out as it happened — or
+	// "edge": we fetched it later from the device's own archive. It lives in the
+	// LINE and not in the path, so the footage on disk is the same footage
+	// either way and nothing has to move when a gap is filled. The named cost:
+	// Repair rebuilds a lost manifest from the files, and a file cannot say
+	// where it came from, so a repaired line reads "live".
+	Source string `json:"source"`
 }
 
 func (s Segment) Line() string {
-	b, _ := json.Marshal(map[string]any{"kind": "media", "cam": s.Cam, "epoch": s.Epoch, "start": s.Start, "end": s.End, "path": s.Path, "bytes": s.Bytes})
+	src := s.Source
+	if src == "" {
+		src = "live"
+	}
+	b, _ := json.Marshal(map[string]any{"kind": "media", "cam": s.Cam, "epoch": s.Epoch, "start": s.Start, "end": s.End,
+		"path": s.Path, "bytes": s.Bytes, "source": src})
 	return string(b)
 }
 
@@ -95,7 +108,11 @@ func SegmentFromLine(line string) (Segment, error) {
 		return Segment{}, err
 	}
 	path, _ := d["path"].(string)
-	return Segment{int(p.ToFloat(d["cam"])), int(p.ToFloat(d["epoch"])), p.ToFloat(d["start"]), p.ToFloat(d["end"]), path, int64(p.ToFloat(d["bytes"]))}, nil
+	src, _ := d["source"].(string)
+	if src == "" {
+		src = "live" // every line written before Lesson 15 is live footage
+	}
+	return Segment{int(p.ToFloat(d["cam"])), int(p.ToFloat(d["epoch"])), p.ToFloat(d["start"]), p.ToFloat(d["end"]), path, int64(p.ToFloat(d["bytes"])), src}, nil
 }
 
 // Span is one entry of a timeline: a media segment under the recorder's epoch.
@@ -232,7 +249,13 @@ func mtime(path string) float64 {
 }
 
 // Promote: 1. into the archive, atomically; 2. then the manifest line; 3. the spool copy last.
-func (a *ArchiveResource) Promote(spoolPath string, end float64) (Segment, error) {
+// Promote moves a closed spool file into the archive and then writes its line.
+// source is "live" for footage off the fan-out and "edge" for footage fetched
+// from a device's own archive; "" means live.
+func (a *ArchiveResource) Promote(spoolPath string, end float64, source string) (Segment, error) {
+	if source == "" {
+		source = "live"
+	}
 	cam, epoch, start, ok := Parse(spoolPath, a.Spool)
 	if !ok {
 		return Segment{}, fmt.Errorf("not a segment path: %s", spoolPath)
@@ -251,7 +274,7 @@ func (a *ArchiveResource) Promote(spoolPath string, end float64) (Segment, error
 	if err := move(spoolPath, dest); err != nil {
 		return Segment{}, err
 	}
-	seg := Segment{cam, epoch, float64(start.Unix()), end, rel, st.Size()}
+	seg := Segment{cam, epoch, float64(start.Unix()), end, rel, st.Size(), source}
 	return seg, NewManifest(a.Root, cam).Append(seg)
 }
 
@@ -327,7 +350,8 @@ func (a *ArchiveResource) Repair() RepairReport {
 				present[rel] = true
 				if _, have := lines[rel]; !have {
 					st, _ := os.Stat(pth)
-					lines[rel] = Segment{c, epoch, float64(start.Unix()), float64(st.ModTime().UnixNano()) / 1e9, rel, st.Size()}
+					// a file cannot say where it came from: a rebuilt line reads "live"
+					lines[rel] = Segment{c, epoch, float64(start.Unix()), float64(st.ModTime().UnixNano()) / 1e9, rel, st.Size(), "live"}
 					rep.Added++
 				}
 			}
@@ -367,6 +391,74 @@ func (a *ArchiveResource) Retain(cam int, days, now float64) int {
 		man.Rewrite(keep)
 	}
 	return removed
+}
+
+// Coverage: the camera's footage as runs of wall-clock time, gaps under
+// `stitch` seconds closed over. It is what a timeline is drawn from and what
+// backfill measures itself against — segment boundaries are an implementation
+// detail of recording, not something an operator should have to see.
+func (a *ArchiveResource) Coverage(cam int, stitch float64) [][2]float64 {
+	if stitch == 0 {
+		stitch = 2
+	}
+	segs := NewManifest(a.Root, cam).Read()
+	sort.Slice(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
+	runs := [][2]float64{}
+	for _, s := range segs {
+		if n := len(runs); n > 0 && s.Start <= runs[n-1][1]+stitch {
+			if s.End > runs[n-1][1] {
+				runs[n-1][1] = s.End
+			}
+			continue
+		}
+		runs = append(runs, [2]float64{s.Start, s.End})
+	}
+	return runs
+}
+
+// Subtract: `want` minus every range in `have`. The one subtraction two things
+// use — the console draws a device's coverage only where ours does not cover it
+// (Lesson 15), and the recorder fetches only what it does not have (Lesson 16).
+// One rule, two uses, so they cannot drift apart.
+func Subtract(want [2]float64, have [][2]float64) [][2]float64 {
+	out := [][2]float64{want}
+	h := append([][2]float64(nil), have...)
+	sort.Slice(h, func(i, j int) bool { return h[i][0] < h[j][0] })
+	for _, r := range h {
+		a, b := r[0], r[1]
+		next := [][2]float64{}
+		for _, seg := range out {
+			x, y := seg[0], seg[1]
+			if b <= x || a >= y {
+				next = append(next, seg)
+				continue
+			}
+			if a > x {
+				next = append(next, [2]float64{x, math.Min(a, y)})
+			}
+			if b < y {
+				next = append(next, [2]float64{math.Max(b, x), y})
+			}
+		}
+		out = next
+	}
+	kept := [][2]float64{}
+	for _, seg := range out {
+		if seg[1] > seg[0] {
+			kept = append(kept, seg)
+		}
+	}
+	return kept
+}
+
+// Overlaps: does any range in `have` touch `span`?
+func Overlaps(have [][2]float64, span [2]float64) bool {
+	for _, r := range have {
+		if r[0] < span[1] && span[0] < r[1] {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *ArchiveResource) Usage() int64 {

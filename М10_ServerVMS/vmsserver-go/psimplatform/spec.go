@@ -580,7 +580,7 @@ func (c *SpecController) Create(fields map[string]any) (Row, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.Vars.Put(c.rowKey(Str(uid)), c.Spec.ItemsOf(r), 0); err != nil {
+	if _, err := c.Vars.Put(c.rowKey(Str(uid)), c.Spec.ItemsOf(r), Absent); err != nil { // create-only: a row is written once
 		return nil, err
 	}
 	return r, c.derived(r, Str(uid), false)
@@ -875,6 +875,14 @@ func (c *SpecController) pool(workers []string) []string {
 	}
 	for _, w := range c.IdleByPolicy(all) {
 		gone[w] = true
+	}
+	// A RELEASED slot is on its way out: Redistribute moves its units off, and
+	// until this line it could be handed new ones on the same pass — placed on a
+	// process that is already shutting down. Leaving is not a capacity.
+	for n, sl := range c.Slots() {
+		if sl.Released {
+			gone[n] = true
+		}
 	}
 	out := []string{}
 	for _, w := range all {

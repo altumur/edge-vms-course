@@ -17,17 +17,19 @@ package vms
 //
 // What the environment hands a process, on a box or in an allocation:
 //
-//	WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
+//	WORKER_NAME / SLOT_INDEX          -> the slot to claim: w-<index>. The index is the preference;
 //	                                    the claim (CAS on vms/slots/w-N) is the proof
-//	NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: which resource it records into
-//	NOMAD_META_labels                 -> `labels` in the heartbeat: what this server can reach
-//	NOMAD_ALLOC_ID                    -> the instance; CAPACITY -> the worker's own number
+//	SERVER_NAME (or the hostname)     -> `server` in the heartbeat: which resource it records into
+//	LABELS                            -> `labels` in the heartbeat: what this server can reach
+//	INSTANCE_ID                       -> the instance; CAPACITY -> the worker's own number.
+//	None of these names an orchestrator: see `psimplatform/runtime.go`.
 //
 // A worker on a cluster is a worker on a box whose stores happen to be raft.
 
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,36 +39,17 @@ import (
 	p "vmsserver/psimplatform"
 )
 
-// Env is a process's environment; nil means the real one.
-type Env map[string]string
+// Env is a process's environment; nil means the real one. It is the platform's
+// type, so the neutral names in `psimplatform/runtime.go` are the only names
+// this package ever reads from an environment.
+type Env = p.Env
 
-func (e Env) Get(k string) string {
-	if e == nil {
-		return os.Getenv(k)
-	}
-	return e[k]
-}
+// SlotFromEnvironment: WORKER_NAME, else `w-<SLOT_INDEX>`, else "" — claim
+// whatever is free, a lapsed slot first. Which runtime filled SLOT_INDEX in is
+// not this file's business.
+func SlotFromEnvironment(env Env) string { return p.SlotName(env, "WORKER_NAME", "w") }
 
-func SlotFromEnvironment(env Env) string {
-	if n := env.Get("WORKER_NAME"); n != "" {
-		return n
-	}
-	if i := env.Get("NOMAD_ALLOC_INDEX"); i != "" {
-		n, _ := strconv.Atoi(i)
-		return "w-" + strconv.Itoa(n)
-	}
-	return "" // claim whatever is free — a lapsed slot first
-}
-
-func LabelsFromEnvironment(env Env) []string {
-	out := []string{}
-	for _, l := range strings.Split(env.Get("NOMAD_META_labels"), ",") {
-		if l != "" {
-			out = append(out, l)
-		}
-	}
-	return out
-}
+func LabelsFromEnvironment(env Env) []string { return p.LabelsOf(env, "") }
 
 // Posted is what an element posted on the bus about a camera.
 type Posted struct {
@@ -93,6 +76,14 @@ type FakeActuator struct {
 	Started map[int]Camera // what each start was given: the enriched row (the fan-out, the recorder's source)
 	Dead    []int
 	Posted  []Posted
+	Fetched []Fetched // what RecordRange was asked for
+}
+
+// Fetched is one range the fake was asked to fetch.
+type Fetched struct {
+	Unit     string
+	From, To float64
+	URL      string
 }
 
 func NewFakeActuator() *FakeActuator {
@@ -143,6 +134,34 @@ func (f *FakeActuator) Post(cid int, kind string, fields map[string]any) {
 	f.Posted = append(f.Posted, Posted{cid, kind, fields})
 }
 
+// RecordRange is the fake's second verb (Lesson 16): fetch a range through a
+// playback door and write it into the spool as ordinary segments under our
+// epoch — the same shape live recording writes, because it IS the same
+// archive. Fetched records what it was asked for, so a test can see the range
+// and not just the file.
+func (f *FakeActuator) RecordRange(unit, url string, epoch int, t0, t1 float64, spool string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cam, _ := strconv.Atoi(unit)
+	out := []string{}
+	const seg = 600.0
+	for t := t0; t < t1; {
+		end := t + seg
+		if end > t1 {
+			end = t1
+		}
+		pth := SegmentPath(spool, cam, epoch, time.Unix(int64(t), 0).UTC())
+		os.MkdirAll(filepath.Dir(pth), 0o755)
+		os.WriteFile(pth, make([]byte, 16), 0o644)
+		// the segment ends where it ends: Promote reads mtime
+		os.Chtimes(pth, time.Unix(int64(end), 0), time.Unix(int64(end), 0))
+		out = append(out, pth)
+		f.Fetched = append(f.Fetched, Fetched{unit, t, end, url})
+		t = end
+	}
+	return out
+}
+
 func (f *FakeActuator) StopAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -181,6 +200,10 @@ type VmsWorkerOptions struct {
 	ParseRow func(p.Items) Camera
 	NameEnv  string // WORKER_NAME (w-<i>) or RECORDER_NAME (r-<i>)
 	Prefix   string
+	// One session per DEVICE, not per channel: DeviceFactory(key) opens it — a
+	// DriverPack session on a box, a FakeDevice in the tests, nil for a source
+	// with no archive of its own (a file).
+	DeviceFactory func(key string) Device
 }
 
 // VmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
@@ -209,6 +232,8 @@ type VmsWorker struct {
 	ShmDir           string
 	RowsName         string
 	ParseRow         func(p.Items) Camera
+	DeviceFactory    func(key string) Device // nil: nothing is held
+	Devices          map[string]Device       // key (DeviceOf(source)) -> the open session
 	// hooks the recorder fills in: what a pipeline needs beyond the row (nil = cannot start now), what the
 	// status says per unit, and what runs before each reconcile pass and after each pump
 	Enrich      func(cam Camera) (Camera, bool)
@@ -218,16 +243,7 @@ type VmsWorker struct {
 	StatusFix   func(st []map[string]any)
 }
 
-func slotFromEnv(env Env, nameEnv, prefix string) string {
-	if n := env.Get(nameEnv); n != "" {
-		return n
-	}
-	if i := env.Get("NOMAD_ALLOC_INDEX"); i != "" {
-		n, _ := strconv.Atoi(i)
-		return prefix + "-" + strconv.Itoa(n)
-	}
-	return ""
-}
+func slotFromEnv(env Env, nameEnv, prefix string) string { return p.SlotName(env, nameEnv, prefix) }
 
 // NewVmsWorker: name is a slot. Given (systemd's %i, Nomad's alloc index) it
 // is claimed by that name; "" means the environment's, and failing that
@@ -242,17 +258,21 @@ func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 		name = slotFromEnv(env, nameEnv, prefix)
 	}
 	if o.Instance == "" {
-		o.Instance = env.Get("NOMAD_ALLOC_ID")
+		o.Instance = p.InstanceOf(env)
 	}
 	base := p.NewWorker(sub, vars, objects, o.WorkerOptions)
 	if _, err := base.ClaimSlot(name); err != nil {
 		return nil, err
 	}
 	w := &VmsWorker{Worker: base, ArchiveRoot: o.ArchiveRoot, BucketSeconds: o.BucketSeconds, Capacity: o.Capacity,
-		Act: act, RecordingAllowed: true, Server: o.Server, Labels: LabelsFromEnvironment(env), Alloc: env.Get("NOMAD_ALLOC_ID"),
+		Act: act, RecordingAllowed: true, Server: o.Server, Labels: LabelsFromEnvironment(env), Alloc: p.InstanceOf(env),
 		RowsName: rows, ParseRow: parse, ShmDir: env.Get("SHM_DIR")}
 	if w.ShmDir == "" {
 		w.ShmDir = ShmDir
+	}
+	w.DeviceFactory, w.Devices = o.DeviceFactory, map[string]Device{}
+	if w.DeviceFactory == nil {
+		w.DeviceFactory = func(string) Device { return nil }
 	}
 	w.Enrich = w.enrichWorker
 	w.StatusExtra = w.statusExtraWorker
@@ -274,15 +294,7 @@ func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 	if w.Act == nil {
 		w.Act = NewFakeActuator()
 	}
-	if w.Server == "" {
-		w.Server = env.Get("NOMAD_NODE_NAME")
-		if w.Server == "" {
-			w.Server = env.Get("NOMAD_NODE_ID")
-		}
-		if w.Server == "" {
-			w.Server, _ = os.Hostname()
-		}
-	}
+	w.Server = p.ServerOfEnv(env, w.Server)
 	w.Reconciler = NewReconciler(w, w.actuate)
 	w.StartedAt = w.Clock()
 	w.StartedWall = w.Wall()
@@ -295,7 +307,19 @@ func NewVmsWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 }
 
 // Desired is the store, as the reconciler sees it.
-func (w *VmsWorker) Desired() []Camera { return w.Rows }
+// Desired is what the reconciler runs. A row with `live: on-demand` is NOT
+// here: its device is still held (see refreshDevices) and its archive still
+// served, but no pipeline is built for it. Holding the device is what the row
+// buys; the live fan-out is what `live` asks for.
+func (w *VmsWorker) Desired() []Camera {
+	out := []Camera{}
+	for _, r := range w.Rows {
+		if r.Live != "on-demand" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 // Refresh reads the assignment and the rows it names. A fresh worker knows
 // nothing and reads everything.
@@ -310,6 +334,108 @@ func (w *VmsWorker) Refresh() {
 		}
 	}
 	w.Rows = rows
+	w.refreshDevices()
+}
+
+// One connection per device, however many of its channels are assigned: an NVR
+// with thirty-two cameras is one session, not thirty-two. A device no row names
+// any more is closed.
+func (w *VmsWorker) refreshDevices() {
+	want := map[string]bool{}
+	for _, r := range w.Rows {
+		if r.Source != "" { // a recorder's rows name no source
+			want[DeviceOf(r.Source)] = true
+		}
+	}
+	for key := range want {
+		if _, held := w.Devices[key]; !held {
+			if dev := w.DeviceFactory(key); dev != nil {
+				w.Devices[key] = dev
+			}
+		}
+	}
+	for key, dev := range w.Devices {
+		if !want[key] {
+			delete(w.Devices, key)
+			dev.Close()
+		}
+	}
+}
+
+// DeviceOfRow: the device a camera is a channel of, if it is held here.
+func (w *VmsWorker) DeviceOfRow(cam Camera) Device {
+	if cam.Source == "" {
+		return nil
+	}
+	return w.Devices[DeviceOf(cam.Source)]
+}
+
+// DeviceStatus: what each held device is, and what it has that we have not
+// imported. Discovery is an OBSERVATION and goes where observations go — this
+// worker's token writes `vms/epoch/*` and `vms/slots/*`, never `vms/cameras/*`.
+// The operator imports channels from the page, with their own token.
+func (w *VmsWorker) DeviceStatus() []map[string]any {
+	known := map[string]map[string]bool{}
+	for _, r := range w.Rows {
+		if r.Source == "" {
+			continue
+		}
+		key := DeviceOf(r.Source)
+		ch := ChannelOf(r.Source)
+		if ch == "" {
+			ch = strconv.Itoa(r.ID)
+		}
+		if known[key] == nil {
+			known[key] = map[string]bool{}
+		}
+		known[key][ch] = true
+	}
+	out := []map[string]any{}
+	for _, key := range sortedKeys(w.Devices) {
+		dev := w.Devices[key]
+		have := known[key]
+		unimported := []string{}
+		for _, c := range dev.Channels() {
+			if !have[c] {
+				unimported = append(unimported, c)
+			}
+		}
+		out = append(out, map[string]any{"device": key, "channels": len(dev.Channels()),
+			"known": sortedKeys(have), "unimported": unimported,
+			"playbacks": dev.InUse(), "max_playbacks": dev.MaxPlaybacks()})
+	}
+	return out
+}
+
+// Playback: a range out of the DEVICE's own archive. The ceiling belongs to the
+// hardware, not to this worker — capacity here is still counted in cameras, and
+// an exhausted device is a 503. On a camera this competes with live for the one
+// uplink; on an NVR it usually does not.
+func (w *VmsWorker) Playback(cam string, t0, t1 float64) ([]byte, error) {
+	var row Camera
+	found := false
+	for _, r := range w.Rows {
+		if strconv.Itoa(r.ID) == cam {
+			row, found = r, true
+			break
+		}
+	}
+	if !found {
+		return nil, ErrNoDeviceArchive
+	}
+	dev := w.DeviceOfRow(row)
+	if dev == nil {
+		return nil, ErrNoDeviceArchive
+	}
+	if _, ok := dev.Coverage(cam); !ok {
+		return nil, ErrNoDeviceArchive
+	}
+	sid, err := dev.OpenPlayback(cam, t0, t1) // ErrDeviceBusy when the device is full
+	if err != nil {
+		return nil, err
+	}
+	defer dev.ClosePlayback(sid)
+	return dev.Read(sid)
 }
 
 // What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`), the loopback
@@ -322,8 +448,18 @@ func (w *VmsWorker) enrichWorker(cam Camera) (Camera, bool) {
 // What the heartbeat says per unit beyond the platform's fields: the worker publishes where the camera's
 // stream is — the fan-out, and the same-server fast path — so a recorder, a gateway or a detector finds it
 // by reading, never by calling.
+// Two kinds of output: live_url/live_shm — the stream now; playback_url +
+// coverage — the archive the DEVICE wrote, which we did not. A subscriber needs
+// nothing but this object, for either.
 func (w *VmsWorker) statusExtraWorker(cam Camera) map[string]any {
-	return map[string]any{"live_url": LiveURL(w.Server, cam.ID), "live_shm": LiveShm(cam.ID, w.ShmDir)}
+	out := map[string]any{"live_url": LiveURL(w.Server, cam.ID), "live_shm": LiveShm(cam.ID, w.ShmDir)}
+	if dev := w.DeviceOfRow(cam); dev != nil {
+		if cov, ok := dev.Coverage(strconv.Itoa(cam.ID)); ok {
+			out["playback_url"] = PlaybackURL(w.Server, cam.ID)
+			out["coverage"] = cov.ToMap() // the SUMMARY: from, to, fragments — never the index
+		}
+	}
+	return out
 }
 
 // the gate
@@ -477,6 +613,15 @@ func (w *VmsWorker) Status() []map[string]any {
 		}
 		out = append(out, st)
 	}
+	for i, cam := range w.Rows { // `held`: the device is on the line, no stream is built
+		if cam.Live == "on-demand" && out[i]["phase"] != "running" {
+			if w.DeviceOfRow(cam) != nil {
+				out[i]["phase"] = "held"
+			} else {
+				out[i]["phase"] = "pending"
+			}
+		}
+	}
 	if w.StatusFix != nil {
 		w.StatusFix(out)
 	}
@@ -496,7 +641,7 @@ func (w *VmsWorker) HeartbeatExtra() map[string]any {
 		"assignment_rev": w.AssignmentRev, "fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
 		"capacity": w.Capacity, "headroom": w.Headroom(), "started": w.StartedWall,
 		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance,
-		"archive": w.ArchiveRoot} // the resource its events (a recorder: its footage) go to — on a cluster Nomad's meta.archive, through $ARCHIVE
+		"archive": w.ArchiveRoot, "devices": w.DeviceStatus()} // the resource its events (a recorder: its footage) go to — on a cluster Nomad's meta.archive, through $ARCHIVE
 }
 
 func (w *VmsWorker) HeartbeatOnce() error {

@@ -25,11 +25,11 @@ func Wall() Clock { return func() float64 { return float64(time.Now().UnixNano()
 
 // NextEpoch issues the next epoch for key by check-and-set: two callers
 // racing get two different numbers, in order.
-func NextEpoch(vars Variables, key string) (int, int64, error) {
+func NextEpoch(vars Variables, key string) (int, Index, error) {
 	for i := 0; i < 200; i++ {
 		items, idx, err := vars.Get(key)
 		if err != nil {
-			return 0, 0, err
+			return 0, Absent, err
 		}
 		current := 0
 		if items != nil {
@@ -40,11 +40,11 @@ func NextEpoch(vars Variables, key string) (int, int64, error) {
 			continue
 		}
 		if err != nil {
-			return 0, 0, err
+			return 0, Absent, err
 		}
 		return current + 1, newIdx, nil
 	}
-	return 0, 0, fmt.Errorf("could not issue an epoch for %s after 200 conflicts", key)
+	return 0, Absent, fmt.Errorf("could not issue an epoch for %s after 200 conflicts", key)
 }
 
 func CurrentEpoch(vars Variables, key string) (int, error) {
