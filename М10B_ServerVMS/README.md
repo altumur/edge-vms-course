@@ -31,8 +31,8 @@
 | 10 | [`vmsrecorder`](10-vmsrecorder.md) | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
 | 11 | [Процесс ресурса](11-the-resource-process.md) | `vms_routes` (`/manifest`, `/segment` с Range) и `vms_resource` — `Resource` из М10A с политикой регистратора и базой событий; цикл процесса. |
 | 12 | [Консоль VMS](12-the-vms-console.md) | `/timeline/<id>`, `/segment/<path>`, дверь WHEP; `LiveFront`; дерево монтирования на четыре подсистемы. |
-| 13 | Живое видео | `live.subsystem.yaml`, `LiveGateway`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
-| 14 | Детекторы | `det.subsystem.yaml`, `DetWorker`, `FakeModel`; подсистема, чей выход — события, и почему события не подсистема. |
+| 13 | [Живое видео](13-live-video.md) | `live.subsystem.yaml`, `LiveGateway`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
+| 14 | [Детекторы](14-detectors.md) | `det.subsystem.yaml`, `DetWorker`, `FakeModel`; подсистема, чей выход — события, и почему события не подсистема. |
 | 15 | На коробке | Одиннадцать точек входа `__main__.py`, тринадцать юнитов Quadlet и то, что говорят их монтирования; `test_deploy_units.py`; проверка здоровья М9, читающая архив этого регистратора. |
 
 ## Демо, от которого модуль построен назад
