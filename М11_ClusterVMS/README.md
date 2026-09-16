@@ -4,7 +4,7 @@
 
 Five lessons in which a server is pulled from the wall and, within a number of seconds the workers themselves measured, its worker is holding its cameras again on another server and its recordings are being written by the recorder on another — into another resource — with an edit made *during* the failover already there, because configuration never left the cluster's raft — and when the dead server comes back believing its old worker still owns those cameras, it is fenced twice and the archive is provably intact.
 
-The full design brief is [`module-design.md`](module-design.md); the orchestrator choice and its licence are in [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md), and how the module stays independent of that choice is argued in [`СЛОЙ-ВМЕСТО-NOMAD.md`](СЛОЙ-ВМЕСТО-NOMAD.md) and [`thin-seam-vs-provider.md`](thin-seam-vs-provider.md).
+The full design brief is [`module-design.md`](module-design.md); the orchestrator choice and its licence are in [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md), and how the module stays independent of that choice is argued in [`thin-seam-vs-provider.md`](thin-seam-vs-provider.md).
 
 ## The thesis
 
