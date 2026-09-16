@@ -63,9 +63,23 @@ class Forbidden(Exception):
     """This writer may not write that path — one writer per prefix."""
 
 
+# The version of a path, as the store hands it out. OPAQUE: the platform compares it for equality, passes
+# it back unmodified, and does nothing else with it — never orders it, never does arithmetic on it. That is
+# not fastidiousness, it is what a backend needs. Nomad's `ModifyIndex` is the raft index and is a number;
+# Kubernetes' `resourceVersion` is a string, and its API conventions require it: "This value MUST be treated
+# as opaque by clients and passed unmodified back to the server" — it is "currently backed by etcd's
+# mod_revision", but an application "should *not* rely on the implementation details of the versioning
+# system". Typing this `int` would have made a Kubernetes backend bet on that detail.
+#
+# One value is NOT a version and is the same everywhere: `0` means the path does not exist. `get` returns it
+# for a missing path, and `put(cas=0)` therefore means "create only" — the first claimant wins and everyone
+# else conflicts (`SpecController.create`, `IdempotencyKeys.claim`).
+Index = str | int
+
+
 class Variables(Protocol):
-    def get(self, path: str) -> tuple[dict | None, int]: ...
-    def put(self, path: str, items: dict, cas: int | None = None) -> int: ...
+    def get(self, path: str) -> tuple[dict | None, Index]: ...
+    def put(self, path: str, items: dict, cas: Index | None = None) -> Index: ...
     def list(self, prefix: str) -> list[str]: ...
 
 

@@ -23,7 +23,7 @@ import os
 import tempfile
 import threading
 
-from psimplatform.variables import Forbidden, open_vars
+from psimplatform.variables import Conflict, Forbidden, open_vars
 
 
 def _store(writer=None, acl=None):
@@ -126,3 +126,80 @@ def test_the_index_is_opaque():
     i = v.put("contract/opaque", {"x": "1"}, cas=0)
     assert v.get("contract/opaque")[1] == i
     assert v.put("contract/opaque", {"x": "2"}, cas=i) != i
+
+
+# A store whose version is a STRING that means nothing — `rv-7`, not `7`. Kubernetes hands out exactly this
+# kind of value (`resourceVersion`, "treated as opaque … passed unmodified back"), and a backend for it is
+# only possible while nothing in the platform interprets the index. This is the check for that: not a type
+# annotation, a working store the real CAS loops are driven against.
+class OpaqueIndexStore:
+    def __init__(self):
+        self._data: dict[str, tuple[dict, str]] = {}
+        self._n = 0
+
+    def get(self, path):
+        items, idx = self._data.get(path, (None, 0))
+        return (dict(items) if items is not None else None), idx
+
+    def put(self, path, items, cas=None):
+        _, current = self.get(path)
+        if cas is not None and cas != current:
+            raise Conflict(f"{path}: cas={cas!r} but the version is {current!r}")
+        self._n += 1
+        idx = f"rv-{self._n}"                       # no order, no arithmetic, not even a number
+        self._data[path] = ({k: str(v) for k, v in items.items()}, idx)
+        return idx
+
+    def list(self, prefix):
+        return sorted(p for p in self._data if p.startswith(prefix))
+
+
+def test_the_contract_holds_when_the_version_is_not_a_number():
+    v = OpaqueIndexStore()
+    assert v.get("a") == (None, 0)                              # absent is 0 everywhere — the one non-version
+    i = v.put("a", {"n": "1"}, cas=0)                           # …which is what makes cas=0 mean "create only"
+    assert isinstance(i, str) and v.get("a")[1] == i
+    try:
+        v.put("a", {"n": "2"}, cas=0)
+        assert False, "cas=0 must not overwrite an existing path"
+    except Conflict:
+        pass
+    j = v.put("a", {"n": "2"}, cas=i)
+    assert j != i
+    try:
+        v.put("a", {"n": "3"}, cas=i)
+        assert False, "a stale version must not write"
+    except Conflict:
+        pass
+
+
+def test_the_platforms_cas_loops_run_over_a_non_numeric_version():
+    """The loops themselves — `next_epoch`, `claim_slot`, `Controller.write` — never look
+    inside the index. Driven here against a store whose version is `rv-<n>`: if any of them
+    ordered or incremented it, this is where that would show."""
+    from psimplatform.contract import Subsystem, Worker
+    from psimplatform.epoch import next_epoch
+
+    v = OpaqueIndexStore()
+
+    e1, idx1 = next_epoch(v, "vms/epoch/7")                     # read-modify-CAS, twice, on one key
+    e2, idx2 = next_epoch(v, "vms/epoch/7")
+    assert (e1, e2) == (1, 2) and idx1 != idx2                  # the EPOCH is a number; the index is not
+
+    class _W(Worker):
+        def reconcile_once(self, now=None):
+            return []
+
+    class _Objects:
+        def __init__(self): self.d = {}
+        def put(self, k, b): self.d[k] = b
+        def get(self, k): return self.d.get(k)
+        def list(self, p): return sorted(k for k in self.d if k.startswith(p))
+
+    now = [1000.0]
+    w = _W(Subsystem("vms"), None, v, _Objects(), wall=lambda: now[0], clock=lambda: now[0])
+    w.claim_slot(prefer="w-1")                                  # CAS on vms/slots/w-1
+    assert w.name == "w-1"
+    assert w.renew_slot() is True                               # read, compare, write back — still opaque
+    w.release_slot()
+    assert v.get("vms/slots/w-1")[0]["released"] == "true"
