@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
 	"vmsserver/vms"
+	p "vmsserver/w2cplatform"
 )
 
 type fakeStore struct{ rows []vms.Camera }

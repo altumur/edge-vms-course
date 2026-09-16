@@ -5,7 +5,7 @@ node.unique.name into those neutral names, a Kubernetes manifest the
 StatefulSet ordinal and a fieldRef) the worker reads from its environment on
 a box exactly as in an allocation; this module keeps the name М11's lessons
 used and the `env=` calling convention. Nothing here names an orchestrator:
-see `psimplatform/runtime.py`.
+see `w2cplatform/runtime.py`.
 
 Nothing here is new behaviour. A worker on a cluster is a worker on a box
 whose stores happen to be raft.

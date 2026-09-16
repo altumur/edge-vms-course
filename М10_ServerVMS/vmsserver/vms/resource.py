@@ -1,4 +1,4 @@
-"""The resource process — the platform's resource job (psimplatform.resource)
+"""The resource process — the platform's resource job (w2cplatform.resource)
 with the VMS registered on it. One per server, pinned there for as long as
 the server exists; on a box it is `python3 -m vms resource`
 (`deploy/vmsresource.container`), in М11 the `resource` system job. It has
@@ -24,7 +24,7 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 # **Role in the module.** Lesson 10 (events) and Lesson 11 (the box). The archive was a resource from Lesson
 # 3 — pinned, registered on, never placed — and this is the process that stands for it: the platform's
 # `Resource` over `/data/archive` with `ArchivePolicy` registered as the `rec` hook (the recorder's: manifest
-# repair, media retention by the recording row), a heartbeat under `platform/resources/<server>`, the platform's HTTP (`psimplatform.resource.
+# repair, media retention by the recording row), a heartbeat under `platform/resources/<server>`, the platform's HTTP (`w2cplatform.resource.
 # serve`) with the VMS's two reads added, and an `EventDatabase` over the tree, rebuilt on start and tailed,
 # served as `GET /events`. The console holds no database: it asks this process (`MergedIndex`). М11 runs the
 # same function as the `resource` job on every server (`cluster/resource.py` re-exports it), which is the
@@ -54,8 +54,8 @@ from __future__ import annotations
 
 import os
 
-from psimplatform.eventdatabase import EventDatabase
-from psimplatform.resource import Resource
+from w2cplatform.eventdatabase import EventDatabase
+from w2cplatform.resource import Resource
 
 from .archive import ArchivePolicy, ArchiveResource, Manifest
 

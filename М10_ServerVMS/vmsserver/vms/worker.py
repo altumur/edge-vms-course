@@ -31,7 +31,7 @@ What the environment hands a process, on a box or in an allocation:
 # a lease, a heartbeat with server, labels and capacity
 #
 # **Role in the module.** Lesson 4. One process, N pipelines, its own loop. `VmsWorker` extends
-# `psimplatform.contract.Worker` (see `contract.py` for `claim_slot`, `renew_slot`, `release_slot`,
+# `w2cplatform.contract.Worker` (see `contract.py` for `claim_slot`, `renew_slot`, `release_slot`,
 # `take_epoch`, `renew_leases`, `heartbeat`) and is the thing that knows what a camera is. It reads its
 # assignment `vms/workers/<me>` and the camera rows it names, runs М9's `Reconciler` over them
 # (`reconciler.py`) with an actuator that builds `driverpacksrc ! tee ! archivesink` (`gstvms/actuator.py`;
@@ -90,13 +90,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from psimplatform import runtime
-from psimplatform.console import SendMixin
-from psimplatform.contract import Subsystem, Worker
-from psimplatform.objects import ObjectStore
-from psimplatform.variables import Variables
+from w2cplatform import runtime
+from w2cplatform.console import SendMixin
+from w2cplatform.contract import Subsystem, Worker
+from w2cplatform.objects import ObjectStore
+from w2cplatform.variables import Variables
 
-from psimplatform.events import EventLog
+from w2cplatform.events import EventLog
 
 from .config import PLAYBACK_PORT, SHM_DIR, channel_of, device_of, live_shm, live_url, playback_url, row
 from .reconciler import CONVERGED, Reconciler
@@ -301,7 +301,7 @@ class VmsWorker(Worker):
         self.previous_hb, self.previous_instance = 0.0, ""
         raw = objects.get(self.sub.heartbeat_key(self.name))
         if raw:
-            from psimplatform.contract import Heartbeat
+            from w2cplatform.contract import Heartbeat
             old = Heartbeat.from_bytes(raw)
             if old.extra.get("instance") != self.instance:
                 self.previous_hb, self.previous_instance = old.ts, old.extra.get("instance", "")

@@ -6,7 +6,7 @@ import json
 import os
 from cluster.controller import ClusterController
 from cluster.resource import cluster_resource, resources_seen
-from psimplatform.spec import SpecController
+from w2cplatform.spec import SpecController
 from vms.config import REC_SPEC
 from cluster.timeline import merged_timeline
 from datetime import datetime, timezone

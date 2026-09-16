@@ -29,7 +29,7 @@ import (
 	"strconv"
 	"strings"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 var REC = p.Subsystem{Name: "rec"}

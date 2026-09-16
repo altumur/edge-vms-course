@@ -22,7 +22,7 @@ package vms
 //	SERVER_NAME (or the hostname)     -> `server` in the heartbeat: which resource it records into
 //	LABELS                            -> `labels` in the heartbeat: what this server can reach
 //	INSTANCE_ID                       -> the instance; CAPACITY -> the worker's own number.
-//	None of these names an orchestrator: see `psimplatform/runtime.go`.
+//	None of these names an orchestrator: see `w2cplatform/runtime.go`.
 //
 // A worker on a cluster is a worker on a box whose stores happen to be raft.
 
@@ -36,11 +36,11 @@ import (
 	"sync"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // Env is a process's environment; nil means the real one. It is the platform's
-// type, so the neutral names in `psimplatform/runtime.go` are the only names
+// type, so the neutral names in `w2cplatform/runtime.go` are the only names
 // this package ever reads from an environment.
 type Env = p.Env
 

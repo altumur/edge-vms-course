@@ -1,6 +1,6 @@
 # ClusterVMS — the М11 project, whole
 
-М10's shape across several servers, built **on** М10's `vmsserver/` rather than beside it: the same `psimplatform` contract, the same `vms/` controller, worker and archive resource, imported unchanged. What this package adds is exactly what a cluster adds — Nomad's stores, what an allocation knows about itself, placement under constraints, a resource that has to say it exists, and a timeline that spans servers.
+М10's shape across several servers, built **on** М10's `vmsserver/` rather than beside it: the same `w2cplatform` contract, the same `vms/` controller, worker and archive resource, imported unchanged. What this package adds is exactly what a cluster adds — Nomad's stores, what an allocation knows about itself, placement under constraints, a resource that has to say it exists, and a timeline that spans servers.
 
 ```
 clustervms/
@@ -11,7 +11,7 @@ clustervms/
     controller.py    L5  the controller as a job — М10's VmsController by the name the lessons use: constraints, the server in the reason, the snapshot and the measured failover are the one-box behaviour with N = 1
     directory.py     L5  where is camera 7 — one scan of vms/workers/*
     resource.py      L3  М10's resource process (vms.resource) as the job: cluster_resource = vms_resource — ArchivePolicy registered, an EventDatabase attached; /manifest and /segment plugged in
-    eventdatabase.py L3  a name for psimplatform.eventdatabase — EventDatabase, the one each resource job keeps over its own tree; MergedIndex, the console's merge
+    eventdatabase.py L3  a name for w2cplatform.eventdatabase — EventDatabase, the one each resource job keeps over its own tree; MergedIndex, the console's merge
     console.py       L5  the cluster console — its own job, its own token: the platform's SpecConsole over the VMS spec plus two extras, the merged timeline and /segment/<path>?server= proxied from that server's resource
     timeline.py      L3  one camera across two resources; the unreachable one named; *unavailable*, never *lost*
     console.py       L5  the cluster console: SpecConsole (/spec /cameras /where /resources /unplaceable /events /metrics /marks, the writes) plus the cluster's /timeline and /segment?server=
@@ -39,10 +39,10 @@ clustervms/
 | A worker's name | `systemd`'s `%i` | `w-<NOMAD_ALLOC_INDEX>`, claimed by CAS — the index is the preference, the Variable the proof | `worker.py` |
 | Who decides how many workers | the operator starts units | Nomad runs `count`; the Autoscaler moves it from `vms_worker_load`; **never the controller** | `deploy/vmsworker.nomad.hcl` |
 | Placement | most free capacity; `labels` empty | most free capacity **among workers whose server can reach the camera** — the same `constraint: labels-subset` in `vms.subsystem.yaml`, now with labels to match | `vmsserver/vms/vms.subsystem.yaml` |
-| The resource | a directory on the box | the platform's `resource` job on *each* server: every subsystem's buckets served and mirrored, retention by each subsystem's row; the VMS registers its manifests and media on it | `psimplatform/resource.py`, `resource.py` |
+| The resource | a directory on the box | the platform's `resource` job on *each* server: every subsystem's buckets served and mirrored, retention by each subsystem's row; the VMS registers its manifests and media on it | `w2cplatform/resource.py`, `resource.py` |
 | A timeline | one manifest | merged across the resources that hold the camera; a silent one is named as unreachable | `timeline.py` |
-| What leaves the cluster | the same snapshot, of a cluster of one | one snapshot object for М12's read model — a copy with an age | `psimplatform/spec.py` |
-| Events | buckets per unit on the resource, written by the worker holding the epoch, any subsystem | the same, on each server's resource; held by each resource's own `EventDatabase`, a cache, and merged by the console's `/events`; mirrored to the next resource with `platform/mirror` on | `psimplatform/eventdatabase.py`, `psimplatform/resource.py` |
+| What leaves the cluster | the same snapshot, of a cluster of one | one snapshot object for М12's read model — a copy with an age | `w2cplatform/spec.py` |
+| Events | buckets per unit on the resource, written by the worker holding the epoch, any subsystem | the same, on each server's resource; held by each resource's own `EventDatabase`, a cache, and merged by the console's `/events`; mirrored to the next resource with `platform/mirror` on | `w2cplatform/eventdatabase.py`, `w2cplatform/resource.py` |
 | The contract, **the controller**, **the worker**, the epoch, the lease, the manifest | | **unchanged**: imported from `vmsserver/` — `controller.py` and `worker.py` here are one import each | |
 
 ## The three lines the tests hold

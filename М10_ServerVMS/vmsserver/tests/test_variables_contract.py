@@ -23,7 +23,7 @@ import os
 import tempfile
 import threading
 
-from psimplatform.variables import Conflict, Forbidden, open_vars
+from w2cplatform.variables import Conflict, Forbidden, open_vars
 
 
 def _store(writer=None, acl=None):
@@ -177,8 +177,8 @@ def test_the_platforms_cas_loops_run_over_a_non_numeric_version():
     """The loops themselves — `next_epoch`, `claim_slot`, `Controller.write` — never look
     inside the index. Driven here against a store whose version is `rv-<n>`: if any of them
     ordered or incremented it, this is where that would show."""
-    from psimplatform.contract import Subsystem, Worker
-    from psimplatform.epoch import next_epoch
+    from w2cplatform.contract import Subsystem, Worker
+    from w2cplatform.epoch import next_epoch
 
     v = OpaqueIndexStore()
 

@@ -1,4 +1,4 @@
-"""The platform, on one box (the package is `psimplatform` only because Python owns the name `platform`). Everything here would host any fleet of
+"""The platform, on one box (the package is `w2cplatform` only because Python owns the name `platform`). Everything here would host any fleet of
 stateless shards writing bulk data; nothing here knows what a camera is.
 
     variables.py   a small, consistent config store with ModifyIndex and check-and-set (file-backed)
@@ -15,10 +15,10 @@ behind the same interfaces, and changes nothing above this line.
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # __init__.py — the package docstring: what `psimplatform` is and what each module holds
+# # __init__.py — the package docstring: what `w2cplatform` is and what each module holds
 #
 # **Role in the module.** The file contains no code, only the package docstring. It names the package
-# (`psimplatform` rather than `platform` because Python's standard library already owns `platform`), states
+# (`w2cplatform` rather than `platform` because Python's standard library already owns `platform`), states
 # the one design line that governs everything under it — *nothing here knows what a camera is*; anything
 # here would host any fleet of stateless shards writing bulk data — and gives a one-line map of the modules:
 # `variables.py` (config store with ModifyIndex and check-and-set), `objects.py` (object store), `epoch.py`
@@ -31,8 +31,8 @@ behind the same interfaces, and changes nothing above this line.
 # `ObjectStore` Protocols) and changes nothing above that line.
 #
 # ## Module-level names
-# None. There are no imports either, so `import psimplatform` pulls in nothing; each module is imported
-# explicitly (`from psimplatform.spec import SpecController`).
+# None. There are no imports either, so `import w2cplatform` pulls in nothing; each module is imported
+# explicitly (`from w2cplatform.spec import SpecController`).
 #
 # ## Notes
 # - `tests/test_lesson1_platform.py::test_the_platform_knows_nothing_about_video` greps every `.py` under

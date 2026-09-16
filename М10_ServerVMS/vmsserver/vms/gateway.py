@@ -30,11 +30,11 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from psimplatform import runtime
-from psimplatform.console import SendMixin, heartbeats, holder_of
-from psimplatform.contract import Worker
-from psimplatform.spec import SpecController
-from psimplatform.variables import Variables
+from w2cplatform import runtime
+from w2cplatform.console import SendMixin, heartbeats, holder_of
+from w2cplatform.contract import Worker
+from w2cplatform.spec import SpecController
+from w2cplatform.variables import Variables
 
 from .config import LIVE_SPEC
 

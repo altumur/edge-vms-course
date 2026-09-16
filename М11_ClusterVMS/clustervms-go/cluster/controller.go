@@ -14,7 +14,7 @@ package cluster
 import (
 	"strings"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 	"vmsserver/vms"
 )
 

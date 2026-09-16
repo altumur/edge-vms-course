@@ -19,7 +19,7 @@ server, and it is the hostname.
 # words
 #
 # **Role in the module.** Lesson 6. The VMS controller is not written here; it is
-# `psimplatform.spec.SpecController` (see `psimplatform/spec.py`) instantiated with the VMS's spec. This
+# `w2cplatform.spec.SpecController` (see `w2cplatform/spec.py`) instantiated with the VMS's spec. This
 # module contributes only vocabulary: the class `VmsController` whose constructor bakes in `SPEC`, and five
 # aliases so the tests and the console can say *camera* where the platform says *unit*. The docstring is the
 # controller's contract restated for the VMS: cameras are CRUD by CAS with `revision` bumped on every
@@ -34,7 +34,7 @@ server, and it is the hostname.
 # ## Module-level names
 # - `VMS` — `SPEC.sub`, the `Subsystem("vms")` key layout (`vms/workers/<w>`, `vms/epoch/<id>`,
 #   `vms/slots/<w>`, …).
-# - `Placement`, `Refused` — re-exported from `psimplatform.spec` (the `noqa: F401` says so) so callers can
+# - `Placement`, `Refused` — re-exported from `w2cplatform.spec` (the `noqa: F401` says so) so callers can
 #   write `from vms.controller import Refused`; `test_crud_by_cas_and_what_it_refuses` catches this
 #   `Refused`.
 #
@@ -60,9 +60,9 @@ from __future__ import annotations
 
 import time
 
-from psimplatform.objects import ObjectStore
-from psimplatform.spec import Placement, Refused, SpecController  # noqa: F401  — the VMS's names for the platform's things
-from psimplatform.variables import Variables
+from w2cplatform.objects import ObjectStore
+from w2cplatform.spec import Placement, Refused, SpecController  # noqa: F401  — the VMS's names for the platform's things
+from w2cplatform.variables import Variables
 
 from .config import SPEC
 
@@ -72,7 +72,7 @@ VMS = SPEC.sub
 # `SpecController` with the VMS's spec fixed. Every behaviour — `create`, `update`, `delete`,
 # `unplace_deleted`, `place`, `ensure_placed`, `redistribute`, `rebalance`, `move`, `read_model`,
 # `snapshot`, `publish_snapshot`, `headroom`, `capacity_of`, `failover_seconds`, … — is the platform's and
-# is documented in `psimplatform/spec.py`. Which of them a given process may actually complete is decided by
+# is documented in `w2cplatform/spec.py`. Which of them a given process may actually complete is decided by
 # the token its `vars_` carries, not by this class: the same class holds the controller's token in
 # `vmscontroller` and the console's token in `vmsconsole`.
 class VmsController(SpecController):

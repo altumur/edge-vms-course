@@ -10,8 +10,8 @@
 //	controller.go        vmscontroller — the platform's SpecController run from the spec, in the VMS's words
 //	console.go           the one-box console: the read model from heartbeats; writes go to the controller
 //
-// Nothing here imports from psimplatform except through its public
-// interfaces, and nothing in psimplatform imports from here.
+// Nothing here imports from w2cplatform except through its public
+// interfaces, and nothing in w2cplatform imports from here.
 package vms
 
 import (
@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 //go:embed vms.subsystem.yaml

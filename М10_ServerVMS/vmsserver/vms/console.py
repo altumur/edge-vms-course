@@ -5,7 +5,7 @@ from the VMS spec, plus the two routes only a VMS has (the bytes):
     GET  /segment/<path>          the bytes of one promoted segment from this box's archive, Range honoured
 
 Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the
-POST/PUT/DELETE of a camera — is `psimplatform.console.SpecConsole` reading
+POST/PUT/DELETE of a camera — is `w2cplatform.console.SpecConsole` reading
 `vms.subsystem.yaml`; nothing here knows what a camera's fields are. Its own
 process (`python3 -m vms console`), with its own token: the operator's rows —
 cameras, next_id, retention — and never placement.
@@ -18,8 +18,8 @@ cameras, next_id, retention — and never placement.
 # only a VMS has
 #
 # **Role in the module.** Lesson 6. Everything an operator's console needs to list, create, edit and delete
-# cameras, show where they run, export metrics and take marks is `psimplatform.console.SpecConsole` reading
-# `vms.subsystem.yaml` (see `psimplatform/console.py`); nothing in this file knows what a camera's fields
+# cameras, show where they run, export metrics and take marks is `w2cplatform.console.SpecConsole` reading
+# `vms.subsystem.yaml` (see `w2cplatform/console.py`); nothing in this file knows what a camera's fields
 # are. What the VMS adds is the bytes: `GET /timeline/<id>?from&to` (segments and event buckets from this
 # box's archive manifest, fenced ones marked) and `GET /segment/<path>` (one promoted segment, `Range`
 # honoured, for the page's `<video>`). They are *registered* as the console's `extra` route function, not
@@ -28,7 +28,7 @@ cameras, next_id, retention — and never placement.
 # Depends on `archive.py` (`ArchiveResource`, `Manifest`) and `controller.py`.
 #
 # ## Module-level names
-# - `PAGE`, `send_file` — re-exported from `psimplatform.console` (`noqa: F401`) for М11, which serves the
+# - `PAGE`, `send_file` — re-exported from `w2cplatform.console` (`noqa: F401`) for М11, which serves the
 #   same page and the same ranged file replies from a Nomad job.
 #
 # ## Notes
@@ -53,9 +53,9 @@ import time
 import urllib.error
 import urllib.request
 
-from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, holder_of, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
-from psimplatform.eventdatabase import MergedIndex
-from psimplatform.spec import Refused, SpecController
+from w2cplatform.console import PAGE, Mount, SpecConsole, heartbeats, holder_of, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from w2cplatform.eventdatabase import MergedIndex
+from w2cplatform.spec import Refused, SpecController
 
 from .archive import ArchiveResource, Manifest, subtract
 from .controller import VmsController

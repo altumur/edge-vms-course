@@ -150,13 +150,13 @@ def test_the_console_over_http():
     never placement. The controller, on its pass, places what the console created
     and unplaces what it deleted."""
     from vms.config import SPEC
-    from psimplatform.variables import Forbidden
+    from w2cplatform.variables import Forbidden
     box = Box(); ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
     con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)   # what the console process holds
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1")
     w.heartbeat_once()
     from vms.archive import ArchiveResource
-    from psimplatform.events import read_bucket, subsystems_under
+    from w2cplatform.events import read_bucket, subsystems_under
     srv = serve(con, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall); port = srv.server_address[1]
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/cameras", data=json.dumps({"name": "gate", "source": "driverpack://file/gate.mp4"}).encode(),
@@ -252,7 +252,7 @@ def test_a_retry_that_lands_on_another_console_is_one_camera():
         # a key with a slash is not a path segment
         assert post(p1, "a/b")[0] == 400
         # old keys go: a day later the next claim prunes them (at most once a minute)
-        from psimplatform.console import IdempotencyKeys
+        from w2cplatform.console import IdempotencyKeys
         keys = IdempotencyKeys(box.vars, "vms/idem/", box.wall, clock=box.clock)
         box.wall.advance(90000); box.clock.advance(61)
         assert keys.prune() == 2 and box.vars.list("vms/idem/") == [] and keys.prune() == 0

@@ -1,6 +1,6 @@
 """ClusterVMS — М11. М10's platform shape across several servers.
 
-Built ON М10's `vmsserver/` (imported, not copied): the same `psimplatform`
+Built ON М10's `vmsserver/` (imported, not copied): the same `w2cplatform`
 contract and the same `vms/` controller, worker and archive resource. This
 package supplies what a cluster adds and nothing else:
 

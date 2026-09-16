@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 type Directory struct {

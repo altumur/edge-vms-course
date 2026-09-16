@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // An object store: large, or frequent, never queried by key. A directory
 // here; Variables-as-objects or S3 in М11. An object appears whole or not at all.

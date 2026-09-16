@@ -19,11 +19,11 @@ import logging
 import os
 import time
 
-from psimplatform import runtime
-from psimplatform.console import holder_of
-from psimplatform.contract import Worker
-from psimplatform.events import EventLog
-from psimplatform.variables import Variables
+from w2cplatform import runtime
+from w2cplatform.console import holder_of
+from w2cplatform.contract import Worker
+from w2cplatform.events import EventLog
+from w2cplatform.variables import Variables
 
 from .config import DET_SPEC
 

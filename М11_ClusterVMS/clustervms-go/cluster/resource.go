@@ -12,7 +12,7 @@ package cluster
 //	VmsRoutes       = vms.ResourceRoutes:  GET /manifest/<cam>, GET /segment/<path> (Range honoured)
 
 import (
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 	"vmsserver/vms"
 )
 

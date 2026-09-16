@@ -30,7 +30,7 @@
 # - `WantedBy=multi-user.target`.
 #
 # ## Notes
-# - The split with the controller unit is the two ACLs cut from `vms/*` (see `psimplatform/spec.py`): this
+# - The split with the controller unit is the two ACLs cut from `vms/*` (see `w2cplatform/spec.py`): this
 #   token cannot `place`, and `test_the_console_over_http` proves it with a `Forbidden`. Deleting a camera
 #   here marks the row; the placement is taken back by `vmscontroller`'s next `unplace_deleted`.
 # - "Count as many as you like" (`__main__.console` docstring): several consoles over one store are safe;

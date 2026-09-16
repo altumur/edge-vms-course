@@ -19,7 +19,7 @@ and nothing in platform/ imports from here.
 # # __init__.py — the package docstring: what `vms` is, the first subsystem the platform hosts
 #
 # **Role in the module.** No code, only the docstring. It names the VMS as the *first subsystem* — the thing
-# the platform (`psimplatform/`) was built to host without knowing what it is — and gives a one-line map of
+# the platform (`w2cplatform/`) was built to host without knowing what it is — and gives a one-line map of
 # the package: `reconciler.py` (М9 Lesson 6's loop, unchanged: desired persisted, actual derived),
 # `archive.py` (the archive as a resource: spool → promote → manifest; retention as a policy), `worker.py`
 # (vmsworker — DriverPack as the worker, N pipelines against an assignment), `controller.py` (vmscontroller
@@ -36,8 +36,8 @@ and nothing in platform/ imports from here.
 # the modules it needs explicitly.
 #
 # ## Notes
-# - The docstring still says `platform/` where the directory is `psimplatform/` (renamed because Python's
-#   standard library owns `platform`; see `psimplatform/__init__.py`).
+# - The docstring still says `platform/` where the directory is `w2cplatform/` (renamed because Python's
+#   standard library owns `platform`; see `w2cplatform/__init__.py`).
 # - `config.py` and `vms.subsystem.yaml` are not listed in the docstring's map; they are the schema the
 #   controller and console run from (see `config.py`, `vms.subsystem.yaml`).
 # ================================================================================================

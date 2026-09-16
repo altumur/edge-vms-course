@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // RangeRecorder is the actuator's second verb: fetch a range through a

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
 	"vmsserver/vms"
+	p "vmsserver/w2cplatform"
 )
 
 // what `vms resource` does: the platform's Resource with the VMS registered,

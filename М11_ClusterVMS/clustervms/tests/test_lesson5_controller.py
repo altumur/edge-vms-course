@@ -124,7 +124,7 @@ def test_the_snapshot_is_the_only_thing_that_leaves_the_cluster():
 def test_the_console_over_http():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall)
     ws = _three_workers(c, ctl)
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from vms.config import REC_SPEC
     rec_con = SpecController(REC_SPEC, c.vars.as_writer("console", REC_SPEC.acl_console()), c.objects, wall=c.wall)   # the console's door to recordings
     srv = serve(ctl, "127.0.0.1", 0, worst_failover=48.0, archive_root=c.servers["srv-a"].archive, rec_ctl=rec_con); port = srv.server_address[1]
@@ -159,7 +159,7 @@ def test_the_console_over_http():
     assert call("DELETE", "/rec/recordings/1")[0] in (200, 204)
     st, out = call("GET", "/unplaceable"); assert json.loads(out) == []
     # srv-a's resource job, over real HTTP: the platform's routes, the VMS's reads, and the event database over ITS tree
-    from psimplatform.resource import serve as serve_resource
+    from w2cplatform.resource import serve as serve_resource
     from cluster.resource import cluster_resource, vms_routes
     from tests.test_lesson3_resources import _segment
     _segment(c.servers["srv-a"], 1, 1, c.wall() - 600, size=256)

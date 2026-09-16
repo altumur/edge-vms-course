@@ -8,9 +8,9 @@ Two trees, two writers, one camera."""
 import os
 from datetime import datetime, timezone
 
-from psimplatform.events import subsystems_under
-from psimplatform.spec import SpecController
-from psimplatform.variables import Forbidden
+from w2cplatform.events import subsystems_under
+from w2cplatform.spec import SpecController
+from w2cplatform.variables import Forbidden
 from vms.archive import ArchiveResource, Manifest, segment_path
 from vms.config import DET_SPEC, LIVE_SPEC, REC_SPEC, SPEC, live_shm, live_url
 from vms.controller import VmsController

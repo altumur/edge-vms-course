@@ -65,7 +65,7 @@ job "vmsworker" {
         volumes      = ["/data/archive:/data/archive", "/data/media:/data/media", "/run/vms:/run/vms"]   # no spool: it writes events, never segments; /run/vms: the tee's shared-memory branch for subscribers on this server
       }
       env {
-        # The runtime's part of the seam (`psimplatform/runtime.py`): the neutral names the loop
+        # The runtime's part of the seam (`w2cplatform/runtime.py`): the neutral names the loop
         # reads, filled here from Nomad's own. This file already knows the orchestrator — the
         # worker must not. A k8s manifest fills the same four from an ordinal and a fieldRef.
         SLOT_INDEX  = "${NOMAD_ALLOC_INDEX}"

@@ -266,8 +266,8 @@ server, and it is the hostname.
 
 ```python
 from vms.controller import VmsController
-from psimplatform.variables import FileVariables
-from psimplatform.objects import FsObjectStore
+from w2cplatform.variables import FileVariables
+from w2cplatform.objects import FsObjectStore
 
 ctl = VmsController(FileVariables(root, token=SPEC.acl_controller()), FsObjectStore(objs))
 c = ctl.create_camera({"source": "driverpack://file/lobby.mp4"})
@@ -279,7 +279,7 @@ ctl.placement(1).reason      # 'w-1 on box-a: labels reached'
 
 Написано: 122 строки YAML, 100 строк `config.py` (из них 45 — комментарии и докстрока) и 91 строка `controller.py` (из них 70 — комментарии). **Собственно кода — около тридцати строк.**
 
-Прогон тестов зелёный. Теста чистоты платформы это не нарушило: в `psimplatform/` не изменилось ничего.
+Прогон тестов зелёный. Теста чистоты платформы это не нарушило: в `w2cplatform/` не изменилось ничего.
 
 ## Что может пойти не так
 

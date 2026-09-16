@@ -7,7 +7,7 @@ import os
 
 import cluster as _cluster  # noqa: F401  — registers the `nomad://` scheme with the platform
 from cluster.objectstore import open_store
-from psimplatform.variables import open_vars
+from w2cplatform.variables import open_vars
 
 from .federation import Cluster, Federation
 

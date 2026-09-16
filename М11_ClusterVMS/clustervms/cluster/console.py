@@ -10,7 +10,7 @@ adds is where the bytes and the events are — merged, not held:
 
 The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 /resources, /servers, /policy, /unplaceable, /metrics, /marks, POST/PUT/DELETE — is
-`psimplatform.console.SpecConsole` reading `vms.subsystem.yaml`. The recorder's
+`w2cplatform.console.SpecConsole` reading `vms.subsystem.yaml`. The recorder's
 console at `/rec/…` is the same class over `rec.subsystem.yaml` and no extra.
 
 The console holds no event database. Each resource job keeps one over its
@@ -27,11 +27,11 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from psimplatform.console import Mount, SpecConsole, heartbeats   # noqa: F401
-from psimplatform.epoch import current_epoch
-from psimplatform.eventdatabase import MergedIndex          # noqa: F401  (re-exported: the console's view of the event databases)
-from psimplatform.resource import resources_seen
-from psimplatform.spec import SpecController
+from w2cplatform.console import Mount, SpecConsole, heartbeats   # noqa: F401
+from w2cplatform.epoch import current_epoch
+from w2cplatform.eventdatabase import MergedIndex          # noqa: F401  (re-exported: the console's view of the event databases)
+from w2cplatform.resource import resources_seen
+from w2cplatform.spec import SpecController
 
 from .controller import ClusterController
 from .timeline import ManifestReader, merged_timeline

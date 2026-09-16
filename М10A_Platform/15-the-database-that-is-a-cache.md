@@ -1,7 +1,7 @@
 # Урок 15 — База, которая является кэшем
 
 **Модуль:** М10A — Платформа (ServerVMS, часть первая)
-**Вы напишете:** `psimplatform/eventdatabase.py` — `EventDatabase`, SQLite над собственным деревом ресурса, и `MergedIndex`, то, что есть у консоли **вместо** базы. И докажете, что первая является кэшем, удалив её целиком.
+**Вы напишете:** `w2cplatform/eventdatabase.py` — `EventDatabase`, SQLite над собственным деревом ресурса, и `MergedIndex`, то, что есть у консоли **вместо** базы. И докажете, что первая является кэшем, удалив её целиком.
 **Время:** ~90 минут.
 
 ## Зачем этот урок
@@ -133,7 +133,7 @@
                 try:
                     self.tail()
                 except Exception:
-                    logging.getLogger("psimplatform.eventdatabase").exception("event database tail failed")
+                    logging.getLogger("w2cplatform.eventdatabase").exception("event database tail failed")
         threading.Thread(target=loop, daemon=True).start()
         return self
 ```

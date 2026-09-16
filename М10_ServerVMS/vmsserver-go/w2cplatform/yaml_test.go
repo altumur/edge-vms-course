@@ -1,10 +1,10 @@
-package psimplatform_test
+package w2cplatform_test
 
 import (
 	"os"
 	"testing"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 func TestYAMLSubsetReadsTheSpec(t *testing.T) {

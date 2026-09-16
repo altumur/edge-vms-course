@@ -100,7 +100,7 @@ def main() -> None:
     import threading
 
     import cluster as _cluster  # noqa: F401  — registers the `nomad://` scheme
-    from psimplatform.variables import open_vars
+    from w2cplatform.variables import open_vars
 
     cluster = os.environ.get("CLUSTER", os.environ.get("NOMAD_REGION", "local"))
     agent = DomainAgent(cluster, open_vars(os.environ["DOMAIN_CONFIG_URL"]),

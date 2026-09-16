@@ -6,10 +6,10 @@ none; unavailable — by name — when the resource is, never lost; a detector's
 event about camera 7 found by a field, not by living in camera 7's bucket."""
 import os
 from datetime import datetime, timezone
-from psimplatform.eventdatabase import EventDatabase, MergedIndex
+from w2cplatform.eventdatabase import EventDatabase, MergedIndex
 from cluster.resource import cluster_resource, peers_of, resources_seen
 from vms.archive import Manifest, event_log, segment_path
-from psimplatform.events import EventLog, buckets_under, subsystems_under
+from w2cplatform.events import EventLog, buckets_under, subsystems_under
 from tests.conftest import Cluster
 
 B = 600
@@ -23,7 +23,7 @@ class DirReader:
         if getattr(s, "down", False): raise ConnectionError(s.name)
         return s
     def mirrored(self, url, server):
-        from psimplatform.resource import mirrored_buckets
+        from w2cplatform.resource import mirrored_buckets
         return mirrored_buckets(self._srv(url).archive, server, B)
     def put(self, url, server, path, data):
         dest = os.path.join(self._srv(url).archive, ".mirror", server, path)
@@ -146,7 +146,7 @@ def test_the_events_knob_is_a_peer_copy_and_the_owner_restores():
     resource copied its CLOSED buckets to the next live resource after it, and
     a fresh merge answers completely from the peer, saying so. Back with an
     empty disk, the owner pulls its buckets home; nobody else ever writes them."""
-    from psimplatform.resource import MIRROR_KEY, mirrored_buckets
+    from w2cplatform.resource import MIRROR_KEY, mirrored_buckets
     import shutil
     assert peers_of("srv-a", ["srv-a", "srv-b", "srv-c"], 1) == ["srv-b"] and peers_of("srv-c", ["srv-a", "srv-b", "srv-c"], 1) == ["srv-a"]
     assert peers_of("srv-b", ["srv-a", "srv-b", "srv-c"], 2) == ["srv-c", "srv-a"] and peers_of("srv-a", ["srv-a"], 1) == []

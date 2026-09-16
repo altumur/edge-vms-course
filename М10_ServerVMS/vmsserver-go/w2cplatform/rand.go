@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 import (
 	"crypto/rand"

@@ -18,7 +18,7 @@
 # list, the default `CMD`, and that the word "postgres" is absent (М10 Lesson 1: the per-box database is
 # gone; the worker's truth is the platform's stores).
 #
-# - `python3-yaml` — PyYAML, which `psimplatform.spec.SubsystemSpec.load` imports lazily to parse
+# - `python3-yaml` — PyYAML, which `w2cplatform.spec.SubsystemSpec.load` imports lazily to parse
 #   `vms.subsystem.yaml`; `vms/config.py` loads the spec at import and every verb reaches it (the
 #   controller, console and resource directly; the worker through `vms.worker`'s `from .config import row`).
 #   The one Python dependency beyond the standard library.
@@ -57,8 +57,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Where the packages land and the default working directory of every container.
 WORKDIR /app
 # The three packages, in dependency order, and nothing else: no tests, no deploy files, no README. The test
-# asserts the list is exactly `["psimplatform", "vms", "gstvms"]`.
-COPY psimplatform psimplatform
+# asserts the list is exactly `["w2cplatform", "vms", "gstvms"]`.
+COPY w2cplatform w2cplatform
 COPY vms vms
 COPY gstvms gstvms
 # So `python3 -m vms …` resolves the packages from any working directory; the units do not set it.

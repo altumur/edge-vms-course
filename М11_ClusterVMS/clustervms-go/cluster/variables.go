@@ -1,6 +1,6 @@
 // Package cluster is ClusterVMS — М11 — in Go: М10's platform shape across
 // several servers. Built ON М10's vmsserver module (imported, not copied):
-// the same psimplatform contract and the same vms controller, worker and
+// the same w2cplatform contract and the same vms controller, worker and
 // archive resource. This package supplies what a cluster adds and nothing else:
 //
 //	variables.go    Nomad Variables over HTTP (ModifyIndex, cas) — and the fake with the promised semantics
@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // The platform's names, re-exported so a cluster program imports one package.

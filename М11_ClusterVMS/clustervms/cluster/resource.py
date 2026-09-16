@@ -12,5 +12,5 @@ from __future__ import annotations
 
 from vms.archive import ArchivePolicy, ArchiveResource, Manifest  # noqa: F401
 from vms.resource import vms_resource as cluster_resource, vms_routes  # noqa: F401
-from psimplatform.resource import (PeerClient, Resource, mirror_settings, mirrored_buckets, peers_of,  # noqa: F401
+from w2cplatform.resource import (PeerClient, Resource, mirror_settings, mirrored_buckets, peers_of,  # noqa: F401
                                   resources_seen, serve)

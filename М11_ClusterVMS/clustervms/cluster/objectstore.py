@@ -1,4 +1,4 @@
-"""The cluster's object store — М10's `psimplatform.objects.ObjectStore`
+"""The cluster's object store — М10's `w2cplatform.objects.ObjectStore`
 contract, which holds three small things: worker heartbeats, resource
 heartbeats, and the snapshot the domain's read model is built from.
 
@@ -7,7 +7,7 @@ objects as Nomad Variables under `objects/…`. A heartbeat is ~10 KB every
 ten seconds from a dozen workers and three resources — a couple of raft
 writes a second — which is not the volume the "keep raft small" rule was
 about, and it removes a whole store (MinIO, its quorum, its credentials)
-from the cluster. The contract is the point: `vms/` and `psimplatform/` do
+from the cluster. The contract is the point: `vms/` and `w2cplatform/` do
 not know which one they are talking to. When a cluster grows to where its
 heartbeats are a raft load, `open_store("s3+http://…")` is the same three
 calls against MinIO or S3 (`s3.py`), and that is also the adapter a rented

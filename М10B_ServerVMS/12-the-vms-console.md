@@ -10,7 +10,7 @@
 
 Урок их отдаёт, и в шапке файла сказано, **сколько** для этого нужно:
 
-> *Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the POST/PUT/DELETE of a camera — is `psimplatform.console.SpecConsole` reading `vms.subsystem.yaml`; nothing here knows what a camera's fields are.*
+> *Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the POST/PUT/DELETE of a camera — is `w2cplatform.console.SpecConsole` reading `vms.subsystem.yaml`; nothing here knows what a camera's fields are.*
 
 VMS добавляет к консоли **байты**: кусок видео из архива и таймлайн из манифеста. Плюс дверь в живое видео, которая сама медиа не носит.
 

@@ -32,10 +32,10 @@ import logging
 import os
 import time
 
-from psimplatform.console import holder_of
-from psimplatform.contract import Subsystem
-from psimplatform.objects import ObjectStore
-from psimplatform.variables import Variables
+from w2cplatform.console import holder_of
+from w2cplatform.contract import Subsystem
+from w2cplatform.objects import ObjectStore
+from w2cplatform.variables import Variables
 
 from .archive import ArchiveResource, overlaps, parse, subtract
 from .config import rec_row

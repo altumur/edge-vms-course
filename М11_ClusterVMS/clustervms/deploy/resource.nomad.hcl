@@ -31,7 +31,7 @@ job "resource" {
         volumes      = ["/data/spool:/data/spool", "/data/archive:/data/archive"]
       }
       env {
-        # The runtime's part of the seam (`psimplatform/runtime.py`): the neutral names the loop
+        # The runtime's part of the seam (`w2cplatform/runtime.py`): the neutral names the loop
         # reads, filled here from Nomad's own. This file already knows the orchestrator — the
         # worker must not. A k8s manifest fills the same four from an ordinal and a fieldRef.
         SLOT_INDEX  = "${NOMAD_ALLOC_INDEX}"

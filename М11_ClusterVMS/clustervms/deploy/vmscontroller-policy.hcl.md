@@ -1,6 +1,6 @@
 # vmscontroller-policy.hcl — the ACL policy bound to job `vmscontroller`'s workload identity: the only writer of placement
 
-**Role.** Lesson 2. Applied with `nomad acl policy apply -namespace default -job vmscontroller vmscontroller deploy/vmscontroller-policy.hcl` (`verify-bench.sh` item 5). It is `SPEC.acl_controller()` from `psimplatform/spec.py` (`vms/workers/*`, `vms/placement/*`, `vms/slots/*`) as Nomad HCL, plus the snapshot and the reads. The header comment lists what placement means: which worker runs which camera, a released slot's redistribution, an operator's `retire`, and the snapshot that leaves the cluster. It never writes a camera row — those are the console's (`console-policy.hcl`). Two processes hold the same `VmsController` class; this file is the only thing that makes one of them "the controller".
+**Role.** Lesson 2. Applied with `nomad acl policy apply -namespace default -job vmscontroller vmscontroller deploy/vmscontroller-policy.hcl` (`verify-bench.sh` item 5). It is `SPEC.acl_controller()` from `w2cplatform/spec.py` (`vms/workers/*`, `vms/placement/*`, `vms/slots/*`) as Nomad HCL, plus the snapshot and the reads. The header comment lists what placement means: which worker runs which camera, a released slot's redistribution, an operator's `retire`, and the snapshot that leaves the cluster. It never writes a camera row — those are the console's (`console-policy.hcl`). Two processes hold the same `VmsController` class; this file is the only thing that makes one of them "the controller".
 
 ## Stanza by stanza
 

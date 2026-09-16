@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // The controller as data. A subsystem gives the platform a spec — one YAML
 // file — and the platform runs the controller from it:

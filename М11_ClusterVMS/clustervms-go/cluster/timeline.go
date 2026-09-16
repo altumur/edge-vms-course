@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 	"vmsserver/vms"
 )
 

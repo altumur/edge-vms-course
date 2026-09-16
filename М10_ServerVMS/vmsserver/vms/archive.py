@@ -5,7 +5,7 @@
     <archive>/rec/<cam>/manifest.jsonl             one line per media segment: the index beside the footage
     <archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl
                                                    the camera's EVENT BUCKETS — the platform's event log
-                                                   (psimplatform.events), written by the WORKER holding the
+                                                   (w2cplatform.events), written by the WORKER holding the
                                                    camera, whether or not anything records it; on the
                                                    worker's server, which need not be the recorder's
 
@@ -25,7 +25,7 @@ from the files.
 
 Retention is a policy, per kind. Media is the recorder's: `retain()` after
 the recording row's `retention_days`, files first then lines. Buckets are
-the PLATFORM's (psimplatform.resource): the VMS controller writes
+the PLATFORM's (w2cplatform.resource): the VMS controller writes
 `vms/retention/<cam> {days: events_retention_days}` and the resource job
 deletes the files — events are small and often kept a year where footage
 is kept a month.
@@ -68,7 +68,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from psimplatform.events import EventLog, unit_dir
+from w2cplatform.events import EventLog, unit_dir
 
 SUB = "rec"          # the recorder's tree: media and the manifest
 EVENTS_SUB = "vms"   # the worker's tree: the camera's event buckets

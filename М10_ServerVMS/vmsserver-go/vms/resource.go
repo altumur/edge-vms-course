@@ -1,6 +1,6 @@
 package vms
 
-// The resource process — the platform's resource job (psimplatform.Resource)
+// The resource process — the platform's resource job (w2cplatform.Resource)
 // with the VMS registered on it. One per server, pinned there for as long as
 // the server exists; on a box it is `vms resource`, in М11 the `resource`
 // system job (clustervms-go re-exports NewVmsResource as ClusterResource).
@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // ResourceRoutes: the VMS's reads on the resource, plugged into the platform's server.

@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // The subsystem contract — what the platform knows about any subsystem,
 // and it is all of this:

@@ -10,9 +10,9 @@ import os
 import urllib.error
 import urllib.request
 
-from psimplatform.eventdatabase import EventDatabase, MergedIndex
-from psimplatform.resource import resources_seen, serve as serve_resource
-from psimplatform.spec import SpecController
+from w2cplatform.eventdatabase import EventDatabase, MergedIndex
+from w2cplatform.resource import resources_seen, serve as serve_resource
+from w2cplatform.spec import SpecController
 from vms.archive import ArchiveResource
 from vms.config import DET_SPEC, LIVE_SPEC, SPEC
 from vms.console import serve
@@ -120,8 +120,8 @@ def test_a_torn_last_line_loses_the_line_not_the_bucket():
     for footage: the open thing, not the day. A bucket of ten minutes' observations is
     not thrown away because one record was damaged; the torn line is skipped and
     counted, and the database built over it holds everything that did land."""
-    import psimplatform.events as ev
-    from psimplatform.events import EventLog, read_bucket
+    import w2cplatform.events as ev
+    from w2cplatform.events import EventLog, read_bucket
     from tests.conftest import Box
 
     box = Box()

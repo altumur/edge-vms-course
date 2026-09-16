@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"clustervms/cluster"
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 	"vmsserver/vms"
 )
 

@@ -133,7 +133,7 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     from datetime import datetime, timezone
     from cluster.resource import cluster_resource, resources_seen
     from cluster.timeline import merged_timeline
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from vms.archive import Manifest, Segment, segment_path
     from vms.config import REC_SPEC, live_shm, live_url
     c, ctl, a, act_a = _recording(1)

@@ -43,7 +43,7 @@ class Cluster:
 
     def env(self, index: int, server: str, alloc: str | None = None) -> dict:
         """What a RUNTIME puts in an allocation's environment — the neutral names of
-        `psimplatform.runtime`, which the jobspec fills from Nomad's own. The loop never
+        `w2cplatform.runtime`, which the jobspec fills from Nomad's own. The loop never
         sees a vendor's name; the file that already knows the orchestrator does the mapping."""
         self.allocs += 1
         return {"SLOT_INDEX": str(index), "SERVER_NAME": server,

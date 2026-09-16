@@ -1,6 +1,6 @@
 package cluster
 
-// The cluster's object store — М10's psimplatform.ObjectStore contract, which
+// The cluster's object store — М10's w2cplatform.ObjectStore contract, which
 // holds three small things: worker heartbeats, resource heartbeats, and the
 // snapshot the domain's read model is built from.
 //
@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 type ObjectStore = p.ObjectStore

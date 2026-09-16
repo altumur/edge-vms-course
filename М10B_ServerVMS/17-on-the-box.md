@@ -229,7 +229,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gir1.2-gst-plugins-base-1.0 curl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY psimplatform psimplatform
+COPY w2cplatform w2cplatform
 COPY vms vms
 COPY gstvms gstvms
 ENV PYTHONPATH=/app
@@ -244,7 +244,7 @@ CMD ["python3", "-m", "vms", "worker"]
 
 ```python
     copied = re.findall(r"^COPY (\S+) ", cf, re.M)
-    assert copied == ["psimplatform", "vms", "gstvms"]
+    assert copied == ["w2cplatform", "vms", "gstvms"]
     assert "postgres" not in cf.lower()          # the per-box database is gone (М10 Lesson 1)
 ```
 
@@ -384,6 +384,6 @@ systemctl kill -s KILL vmsrecorder@r-1  # открытый сегмент пот
 
 Модуль закончен. Семнадцать уроков: строка камеры, цикл сверки из М9, воркер, который держит устройство и не пишет его, два элемента GStreamer, архив с двумя деревьями, регистратор, ресурс, консоль, живое видео, детекторы, чужой архив и дозапись из края — и всё это как десять процессов на коробке из М9.
 
-**`psimplatform/` за весь модуль не изменилась ни на строку.** Граница, проведённая в М10A по линии импорта, выдержала четыре подсистемы; тест чистоты зелёный.
+**`w2cplatform/` за весь модуль не изменилась ни на строку.** Граница, проведённая в М10A по линии импорта, выдержала четыре подсистемы; тест чистоты зелёный.
 
 [**М11 — ClusterVMS**](../М11_ClusterVMS/README.md) начинает с того, что коробок несколько: те же контроллеры над Nomad Variables, те же воркеры под планировщиком, тот же ресурс системной задачей на каждом сервере — и автомасштабирование, суммирующее тот самый запас, который воркеры публикуют с урока 4.

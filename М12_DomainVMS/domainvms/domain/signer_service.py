@@ -26,7 +26,7 @@ from .identity import AuthError, IdentityStore
 from .signer import Signer
 from .tokens import RevocationList, verify
 import cluster as _cluster  # noqa: F401  — registers the `nomad://` scheme
-from psimplatform.variables import open_vars
+from w2cplatform.variables import open_vars
 
 
 def main() -> None:

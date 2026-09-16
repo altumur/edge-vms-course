@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // The resource — a platform job, one per server, pinned there for as long
 // as the server exists. It knows the shape of what every subsystem leaves

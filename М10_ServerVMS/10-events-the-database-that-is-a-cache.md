@@ -45,7 +45,7 @@ What the process has that the oneshot could not: a heartbeat, so the console can
 
 ## Step 2 — The event database, which is a cache
 
-`psimplatform/eventdatabase.py` — `EventDatabase(root, server)` — is a SQLite table over one resource's tree: every bucket of every unit of every subsystem under `<root>/`, and every copy under `<root>/.mirror/<server>/` (М11's knob; empty on a box). `rebuild()` truncates and reads the tree; `tail()` reads what is new — a closed bucket once, an open one by the lines past what is held, since a bucket is append-only; `start()` does the first and then the second every three seconds in a thread. A row is `(subsystem, unit, cam, epoch, t, kind, server, bucket, fields)`, where `cam` is a field the event carried or the unit itself when the unit is a number: the database does not know what a camera is, only that a VMS timeline will ask by that column.
+`w2cplatform/eventdatabase.py` — `EventDatabase(root, server)` — is a SQLite table over one resource's tree: every bucket of every unit of every subsystem under `<root>/`, and every copy under `<root>/.mirror/<server>/` (М11's knob; empty on a box). `rebuild()` truncates and reads the tree; `tail()` reads what is new — a closed bucket once, an open one by the lines past what is held, since a bucket is append-only; `start()` does the first and then the second every three seconds in a thread. A row is `(subsystem, unit, cam, epoch, t, kind, server, bucket, fields)`, where `cam` is a field the event carried or the unit itself when the unit is a number: the database does not know what a camera is, only that a VMS timeline will ask by that column.
 
 ```
 resource process:  rebuild -> {added: 2, segments: 2, mirrored: []}       state: live

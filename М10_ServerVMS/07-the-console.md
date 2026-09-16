@@ -31,7 +31,7 @@ The lesson's second half is the claim that made the controller a YAML in Lesson 
 
 ## Step 1 — The console over HTTP
 
-`psimplatform/console.py` — `SpecConsole`, standard library — is М12 Lesson 3's console on one box: reads never touch a worker, writes go through the controller. It is the platform's, not the VMS's, and it runs from the same YAML the controller does; `vms/console.py` is the two routes only a VMS has, `/timeline` and `/segment`, registered as extras.
+`w2cplatform/console.py` — `SpecConsole`, standard library — is М12 Lesson 3's console on one box: reads never touch a worker, writes go through the controller. It is the platform's, not the VMS's, and it runs from the same YAML the controller does; `vms/console.py` is the two routes only a VMS has, `/timeline` and `/segment`, registered as extras.
 
 ```
 GET  /spec                           -> {name: vms, rows: cameras, id: numeric, fields: [...], media: true, metrics: {...}}   what the page reads first
@@ -44,7 +44,7 @@ POST /marks {"cam": 1, "note": …}   -> 201 {subsystem: console, unit: <host:pi
                                         the operator's observation is the CONSOLE's event, never a worker's (Lesson 4, Step 3a)
 GET  /metrics                        -> vms_epoch_conflicts, vms_workers_live, vms_worker_headroom{worker="w-1"} 49,
                                         vms_headroom, vms_worker_load{worker="w-1"} 0.020, vms_cameras_running 1     the autoscaler scrapes this
-GET  /                               -> the page (psimplatform/console.html), built from /spec
+GET  /                               -> the page (w2cplatform/console.html), built from /spec
 DELETE /cameras/1                    -> 200 {deleted: 1}; the row is marked deleted, its assignment goes, its footage stays until retention
 GET  /segment/vms/1/e1/<start>Z.mp4  -> the bytes of one promoted segment, Range honoured — what the page's <video> asks for
 ```
@@ -67,7 +67,7 @@ One thing has to move for that to be true. The `Idempotency-Key` cache was a dic
 
 ## Step 5 — One console for every subsystem
 
-Lessons 7 and 8 add two more subsystems to the box, live video and detectors. **Does each get its own console?** Each gets `SpecConsole` over its YAML for free, and it needs it — `det_worker_headroom` is what the autoscaler moves `N` on, `/det/unplaceable` and `/det/where` are what an operator of the platform asks — but it does not get a *screen*, because the person's world is cameras: nobody configures "detector d-3", they open camera 7 and add a model to it. So the VMS console **mounts** the other subsystems it fronts: `psimplatform.console.Mount` runs the VMS's `SpecConsole` at `/` and every other one under its name — `/live/spec`, `/det/units`, `/det/where/7-linecross`, `/det/metrics` — each the same class over its own YAML, all with the console's token, which now carries the operator's rows of every subsystem it fronts (`SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()`). One process, one port, one page: the camera's edit panel grows a *Detectors* section that lists this camera's models with the worker's word on each (running · 2 events · d-2), adds one with `POST /det/units {name: "7-linecross", cam, kind, params}`, and enables, disables or deletes it through `/det/units/<name>`. `GET /mounts` says what the process fronts. A new subsystem is a YAML, a worker, and a path.
+Lessons 7 and 8 add two more subsystems to the box, live video and detectors. **Does each get its own console?** Each gets `SpecConsole` over its YAML for free, and it needs it — `det_worker_headroom` is what the autoscaler moves `N` on, `/det/unplaceable` and `/det/where` are what an operator of the platform asks — but it does not get a *screen*, because the person's world is cameras: nobody configures "detector d-3", they open camera 7 and add a model to it. So the VMS console **mounts** the other subsystems it fronts: `w2cplatform.console.Mount` runs the VMS's `SpecConsole` at `/` and every other one under its name — `/live/spec`, `/det/units`, `/det/where/7-linecross`, `/det/metrics` — each the same class over its own YAML, all with the console's token, which now carries the operator's rows of every subsystem it fronts (`SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()`). One process, one port, one page: the camera's edit panel grows a *Detectors* section that lists this camera's models with the worker's word on each (running · 2 events · d-2), adds one with `POST /det/units {name: "7-linecross", cam, kind, params}`, and enables, disables or deletes it through `/det/units/<name>`. `GET /mounts` says what the process fronts. A new subsystem is a YAML, a worker, and a path.
 
 ```
 GET /mounts          -> {root: vms, mounts: {live: {rows: streams, id: cam, …}, det: {rows: units, id: name, …}}}

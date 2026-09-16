@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // The console as data — the other half of spec.go. A subsystem's YAML already
 // says what its units are, which fields the operator owns and what leaves the

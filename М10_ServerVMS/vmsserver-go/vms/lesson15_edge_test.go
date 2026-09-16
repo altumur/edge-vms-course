@@ -30,9 +30,9 @@ import (
 	"testing"
 	"time"
 
-	p "vmsserver/psimplatform"
 	"vmsserver/testbox"
 	"vmsserver/vms"
+	p "vmsserver/w2cplatform"
 )
 
 const (

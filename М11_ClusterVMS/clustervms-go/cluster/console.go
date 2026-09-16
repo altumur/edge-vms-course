@@ -7,11 +7,11 @@ package cluster
 //
 //	GET /timeline/<id>               merged across the resources that hold the camera's RECORDING (rec/<cam>); unreachable ones named
 //	GET /segment/<path>?server=<s>   the bytes of one segment, fetched from THAT server's resource job (Range passed through)
-//	/rec/spec, /rec/recordings, …    the recorder mounted under its name (psimplatform.Mount): the page's Record toggle POSTs here
+//	/rec/spec, /rec/recordings, …    the recorder mounted under its name (w2cplatform.Mount): the page's Record toggle POSTs here
 //
 // The rest — the page, /spec, /cameras, /where (one scan of the assignments),
 // /resources, /servers, /policy, /unplaceable, /events, /metrics, /marks, POST/PUT/DELETE — is
-// psimplatform.SpecConsole reading vms.subsystem.yaml. The recorder's console
+// w2cplatform.SpecConsole reading vms.subsystem.yaml. The recorder's console
 // at /rec/… is the same type over rec.subsystem.yaml and no extra.
 
 import (
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // ConsoleOptions: the pieces a cluster console may have beside its controller.

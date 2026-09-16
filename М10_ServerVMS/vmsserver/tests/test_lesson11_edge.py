@@ -16,7 +16,7 @@ import os
 import time
 import urllib.request
 
-from psimplatform.spec import SpecController
+from w2cplatform.spec import SpecController
 from datetime import datetime, timezone
 
 from vms.archive import ArchiveResource, Manifest, Segment, segment_path, subtract

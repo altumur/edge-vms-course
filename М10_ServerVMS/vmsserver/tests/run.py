@@ -13,7 +13,7 @@ import sys
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import psimplatform  # noqa: E402,F401
+import w2cplatform  # noqa: E402,F401
 
 try:
     import pydantic  # noqa: F401

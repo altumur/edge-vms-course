@@ -101,8 +101,8 @@ def test_events_are_buckets_on_the_resource_recording_or_not():
     resource's event database indexes the buckets; each is retained by its own
     policy. No controller wrote any of it."""
     from vms.archive import event_log
-    from psimplatform.events import parse_bucket, read_bucket, subsystems_under
-    from psimplatform.eventdatabase import EventDatabase
+    from w2cplatform.events import parse_bucket, read_bucket, subsystems_under
+    from w2cplatform.eventdatabase import EventDatabase
     box = Box(); res = ArchiveResource(box.spool, box.archive, wall=lambda: box.wall())
     t0 = utc("2026-09-12T10:00:00").timestamp()
     box.wall.t = t0 + 2000
@@ -122,7 +122,7 @@ def test_events_are_buckets_on_the_resource_recording_or_not():
     assert [(x["media"] is not None, x["epoch"], x["fenced"]) for x in tl] == [(True, 4, False)]
     assert subsystems_under(box.archive) == {"rec": ["7"], "vms": ["7"]}         # two trees, two writers, one camera
     # repair rebuilds the manifest from the files; media retention is the recorder's, bucket retention the platform's
-    from psimplatform.resource import Resource
+    from w2cplatform.resource import Resource
     os.remove(Manifest(box.archive, 7).path)
     assert res.repair() == {"added": 1, "dropped": 0}
     assert res.retain(7, days=1, now=t0 + 3 * 86400) == 1 and Manifest(box.archive, 7).read() == []

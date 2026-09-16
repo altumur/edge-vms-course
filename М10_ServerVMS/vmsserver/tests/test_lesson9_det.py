@@ -9,9 +9,9 @@ import os
 import urllib.error
 import urllib.request
 
-from psimplatform.events import read_bucket, subsystems_under
-from psimplatform.spec import SpecController
-from psimplatform.variables import Forbidden
+from w2cplatform.events import read_bucket, subsystems_under
+from w2cplatform.spec import SpecController
+from w2cplatform.variables import Forbidden
 from vms.config import DET_SPEC, LIVE_SPEC, SPEC
 from vms.controller import VmsController
 from vms.detector import DetWorker, FakeModel

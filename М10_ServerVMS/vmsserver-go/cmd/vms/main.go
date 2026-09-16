@@ -5,7 +5,7 @@
 //	SHM_DIR=/run/vms                 the worker's shared-memory fan-out branch, read by a recorder on this box
 //	CONFIG_URL                       the store, as a URL: file://<PLATFORM_DIR>/config by default — in-process,
 //	                                 no daemon, no hop. nomad://host:port in a cluster, k8s://ns/prefix at a k8s
-//	                                 site; no loop in this binary names an orchestrator (psimplatform/runtime.go)
+//	                                 site; no loop in this binary names an orchestrator (w2cplatform/runtime.go)
 //	WORKER_NAME=w-1 / RECORDER_NAME=r-1   the slot to claim (systemd: %i); unset: SLOT_INDEX → w-<index>;
 //	                                 neither: the first free slot, a lapsed one first
 //	CAPACITY=50                      cameras this worker can hold (a recorder: recordings it can write) — exported as headroom
@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	p "vmsserver/psimplatform"
 	"vmsserver/vms"
+	p "vmsserver/w2cplatform"
 )
 
 func env(k, def string) string {

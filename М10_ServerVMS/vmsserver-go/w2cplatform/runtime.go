@@ -18,7 +18,7 @@
 // The index is a PREFERENCE, never proof: whatever a runtime says, the slot is
 // still taken by CAS, and a runtime that hands the same index twice loses the
 // second claim rather than corrupting the first.
-package psimplatform
+package w2cplatform
 
 import (
 	"os"

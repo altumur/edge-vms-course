@@ -448,7 +448,7 @@ Mount(cameras).mount("rec", rec).mount("det", det).mount("an", an).serve(port=80
 ## Результат
 
 ```python
-from psimplatform.console import SpecConsole, Mount
+from w2cplatform.console import SpecConsole, Mount
 
 root = SpecConsole(SpecController(ticks_spec, vars_, objects), marks_root="/srv/archive")
 srv  = Mount(root).serve(port=0)

@@ -8,8 +8,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from psimplatform.objects import FsObjectStore  # noqa: E402
-from psimplatform.variables import FileVariables  # noqa: E402
+from w2cplatform.objects import FsObjectStore  # noqa: E402
+from w2cplatform.variables import FileVariables  # noqa: E402
 
 
 class Clock:

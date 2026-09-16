@@ -5,7 +5,7 @@
 ```
 vmsserver-go/
   go.mod                       module vmsserver; standard library only
-  psimplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
+  w2cplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
     variables.go               Variables: the interface (Get/Put/List/Delete) over an OPAQUE Index, FileVariables (one box, files, flock),
                                and the seam — OpenVars(url, writer, acl) + RegisterScheme, so a process is told CONFIG_URL and nothing else
     runtime.go                 what a runtime hands a process, under neutral names: <ROLE>_NAME, SLOT_INDEX, SERVER_NAME, LABELS, INSTANCE_ID
@@ -41,7 +41,7 @@ vmsserver-go/
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
     console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> (ours, and the device's
                                in the holes), /segment/<path> with Range, /segment?cam (the holder's door, named not proxied), POST /backfill;
-                               the recorder mounted at /rec/… (psimplatform.Mount)
+                               the recorder mounted at /rec/… (w2cplatform.Mount)
     resource.go                the resource process: NewVmsResource — the platform's Resource with the recorder's ArchivePolicy registered and an EventDatabase attached; ResourceRoutes
                                (/manifest, /segment) — the same function clustervms-go runs as the resource job
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
@@ -53,7 +53,7 @@ vmsserver-go/
 
 ```bash
 go test ./...                    # 65 tests, ~500 ms
-CONTRACT_URL=nomad://127.0.0.1:4646 go test ./psimplatform -run Contract   # the same contract, another backend
+CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract   # the same contract, another backend
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```
@@ -81,7 +81,7 @@ Not here, and not in the Python either: the GStreamer actuator and `archivesink`
 Both ports keep the same three seams, because a seam in one language and not the other is not a seam:
 
 - **the store is a URL** — `p.OpenVars(url, writer, acl)` with `p.RegisterScheme`; `cmd/vms` reads `CONFIG_URL` (default `file://<PLATFORM_DIR>/config`) in one helper, so the seven direct `NewFileVariables` constructions are down to the one in `testbox` — a test box, honestly the file backend;
-- **the environment has neutral names** — `psimplatform/runtime.go`: `<ROLE>_NAME`, `SLOT_INDEX`, `SERVER_NAME`, `LABELS`, `INSTANCE_ID`. No `NOMAD_*` is read anywhere in the loop; a jobspec or a manifest maps into these;
+- **the environment has neutral names** — `w2cplatform/runtime.go`: `<ROLE>_NAME`, `SLOT_INDEX`, `SERVER_NAME`, `LABELS`, `INSTANCE_ID`. No `NOMAD_*` is read anywhere in the loop; a jobspec or a manifest maps into these;
 - **the index is opaque** — and in Go the compiler is the one enforcing it. `Index` is a comparable struct with no arithmetic on it, so the mistake Kubernetes' string `resourceVersion` punishes cannot be written.
 
-`psimplatform/variables_contract_test.go` is what turns that into a claim: ten tests in five clauses, driven against the file store, against an in-memory store whose version is `rv-<n>`, and — through `CONTRACT_URL` — against any backend a site actually has. The last of them drives the real CAS loops (`NextEpoch`, `ClaimSlot`, `ReleaseSlot`) over the non-numeric store, which is where an ordering or an increment would show.
+`w2cplatform/variables_contract_test.go` is what turns that into a claim: ten tests in five clauses, driven against the file store, against an in-memory store whose version is `rv-<n>`, and — through `CONTRACT_URL` — against any backend a site actually has. The last of them drives the real CAS loops (`NextEpoch`, `ClaimSlot`, `ReleaseSlot`) over the non-numeric store, which is where an ordering or an increment would show.

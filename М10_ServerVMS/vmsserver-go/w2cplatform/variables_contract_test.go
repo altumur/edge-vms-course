@@ -7,7 +7,7 @@
 //
 // Run against another backend by pointing CONTRACT_URL at it:
 //
-//	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./psimplatform -run Contract
+//	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract
 //
 // The contract, in five clauses:
 //
@@ -18,7 +18,7 @@
 //  5. the Index is OPAQUE. It is compared for equality and nothing else, because
 //     Kubernetes' resourceVersion is a string and arithmetic on it is meaningless.
 //     Clause 5 is the one that quietly decides whether the k8s backend is possible.
-package psimplatform_test
+package w2cplatform_test
 
 import (
 	"errors"
@@ -30,7 +30,7 @@ import (
 	"sync"
 	"testing"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // The backend under test: this box's files by default, whatever CONTRACT_URL says otherwise.

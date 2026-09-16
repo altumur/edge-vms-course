@@ -10,7 +10,7 @@ package vms
 //	POST /backfill                an operator asking for a range: the recorder fetches it next pass
 //
 // Everything else — the page, /spec, /cameras, /where, /marks, /metrics, the
-// POST/PUT/DELETE of a camera — is psimplatform.SpecConsole reading
+// POST/PUT/DELETE of a camera — is w2cplatform.SpecConsole reading
 // vms.subsystem.yaml; nothing here knows what a camera's fields are. The
 // recorder is mounted under its name — /rec/spec, /rec/recordings (the
 // page's Record toggle), /rec/metrics — the same class over rec.subsystem.yaml.
@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 // DevicePlayback: the door of whoever holds this camera right now, or "". No

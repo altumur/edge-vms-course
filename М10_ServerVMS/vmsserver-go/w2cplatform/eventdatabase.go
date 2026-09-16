@@ -1,4 +1,4 @@
-package psimplatform
+package w2cplatform
 
 // eventdatabase — the event "database", which is a cache. Part of the
 // resource job: one per RESOURCE, over that resource's own tree — its

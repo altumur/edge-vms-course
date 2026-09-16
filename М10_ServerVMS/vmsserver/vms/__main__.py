@@ -73,8 +73,8 @@ import signal
 import sys
 import threading
 
-from psimplatform.objects import FsObjectStore
-from psimplatform.variables import open_vars
+from w2cplatform.objects import FsObjectStore
+from w2cplatform.variables import open_vars
 
 from .archive import ArchiveResource
 from .controller import VmsController
@@ -82,7 +82,7 @@ from .worker import FakeActuator, VmsWorker
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(levelname)s %(message)s")
 root = os.environ.get("PLATFORM_DIR", "/data/platform")
-# The store seam: a process is told a URL and nothing else (`psimplatform.variables.open_vars`). On a box
+# The store seam: a process is told a URL and nothing else (`w2cplatform.variables.open_vars`). On a box
 # this is `file://` — in-process, no daemon, no hop. `CONFIG_URL=nomad://…` in a cluster, `k8s://…` later;
 # not one of those names appears in the loop.
 CONFIG_URL = os.environ.get("CONFIG_URL") or "file://" + os.path.join(root, "config")
@@ -106,7 +106,7 @@ for s in (signal.SIGTERM, signal.SIGINT):
 #   releases the slot on the way out, so SIGTERM is an orderly stop (scale-in), while a kill leaves the slot
 #   to lapse.
 def worker() -> None:
-    from psimplatform import runtime
+    from w2cplatform import runtime
     name = runtime.slot(os.environ, "WORKER_NAME", "w")
     vars_ = open_vars(CONFIG_URL, writer="vmsworker", acl={"vmsworker": ["vms/epoch/*", "vms/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
@@ -167,7 +167,7 @@ def recorder() -> None:
 def reccontroller() -> None:
     """The fourth subsystem's controller: the platform's class from rec.subsystem.yaml, placing recordings on
     recorders — one per server, where the archive is. No code of its own."""
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from .config import REC_SPEC
     vars_ = open_vars(CONFIG_URL, writer="reccontroller", acl={"reccontroller": REC_SPEC.acl_controller()})
     _controller_loop(SpecController(REC_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
@@ -175,7 +175,7 @@ def reccontroller() -> None:
 
 # Builds `vmscontroller` and runs the placement pass every 5 s:
 # - Variables as writer `vmscontroller` with `SPEC.acl_controller()` — `vms/workers/*`, `vms/placement/*`,
-#   `vms/slots/*`; never a camera's row (see `psimplatform/spec.py`).
+#   `vms/slots/*`; never a camera's row (see `w2cplatform/spec.py`).
 # - `VmsController(vars_, objects, capacity=$CAPACITY)`.
 # - Each pass: `ensure_placed()` (deleted rows unplaced first, then every unplaced camera onto the workers
 #   it currently sees by their heartbeats), `redistribute()` (only the cameras of a *released* slot —
@@ -206,7 +206,7 @@ def controller() -> None:
 def livecontroller() -> None:
     """The second subsystem's controller: the platform's class from live.subsystem.yaml, placing fan-outs on
     gateways by viewer headroom. No code of its own."""
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from .config import LIVE_SPEC
     vars_ = open_vars(CONFIG_URL, writer="livecontroller", acl={"livecontroller": LIVE_SPEC.acl_controller()})
     _controller_loop(SpecController(LIVE_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
@@ -215,7 +215,7 @@ def livecontroller() -> None:
 def detcontroller() -> None:
     """The third subsystem's controller: the platform's class from det.subsystem.yaml, placing models on
     GPU-labelled detector workers by stream headroom. No code of its own."""
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from .config import DET_SPEC
     vars_ = open_vars(CONFIG_URL, writer="detcontroller", acl={"detcontroller": DET_SPEC.acl_controller()})
     _controller_loop(SpecController(DET_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
@@ -235,7 +235,7 @@ def detworker() -> None:
 def gateway() -> None:
     """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from .config import LIVE_SPEC
     from .gateway import LiveGateway
     vars_ = open_vars(CONFIG_URL, writer="livegateway",
@@ -269,7 +269,7 @@ def console() -> None:
     token for the operator's rows and nothing else."""
     from .config import SPEC
     from .console import serve
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from .config import DET_SPEC, LIVE_SPEC, REC_SPEC
     vars_ = open_vars(CONFIG_URL, writer="vmsconsole",
                           acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
@@ -301,7 +301,7 @@ def resource() -> None:
     heartbeat, its HTTP, and the event database over its own tree."""
     import socket
     import time
-    from psimplatform.resource import serve
+    from w2cplatform.resource import serve
     from .resource import vms_resource, vms_routes
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     vars_ = open_vars(CONFIG_URL)

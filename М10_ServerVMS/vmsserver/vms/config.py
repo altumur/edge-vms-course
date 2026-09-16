@@ -41,7 +41,7 @@ here is controller-derived status — that is in the worker's heartbeat.
 #   imported lazily inside `load`, so this is the one import in the VMS that needs it.
 # - `OPERATOR_FIELDS` — `tuple(SPEC.fields)`: the field names the operator owns (`name, source, enabled,
 #   retention_days, events_retention_days, priority, labels, ref`), in YAML order.
-# - `FORBIDDEN_FIELDS` — an alias of `psimplatform.spec.PLATFORM_FIELDS` (`worker, placement, epoch,
+# - `FORBIDDEN_FIELDS` — an alias of `w2cplatform.spec.PLATFORM_FIELDS` (`worker, placement, epoch,
 #   revision, observed_revision, phase, id`): what `SubsystemSpec.refuse` rejects in a create/update body.
 #   Kept under the VMS's old name for readers of earlier lessons.
 #
@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import os
 
-from psimplatform.spec import PLATFORM_FIELDS, SubsystemSpec
+from w2cplatform.spec import PLATFORM_FIELDS, SubsystemSpec
 
 SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vms.subsystem.yaml"))
 LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.subsystem.yaml"))   # the second subsystem: live fan-outs

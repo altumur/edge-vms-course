@@ -6,7 +6,7 @@ resource's `GET /events` and merges the answers by time (`MergedIndex`), on
 one box and on a cluster alike.
 
 Events are observations: written by the worker that holds a unit's epoch,
-into that unit's bucket on its server's resource (psimplatform.events). The
+into that unit's bucket on its server's resource (w2cplatform.events). The
 database is a SQLite table the resource job can rebuild entirely by
 re-reading its tree. It knows which subsystems exist by the directories it
 finds; a new one is indexed the pass after it starts writing, with no change
@@ -182,7 +182,7 @@ class EventDatabase:
                 try:
                     self.tail()
                 except Exception:                                             # noqa: BLE001
-                    logging.getLogger("psimplatform.eventdatabase").exception("event database tail failed")
+                    logging.getLogger("w2cplatform.eventdatabase").exception("event database tail failed")
         threading.Thread(target=loop, daemon=True).start()
         return self
 

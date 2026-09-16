@@ -9,7 +9,7 @@ package vms
 import (
 	"strconv"
 
-	p "vmsserver/psimplatform"
+	p "vmsserver/w2cplatform"
 )
 
 var VMS = Spec.Sub()

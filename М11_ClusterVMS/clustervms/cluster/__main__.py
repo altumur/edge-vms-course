@@ -7,7 +7,7 @@
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
                                        s3+http://… when a cluster is large enough to want MinIO; file:///path on a bench
     SLOT_INDEX, SERVER_NAME, LABELS    worker, recorder: the slot to claim (w-<i>, r-<i>), the server, what it can reach —
-                                       neutral names (`psimplatform/runtime.py`); the jobspec maps NOMAD_ALLOC_INDEX,
+                                       neutral names (`w2cplatform/runtime.py`); the jobspec maps NOMAD_ALLOC_INDEX,
                                        node.unique.name and meta.labels into them, a k8s manifest the ordinal and a fieldRef
     ARCHIVE                            worker: where its events go (the resource on its server); recorder and resource: the same disks
     SPOOL                              recorder: where its pipelines write before promotion
@@ -25,8 +25,8 @@ import threading
 import time
 
 import cluster  # noqa: F401  — puts М10's vmsserver on sys.path
-from psimplatform import runtime
-from psimplatform.variables import open_vars
+from w2cplatform import runtime
+from w2cplatform.variables import open_vars
 
 # The store seam. `nomad://` is registered by `cluster/variables.py`; the default keeps the
 # cluster working with no new environment, and a k8s site changes this one variable.
@@ -75,7 +75,7 @@ def recorder() -> None:
 def reccontroller() -> None:
     """count = 1, the only writer of rec placement: which recorder writes which camera's footage, where the
     resource answers, one recorder per server by default (rec/policy)."""
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from vms.config import REC_SPEC
     ctl = SpecController(REC_SPEC, open_vars(CONFIG_URL), objects, capacity=int(os.environ.get("CAPACITY", "50")))
     while not stop.is_set():
@@ -105,7 +105,7 @@ def console() -> None:
     pass. No event database of its own: /events asks the live resources and merges."""
     from cluster.console import serve
     from cluster.controller import ClusterController
-    from psimplatform.spec import SpecController
+    from w2cplatform.spec import SpecController
     from vms.config import REC_SPEC
     vars_ = open_vars(CONFIG_URL)
     ctl = ClusterController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")),
@@ -121,7 +121,7 @@ def resource() -> None:
     """М10's resource process as a job: the platform's Resource with the VMS registered on it, and the event database over its own tree."""
     from vms.archive import ArchiveResource
     from cluster.resource import cluster_resource, vms_routes
-    from psimplatform.resource import serve
+    from w2cplatform.resource import serve
     arch = ArchiveResource(spool, archive)
     server = runtime.server(os.environ)
     url = os.environ.get("RESOURCE_URL", f"http://{server}:8090")
