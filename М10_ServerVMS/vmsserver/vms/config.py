@@ -61,6 +61,7 @@ SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)
 LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.subsystem.yaml"))   # the second subsystem: live fan-outs
 DET_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "det.subsystem.yaml"))     # the third: detectors
 REC_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rec.subsystem.yaml"))     # the fourth: recorders, on the archive
+PLAYBACK_PORT = 8083     # the holder's playback surface: HTTP, because a browser must be able to seek it
 LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's loopback: the RTSP fan-out's one subscriber (gstvms/livesrv.py)
 SHM_DIR = "/run/vms"         # the tee's shared-memory branch: <SHM_DIR>/<cam>.shm — a subscriber on the SAME server reads it (shmsrc), no RTSP hop
 RTSP_PORT = 8554             # the worker's RTSP fan-out: rtsp://<server>:8554/<cam> — what a recorder, a gateway, a detector subscribe to
@@ -69,6 +70,36 @@ RTSP_PORT = 8554             # the worker's RTSP fan-out: rtsp://<server>:8554/<
 def live_shm(cid, shm_dir: str = SHM_DIR) -> str:
     """The camera's shared-memory socket on its worker's server: the local fast path (shm:// scheme)."""
     return f"shm://{shm_dir}/{cid}.shm"
+
+
+def device_of(source: str) -> str:
+    """The thing DriverPack connects to. Cameras sharing it share one session:
+    `driverpack://acme/10.0.0.50/ch/17` and `…/ch/18` are two channels of one NVR;
+    a camera with an SD card is a device with one channel. Pure parsing — the
+    vendor's own addressing stays opaque, only the grouping is ours."""
+    from urllib.parse import urlsplit
+    u = urlsplit(source)
+    if u.scheme != "driverpack":
+        return source
+    parts = [p for p in u.path.split("/") if p]
+    if u.netloc == "file":
+        return "file/" + parts[0] if parts else "file"
+    return f"{u.netloc}/{parts[0]}" if parts else u.netloc
+
+
+def channel_of(source: str) -> str | None:
+    """`driverpack://<vendor>/<host>/ch/<n>` -> "<n>"; None when the device has one channel."""
+    from urllib.parse import urlsplit
+    u = urlsplit(source)
+    parts = [p for p in u.path.split("/") if p]
+    return parts[2] if u.netloc != "file" and len(parts) >= 3 and parts[1] == "ch" else None
+
+
+def playback_url(server: str, cid) -> str:
+    """Where a camera's OWN archive is served from — the holder's playback surface.
+    HTTP, not the RTSP fan-out: a browser has to seek inside it, and the recorder
+    fetches ranges from the same door."""
+    return f"http://{server}:{PLAYBACK_PORT}/playback/{cid}"
 
 
 def live_url(server: str, cid) -> str:

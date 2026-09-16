@@ -17,7 +17,7 @@ unit:
   # carrying `id` is refused (it is a platform field). `parse_id` turns the URL's last segment into an
   # `int`; sort order is numeric.
   id: numeric                        # vms/next_id
-  # the operator's eight fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
+  # the operator's nine fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
   # `PLATFORM_FIELDS`; `new_row` applies the defaults; `row()`/`items()` convert by type; `/spec` sends
   # `{name, type, default, required}` for each so the page builds its forms without knowing the VMS.
   fields:
@@ -47,6 +47,11 @@ unit:
     # the name a layer above (М12) knows the camera by; the worker copies it into each status entry, and it
     # leaves the cluster in the snapshot.
     ref:                   {type: string}                     # the name a layer above knows it by (М12)
+    # `always` (the default) or `on-demand`. A channel of an NVR kept only for its archive needs no live
+    # pipeline: the worker still HOLDS the device — its session, its playback, its coverage — and reports the
+    # camera as `held`. Thirty-two channels imported for their footage would otherwise be thirty-two streams
+    # nobody watches.
+    live:                  {type: string, default: "always"}  # always | on-demand
   # rows the platform keeps beside the unit (`SpecController._derived`).
   derived:
     - row: retention/{id}            # vms/retention/<id> {days}: what the platform's resource job retains buckets by
@@ -83,7 +88,7 @@ placement:
 # `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the
 # copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller
 # pass.
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 console:
   # the name of the running gauge: `metrics_text()` emits `vms_cameras_running <n>` for status entries in
   # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_running 1`); `/spec`

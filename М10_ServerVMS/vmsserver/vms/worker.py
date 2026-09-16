@@ -85,15 +85,19 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
+from psimplatform.console import SendMixin
 from psimplatform.contract import Subsystem, Worker
 from psimplatform.objects import ObjectStore
 from psimplatform.variables import Variables
 
 from psimplatform.events import EventLog
 
-from .config import SHM_DIR, live_shm, live_url, row
+from .config import PLAYBACK_PORT, SHM_DIR, channel_of, device_of, live_shm, live_url, playback_url, row
 from .reconciler import CONVERGED, Reconciler
 
 log = logging.getLogger("vmsworker")
@@ -105,6 +109,50 @@ VMS = Subsystem("vms")
 # `failing` (a set of camera ids, or a predicate, whose start fails), `calls` (every `(verb, id)`),
 # `running` (ids started and not stopped), `epochs` (`{id: epoch}` as passed in the row at start), `dead`
 # and `posted` (what tests push in to simulate a bus).
+# What DriverPack connects to, without DriverPack: N channels, an archive of its own, a session budget.
+# A camera with an SD card is a device with one channel; an NVR is a device with thirty-two. The real one
+# is a DriverPack session; this one is what the tests hold.
+class FakeDevice:
+    """A held device: its channels, its own footage, and how many playbacks it allows at once."""
+
+    def __init__(self, key: str, channels=(), coverage=None, max_playbacks: int = 2, bps: int = 1):
+        self.key, self._channels = key, [str(c) for c in channels]
+        self._coverage = {str(k): v for k, v in (coverage or {}).items()}   # camera -> (from, to[, fragments])
+        self.max_playbacks, self.bps = max_playbacks, bps
+        self.open: dict[str, tuple] = {}
+        self.fetched: list[tuple] = []
+
+    def channels(self) -> list[str]:
+        return list(self._channels)
+
+    # The summary the holder puts in its heartbeat — not the index. Drawing a timeline must not
+    # cost a session, and on a device that allows two of them, it must not cost a request either.
+    def coverage(self, cam) -> dict | None:
+        c = self._coverage.get(str(cam))
+        return None if c is None else {"from": c[0], "to": c[1], "fragments": c[2] if len(c) > 2 else 0}
+
+    def in_use(self) -> int:
+        return len(self.open)
+
+    def open_playback(self, cam, t0: float, t1: float) -> str:
+        if len(self.open) >= self.max_playbacks:
+            raise OverflowError(f"device {self.key}: {self.max_playbacks} playback sessions, all in use")
+        sid = f"{cam}:{t0}:{len(self.fetched)}:{len(self.open)}"
+        self.open[sid] = (str(cam), t0, t1)
+        return sid
+
+    def read(self, sid: str) -> bytes:
+        cam, t0, t1 = self.open[sid]
+        self.fetched.append((cam, t0, t1))
+        return b"\x00" * max(1, int((t1 - t0) * self.bps))
+
+    def close_playback(self, sid: str) -> None:
+        self.open.pop(sid, None)
+
+    def close(self) -> None:
+        self.open.clear()
+
+
 class FakeActuator:
     """М9 Lesson 6's print(), with a memory. `failing` is a set of camera ids
     (or a predicate) whose start fails."""
@@ -116,6 +164,7 @@ class FakeActuator:
         self.epochs: dict[int, int] = {}
         self.dead: list[int] = []
         self.posted: list[tuple[int, str, dict]] = []
+        self.fetched: list[tuple] = []                   # what `record_range` was asked for
         self.started: dict[int, dict] = {}
 
     # Records the call. `stop` always succeeds and removes the id. A start/restart on a failing id fails
@@ -151,6 +200,26 @@ class FakeActuator:
         self.posted.append((cid, kind, fields))
 
     # Clears `running`.
+    # Fetch a range out of a device's own archive and write it as segments in the spool, the way a live
+    # recording is written — the only difference is where the bytes came from. The real one is a pipeline on
+    # the holder's playback door; this one writes the files so the ordering and the manifest can be tested.
+    def record_range(self, cam, source: str, epoch: int, t0: float, t1: float, spool: str, seg: int = 600) -> list[str]:
+        import os
+        from datetime import datetime, timezone
+        from .archive import segment_path
+        out = []
+        t = t0
+        while t < t1:
+            end = min(t + seg, t1)
+            p = segment_path(spool, int(cam), epoch, datetime.fromtimestamp(t, timezone.utc).replace(microsecond=0))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"\x00" * 16)
+            os.utime(p, (end, end))                      # the segment ends where it ends: `promote` reads mtime
+            out.append(p); self.fetched.append((str(cam), t, end, source))
+            t = end
+        return out
+
     def stop_all(self) -> None:
         self.running.clear()
 
@@ -204,7 +273,8 @@ class VmsWorker(Worker):
     def __init__(self, name: str | None, vars_: Variables, objects: ObjectStore, actuator=None,
                  lease_ttl: float = 30.0, lease_margin: float = 5.0, clock=time.monotonic, wall=time.time,
                  server: str | None = None, capacity: int | None = None, instance: str | None = None, slot_ttl: float = 45.0,
-                 archive_root: str | None = None, bucket_seconds: int = 600, env: dict | None = None):
+                 archive_root: str | None = None, bucket_seconds: int = 600, env: dict | None = None,
+                 device_factory=None):
         env = dict(os.environ if env is None else env)
         instance = instance or env.get("NOMAD_ALLOC_ID") or None
         super().__init__(self.SUB, None, vars_, objects, lease_ttl, lease_margin, clock, wall, instance, slot_ttl)
@@ -216,6 +286,10 @@ class VmsWorker(Worker):
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
         self.actuator = actuator or FakeActuator()
         self.rows: list[dict] = []
+        # One session per DEVICE, not per channel. `device_factory(key)` opens it — a DriverPack session on
+        # a box, a `FakeDevice` in the tests, `None` for a source with no archive of its own (a file).
+        self.device_factory = device_factory or (lambda key: None)
+        self.devices: dict[str, object] = {}
         self.assignment_rev = 0
         self.reconciler = Reconciler(self, self._actuate)
         self.recording_allowed = True
@@ -238,7 +312,11 @@ class VmsWorker(Worker):
     # -- the store, as the reconciler sees it ------------------------------------
     # The reconciler's store: `self.rows`.
     def desired(self) -> list[dict]:
-        return self.rows
+        """What the reconciler runs. A row with `live: on-demand` is NOT here: its device is
+        still held (see `_refresh_devices`) and its archive still served, but no pipeline is
+        built for it. Holding the device is what the row buys; the live fan-out is what `live`
+        asks for."""
+        return [r for r in self.rows if r.get("live", "always") != "on-demand"]
 
     # Read the assignment (`assignment_rev` kept for the heartbeat) and, for each unit it names, the row
     # `vms/cameras/<id>`; rows that are missing or marked `deleted: "true"` are skipped. "A fresh worker
@@ -255,6 +333,25 @@ class VmsWorker(Worker):
             if items and items.get("deleted") != "true":
                 rows.append(self.parse_row(items))
         self.rows = rows
+        self._refresh_devices()
+
+    # One connection per device, however many of its channels are assigned: an NVR with thirty-two cameras
+    # is one session, not thirty-two — the same argument as "one connection to the camera" (Lesson 4), a
+    # level up. A device no row names any more is closed.
+    def _refresh_devices(self) -> None:
+        want = {device_of(r["source"]) for r in self.rows if r.get("source")}   # a recorder's rows name none
+        for key in want - set(self.devices):
+            dev = self.device_factory(key)
+            if dev is not None:
+                self.devices[key] = dev
+        for key in set(self.devices) - want:
+            dev = self.devices.pop(key)
+            if hasattr(dev, "close"):
+                dev.close()
+
+    # The device a camera is a channel of, and the device object if it is held.
+    def device_of_row(self, cam: dict):
+        return self.devices.get(device_of(cam["source"])) if cam.get("source") else None
 
     # -- the gate ---------------------------------------------------------------
     # The gate between the reconciler and the real actuator. For `start`/`restart`: refuse if the instance
@@ -399,12 +496,58 @@ class VmsWorker(Worker):
             out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam.get("name", str(cid)), "enabled": cam["enabled"], "phase": phase, "position": pos,
                         "revision": cam["revision"], "observed_revision": self.reconciler.actual.get(cid, {}).get("revision", 0),
                         "epoch": self.epochs.get(str(cid), 0), **self.status_extra(cam)})
+        for cam, st in zip(self.rows, out):                # `held`: the device is on the line, no stream is built
+            if cam.get("live", "always") == "on-demand" and st["phase"] != "running":
+                st["phase"] = "held" if self.device_of_row(cam) is not None else "pending"
         return out
+
+    # What each held device is, and what it has that we have not imported. Discovery is an OBSERVATION and
+    # goes where observations go: this worker's token writes `vms/epoch/*` and `vms/slots/*`, never
+    # `vms/cameras/*`. The operator imports channels from the page, with their own token.
+    def device_status(self) -> list[dict]:
+        known: dict[str, set] = {}
+        for r in self.rows:
+            if r.get("source"):
+                known.setdefault(device_of(r["source"]), set()).add(str(channel_of(r["source"]) or r["id"]))
+        out = []
+        for key, dev in sorted(self.devices.items()):
+            chans = [str(c) for c in (dev.channels() if hasattr(dev, "channels") else [])]
+            have = known.get(key, set())
+            out.append({"device": key, "channels": len(chans), "known": sorted(have),
+                        "unimported": [c for c in chans if c not in have],
+                        "playbacks": dev.in_use(), "max_playbacks": dev.max_playbacks})
+        return out
+
+    # A range out of the device's own archive. The ceiling belongs to the hardware, not to this worker:
+    # capacity here is still cameras, and an exhausted device is a 503 — the same admission control the
+    # gateway does for viewers (Lesson 13), one floor down. On a camera, this competes with live for the
+    # one uplink; on an NVR it usually does not.
+    def playback(self, cam, t0: float, t1: float) -> bytes:
+        row = next((r for r in self.rows if str(r["id"]) == str(cam)), None)
+        if row is None:
+            raise KeyError(cam)
+        dev = self.device_of_row(row)
+        if dev is None or dev.coverage(cam) is None:
+            raise KeyError(cam)
+        sid = dev.open_playback(cam, t0, t1)            # OverflowError when the device is full
+        try:
+            return dev.read(sid)
+        finally:
+            dev.close_playback(sid)
 
     # What the heartbeat says per unit beyond the platform's fields: the worker publishes `live_url` — where a
     # recorder, a gateway or a detector subscribes; never a viewer.
     def status_extra(self, cam: dict) -> dict:
-        return {"live_url": live_url(self.server, cam["id"]), "live_shm": live_shm(cam["id"], self.shm_dir)}   # the fan-out, and the same-server fast path
+        """What the heartbeat says per camera beyond the platform's fields. Two kinds of output:
+        `live_url`/`live_shm` — the stream now; `playback_url` + `coverage` — the archive the DEVICE
+        wrote, which we did not. A subscriber needs nothing but this object, for either."""
+        out = {"live_url": live_url(self.server, cam["id"]), "live_shm": live_shm(cam["id"], self.shm_dir)}
+        dev = self.device_of_row(cam)
+        cov = dev.coverage(cam["id"]) if dev is not None else None
+        if cov is not None:
+            out["playback_url"] = playback_url(self.server, cam["id"])
+            out["coverage"] = cov                         # the SUMMARY: from, to, fragments — never the index
+        return out
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU
     # with no assignment left is full." What the autoscaler reads via the controller's `headroom()` and
@@ -426,7 +569,43 @@ class VmsWorker(Worker):
                        fenced=not self.recording_allowed, conflicts=self.conflicts(), passes=self.passes,
                        capacity=self.capacity, headroom=self.headroom(), started=self._started_wall,
                        previous_hb=self.previous_hb, previous_instance=self.previous_instance,
-                       archive=self.archive_root)                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
+                       archive=self.archive_root, devices=self.device_status())                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
+
+    # -- the playback door ---------------------------------------------------------------------------
+    # The holder's second surface, and the reason it is HTTP and not the RTSP fan-out: a browser has to
+    # seek inside what it gets, and the recorder fetches ranges through the same door (Lesson 16). The
+    # console proxies to it; nothing about a device leaves this process except bytes and the summary.
+    #
+    #   GET /playback/<cam>?from&to   the device's own footage for that range
+    #   GET /devices                  what is held, and what channels are not imported yet
+    def playback_handler(self):
+        gw = self
+
+        class H(SendMixin, BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+
+            def do_GET(self):
+                u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                if u.path == "/devices":
+                    return self._send(200, gw.device_status())
+                if not u.path.startswith("/playback/"):
+                    return self._send(404, {"detail": "no such route", "error": "no such path"})
+                try:
+                    data = gw.playback(u.path.rsplit("/", 1)[1], float(q.get("from", 0)), float(q.get("to", 1e12)))
+                except KeyError:
+                    return self._send(404, {"detail": "this camera has no archive of its own here",
+                                            "error": "no device archive"})
+                except OverflowError as e:                       # the device's ceiling, not ours
+                    return self._send(503, {"detail": str(e), "error": str(e)})
+                self.send_response(200); self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+        return H
+
+    def serve_playback(self, host: str = "127.0.0.1", port: int = PLAYBACK_PORT) -> ThreadingHTTPServer:
+        srv = ThreadingHTTPServer((host, port), self.playback_handler())
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
 
     # The loop as a process. Every `poll` seconds: `reconcile_once`, `pump_once`, `lease_pass` every `max(1,
     # (lease_ttl − lease_margin)/3)` s (≈8.3 s by default, well inside the 25 s the lease allows),

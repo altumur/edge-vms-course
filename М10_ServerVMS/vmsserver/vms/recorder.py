@@ -37,7 +37,7 @@ from psimplatform.contract import Subsystem
 from psimplatform.objects import ObjectStore
 from psimplatform.variables import Variables
 
-from .archive import ArchiveResource
+from .archive import ArchiveResource, overlaps, parse, subtract
 from .config import rec_row
 from .worker import FakeActuator, VmsWorker
 
@@ -57,12 +57,20 @@ class RecWorker(VmsWorker):
     def __init__(self, name: str | None, vars_: Variables, objects: ObjectStore, actuator=None, archive: ArchiveResource | None = None,
                  lease_ttl: float = 30.0, lease_margin: float = 5.0, clock=time.monotonic, wall=time.time,
                  server: str | None = None, capacity: int | None = None, instance: str | None = None, slot_ttl: float = 45.0,
-                 env: dict | None = None, grace_seconds: float = 30.0):
+                 env: dict | None = None, grace_seconds: float = 30.0,
+                 window: tuple[int, int] | None = None, keep_days: float = 30.0, settle: float = 900.0,
+                 stitch: float = 2.0):
         env = dict(os.environ if env is None else env)
         self.archive = archive or ArchiveResource(env.get("SPOOL", "/data/spool"), env.get("ARCHIVE", "/data/archive"), wall=wall)
         super().__init__(name, vars_, objects, actuator or FakeActuator(), lease_ttl, lease_margin, clock, wall, server, capacity, instance,
                          slot_ttl, archive_root=self.archive.root, env=env)
         self.grace_seconds = grace_seconds
+        # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
+        # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
+        # looking like 144 gaps.
+        self.window, self.keep_days, self.settle, self.stitch = window, keep_days, settle, stitch
+        self.backfill_budget = 0                    # ranges per pass; 0 = only what an operator asks for
+        self.backfilled = 0
         self.promoted = 0
         self.waiting: set[int] = set()
         self.sources: dict[int, str] = {}                                     # what each running pipeline subscribed to
@@ -143,7 +151,82 @@ class RecWorker(VmsWorker):
     def pump_once(self) -> None:
         super().pump_once()
         self.promote_closed()
+        if self.backfill_budget:                    # bounded, and inside the window: it shares the device's uplink
+            self.backfill(self.backfill_budget)
+
+    # -- backfill: closing our gaps from the device's own archive (Lesson 16) ---------------------------
+    # The card exists because the camera kept recording while we could not, so replication is not "copy
+    # everything" — it is the difference between two coverages. Desired: continuous. Actual: the manifest.
+    # The difference is the work. Lesson 2's loop, over time instead of pipelines.
+    def our_coverage(self, cam) -> list[tuple[float, float]]:
+        return self.archive.coverage(int(cam), self.stitch)
+
+    # What the device has and we do not, bounded at both ends. Not older than our own retention — otherwise
+    # backfill and retention chase each other round the clock, for ever. Not fresher than `settle` — the
+    # last minutes are being written right now, are in no manifest yet, and we would be fetching what we
+    # are recording.
+    def gaps(self, cam, coverage: dict, now: float) -> list[tuple[float, float]]:
+        want = (max(float(coverage["from"]), now - self.keep_days * 86400),
+                min(float(coverage["to"]), now - self.settle))
+        return [] if want[1] <= want[0] else subtract(want, self.our_coverage(cam))
+
+    # Local time, and the one place in the course where that is right: "at night" is night where the camera
+    # is, not where the server is. `(22, 6)` wraps midnight — without that branch it would never arrive.
+    def in_window(self, now: float) -> bool:
+        if not self.window:
+            return True
+        h = time.localtime(now).tm_hour
+        a, b = self.window
+        return a <= h < b if a < b else (h >= a or h < b)
+
+    # `(cam, playback_url, coverage)` for a recording whose camera is held by a worker that serves the
+    # device's own archive — found the way everything is found here: in the holder's heartbeat.
+    def device_source(self, cam) -> tuple[str, dict] | None:
+        for hb in heartbeats(self.objects, "vms/").values():
+            for st in hb.status:
+                if str(st.get("id")) == str(cam) and st.get("playback_url") and st.get("coverage"):
+                    return st["playback_url"], st["coverage"]
+        return None
+
+    # Bounded work, on request — never in the ordinary pass, the way `rebalance(budget)` is bounded
+    # (Lesson 13): backfill competes with live for the device's uplink, so it gets a ceiling and an hour.
+    def backfill(self, budget: int = 1, now: float | None = None, force: bool = False) -> list[dict]:
+        now = self.wall() if now is None else now
+        if not (force or self.in_window(now)):
+            return []
+        done: list[dict] = []
+        for row in self.rows:
+            if len(done) >= budget:
+                break
+            src = self.device_source(row["cam"])
+            if src is None:
+                continue
+            url, cov = src
+            for (t0, t1) in self.gaps(row["cam"], cov, now)[:budget - len(done)]:
+                done.append(self.fetch(row["cam"], url, t0, t1))
+        return done
+
+    # One range: fetch it, and promote what came back as OURS — `source: edge`, our epoch, our manifest,
+    # our retention. The overlap is checked a second time here because live recording may have reached the
+    # same minutes while we were fetching; a segment that would land on top of one we already have is
+    # dropped rather than written.
+    def fetch(self, cam, url: str, t0: float, t1: float) -> dict:
+        unit = str(cam)
+        if not self.may_write(unit):
+            return {"cam": unit, "from": t0, "to": t1, "skipped": "no lease"}
+        paths = self.actuator.record_range(unit, f"{url}?from={t0}&to={t1}", self.epochs.get(unit, 0),
+                                           t0, t1, self.archive.spool)
+        have, kept = self.our_coverage(cam), 0
+        for p in paths:
+            parsed = parse(p, self.archive.spool)
+            span = (parsed[2].timestamp(), os.path.getmtime(p)) if parsed else (t0, t1)
+            if overlaps(have, span):
+                os.remove(p); continue                   # live recording got there while we were fetching
+            self.archive.promote(p, source="edge"); kept += 1
+        self.backfilled += kept
+        return {"cam": unit, "from": t0, "to": t1, "segments": kept}
 
     def metrics_text(self) -> str:
         return (f"# TYPE rec_recordings_running gauge\nrec_recordings_running {len(self.reconciler.actual)}\n"
-                f"# TYPE rec_segments_promoted counter\nrec_segments_promoted {self.promoted}\n")
+                f"# TYPE rec_segments_promoted counter\nrec_segments_promoted {self.promoted}\n"
+                f"# TYPE rec_segments_backfilled counter\nrec_segments_backfilled {self.backfilled}\n")

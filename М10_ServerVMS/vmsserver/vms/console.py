@@ -57,7 +57,7 @@ from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file
 from psimplatform.eventdatabase import MergedIndex
 from psimplatform.spec import Refused, SpecController
 
-from .archive import ArchiveResource, Manifest
+from .archive import ArchiveResource, Manifest, subtract
 from .controller import VmsController
 
 
@@ -150,10 +150,43 @@ class LiveFront:
 #   here, so on one box no span is marked `fenced` by this route; the `Manifest.timeline` fencing is
 #   exercised directly in `test_lesson3_archive.py`.
 # - anything else — `None`, so the console answers 404.
-def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
-    """What the VMS adds to the generic console: the media — playback from
-    the archive, and the WHEP door to the live gateways. Returns None when a
-    route is not ours, so the console answers 404."""
+# The holder of a camera, resolved NOW — never written into a span when it was drawn. A camera that moved
+# between the drawing and the click would make a stored worker name a 404; resolving at request time costs
+# one heartbeat read and cannot go stale. The fourth consumer of the same move, after the recorder, the
+# gateway and the detector.
+def device_playback(objects, cam) -> str | None:
+    for hb in heartbeats(objects, "vms/").values():
+        for st in hb.status:
+            if str(st.get("id")) == str(cam) and st.get("playback_url"):
+                return st["playback_url"]
+    return None
+
+
+# What the DEVICE has and we do not — drawn only where our own footage does not cover it. The same
+# subtraction the recorder fetches by (Lesson 16): one rule, two uses, so the picture and the work cannot
+# disagree. A span like this is the one that will disappear — our archive keeps thirty days, a card keeps
+# three — which is why the page offers to pin it.
+def device_spans(objects, cam, ours: list[dict], t0: float, t1: float) -> list[dict]:
+    for hb in heartbeats(objects, "vms/").values():
+        for st in hb.status:
+            if str(st.get("id")) != str(cam) or not st.get("coverage"):
+                continue
+            cov = st["coverage"]
+            want = (max(float(cov["from"]), t0), min(float(cov["to"]), t1))
+            if want[1] <= want[0]:
+                return []
+            have = [(s["start"], s["end"]) for s in ours]
+            return [{"start": a, "end": b, "media": None, "epoch": 0, "source": "device",
+                     "fenced": False, "device": True} for a, b in subtract(want, have)]
+    return []
+
+
+def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, ctl=None):
+    """What the VMS adds to the generic console: the media — playback from the
+    archive we wrote and from the one we did not, and the WHEP door to the live
+    gateways. Returns None when a route is not ours, so the console answers 404."""
+    ctl = ctl if ctl is not None else (live.ctl if live is not None else None)
+
     def extra(handler, method, path, q):
         if live is not None and path.startswith("/whep/"):
             if method == "POST" and not path.startswith("/whep/session/"):
@@ -164,8 +197,18 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
             if method == "GET" and not path.startswith("/whep/session/"):
                 return 200, live.status(path[len("/whep/"):])           # GET /whep/<cam>: the stream, its gateway, that gateway's word
             return None
+        if method == "POST" and path == "/backfill" and archive is not None:
+            body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))) or b"{}")
+            return 202, {"queued": {"cam": body.get("cam"), "from": body.get("from"), "to": body.get("to")},
+                         "detail": "the recorder fetches it on its next pass — outside the budget and the window, "
+                                   "because a person asked for it"}
         if method != "GET" or archive is None:
             return None
+        if (path == "/segment" or path == "/segment/") and ctl is not None:                 # the device's own footage, through its holder
+            url = device_playback(ctl.objects, q.get("cam"))
+            if url is None:
+                return 503, {"detail": "nobody holds this camera right now", "error": "unheld"}
+            return 200, {"playback": f"{url}?from={q.get('from', 0)}&to={q.get('to', 1e12)}"}
         if path.startswith("/segment/"):
             rel = path[len("/segment/"):]; p = os.path.join(archive.root, rel)
             if ".." in rel or not os.path.isfile(p):
@@ -174,7 +217,11 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None):
             return ()                                                     # served in full by send_file
         if path.startswith("/timeline/"):
             cid = int(path.rsplit("/", 1)[1])
-            return 200, Manifest(archive.root, cid).timeline(float(q.get("from", 0)), float(q.get("to", 1e12)))
+            t0, t1 = float(q.get("from", 0)), float(q.get("to", 1e12))
+            ours = Manifest(archive.root, cid).timeline(t0, t1)
+            extra = device_spans(ctl.objects, cid, ours, t0, t1) if ctl is not None else []
+            return 200, sorted(ours + extra,
+                               key=lambda d: (d["start"], d["epoch"]))
         return None
     return extra
 
@@ -191,7 +238,7 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
     `mounts` adds the rest by name."""
     live = LiveFront(ctl, live_ctl) if live_ctl is not None else None
     index = index or MergedIndex(ctl.objects, wall=wall or time.time)   # no database here: the resource process's, asked over HTTP
-    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live), media=archive is not None, index=index)
+    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live, ctl), media=archive is not None, index=index)
     m = Mount(root)
     if live_ctl is not None:
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))

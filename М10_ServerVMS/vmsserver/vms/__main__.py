@@ -112,9 +112,21 @@ def worker() -> None:
     except ImportError:
         logging.warning("no GStreamer: the fake actuator holds nothing")
         act = FakeActuator()
-    w = VmsWorker(name, vars_, objects, act, capacity=int(os.environ.get("CAPACITY", "50")), archive_root=archive)
-    logging.info("worker %s (instance %s) claimed its slot", w.name, w.instance)
-    w.run(stop=stop)
+    # Devices with an archive of their own — a camera's card, an NVR's disks (Lesson 15). The real factory
+    # is a DriverPack session; without it a source has no footage but its live stream, which is the box in
+    # this course.
+    try:
+        from gstvms.devices import open_device as device_factory              # type: ignore
+    except ImportError:
+        device_factory = None
+    w = VmsWorker(name, vars_, objects, act, capacity=int(os.environ.get("CAPACITY", "50")), archive_root=archive,
+                  device_factory=device_factory)
+    srv = w.serve_playback(os.environ.get("PLAYBACK_HOST", "0.0.0.0"), int(os.environ.get("PLAYBACK_PORT", "8083")))
+    logging.info("worker %s (instance %s) claimed its slot; playback on %s", w.name, w.instance, srv.server_address)
+    try:
+        w.run(stop=stop)
+    finally:
+        srv.shutdown()
 
 
 # Builds `vmsrecorder` — the fourth subsystem's worker, the only one placed on top of the archive:
@@ -135,7 +147,14 @@ def recorder() -> None:
     except ImportError:
         logging.warning("no GStreamer: the fake actuator records nothing")
         act = FakeActuator()
-    r = RecWorker(None, vars_, objects, act, archive=ArchiveResource(spool, archive), capacity=int(os.environ.get("CAPACITY", "50")))
+    # Backfill (Lesson 16): `BACKFILL_WINDOW=22-6` in LOCAL time — night where the camera is, not where the
+    # server is — and `BACKFILL_BUDGET` ranges per pass. Unset window: any hour. Budget 0: only what an
+    # operator asks for.
+    win = os.environ.get("BACKFILL_WINDOW", "")
+    window = tuple(int(x) for x in win.split("-")) if "-" in win else None
+    r = RecWorker(None, vars_, objects, act, archive=ArchiveResource(spool, archive), capacity=int(os.environ.get("CAPACITY", "50")),
+                  window=window, keep_days=float(os.environ.get("RETENTION_DAYS", "30")))
+    r.backfill_budget = int(os.environ.get("BACKFILL_BUDGET", "1"))
     logging.info("recorder %s (instance %s) claimed its slot; promoted %d", r.name, r.instance, r.promoted)
     r.run(stop=stop)
 

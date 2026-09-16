@@ -108,15 +108,21 @@ class Segment:
     end: float
     path: str             # relative to the archive root
     bytes: int
+    # `live` (written from the fan-out) or `edge` (fetched from the camera's own card or its NVR — Lesson
+    # 16). It lives in the LINE, not in the path: the path grammar is what `repair` rebuilds a manifest
+    # from, and a repaired line loses `source` — a named cost, paid to keep that grammar untouched. The
+    # footage stays where it is and plays the same; only the provenance mark is gone.
+    source: str = "live"
 
     def line(self) -> str:
         return json.dumps({"kind": "media", "cam": self.cam, "epoch": self.epoch, "start": self.start, "end": self.end,
-                           "path": self.path, "bytes": self.bytes})
+                           "path": self.path, "bytes": self.bytes, "source": self.source})
 
     @classmethod
     def from_line(cls, line: str) -> "Segment":
         d = json.loads(line)
-        return cls(int(d["cam"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["bytes"]))
+        return cls(int(d["cam"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["bytes"]),
+                   d.get("source", "live"))
 
 
 # Per camera, append-only, beside the footage: `<archive>/rec/<cam>/manifest.jsonl`. Media lines only.
@@ -160,7 +166,7 @@ class Manifest:
         out = []
         for s in self.read():
             if s.end > t0 and s.start < t1:
-                out.append({"start": s.start, "end": s.end, "media": s.path, "epoch": s.epoch,
+                out.append({"start": s.start, "end": s.end, "media": s.path, "epoch": s.epoch, "source": s.source,
                             "fenced": current_epoch is not None and s.epoch < current_epoch})
         return sorted(out, key=lambda d: (d["start"], d["epoch"]))
 
@@ -179,7 +185,7 @@ class ArchiveResource:
 
     # 1. the file into the archive (rename, or copy-then-replace across filesystems), 2. the manifest line,
     # 3. the spool copy gone — the order that survives a crash at any point.
-    def promote(self, spool_path: str, end: float | None = None) -> Segment:
+    def promote(self, spool_path: str, end: float | None = None, source: str = "live") -> Segment:
         parsed = parse(spool_path, self.spool)
         if parsed is None:
             raise ValueError(f"not a segment path: {spool_path}")
@@ -190,7 +196,7 @@ class ArchiveResource:
         dest = os.path.join(self.root, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         self._move(spool_path, dest)                    # 1. into the archive, atomically (same filesystem)
-        seg = Segment(cam, epoch, start.timestamp(), end, rel, st.st_size)
+        seg = Segment(cam, epoch, start.timestamp(), end, rel, st.st_size, source)
         Manifest(self.root, cam).append(seg)            # 2. then the line
         return seg
 
@@ -248,6 +254,19 @@ class ArchiveResource:
             man.rewrite(list(lines.values()))
         return {"added": added, "dropped": dropped}
 
+    # `[(start, end), …]` of what the manifest says we have, adjacent runs merged. `stitch` is the tolerance
+    # that makes it work at all: between two segments there is always a seam — the fraction of a second it
+    # takes to close one and open the next. Count a seam as a gap and a day of continuous ten-minute
+    # recording has 144 of them.
+    def coverage(self, cam: int, stitch: float = 2.0) -> list[tuple[float, float]]:
+        runs: list[list[float]] = []
+        for s in sorted(Manifest(self.root, cam).read(), key=lambda s: s.start):
+            if runs and s.start <= runs[-1][1] + stitch:
+                runs[-1][1] = max(runs[-1][1], s.end)
+            else:
+                runs.append([s.start, s.end])
+        return [(a, b) for a, b in runs]
+
     def retain(self, cam: int, days: float, now: float) -> int:
         """Delete media older than `days`: the file first, then the line. The
         buckets are the platform's to retain (vms/retention/<cam>, written by the
@@ -277,6 +296,28 @@ class ArchiveResource:
                 if parse(p, self.root):
                     total += os.path.getsize(p)
         return total
+
+
+# `want` minus every range in `have`. The one subtraction two things use: the console draws device coverage
+# only where ours does not cover it (Lesson 15), and the recorder fetches only what it does not have (Lesson
+# 16). One rule, two uses — they cannot drift apart.
+def subtract(want: tuple[float, float], have: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out = [want]
+    for a, b in sorted(have):
+        nxt = []
+        for x, y in out:
+            if b <= x or a >= y:
+                nxt.append((x, y)); continue
+            if a > x:
+                nxt.append((x, min(a, y)))
+            if b < y:
+                nxt.append((max(b, x), y))
+        out = nxt
+    return [(a, b) for a, b in out if b > a]
+
+
+def overlaps(have: list[tuple[float, float]], span: tuple[float, float]) -> bool:
+    return any(a < span[1] and span[0] < b for a, b in have)
 
 
 class ArchivePolicy:

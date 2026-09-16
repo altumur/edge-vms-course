@@ -67,6 +67,11 @@ LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} 
 IDLE = "fakesink sync=false"                                                                    # the RTSP fan-out (livesrv) serves from
 REC_SINK = "h264parse ! watchdog timeout={watchdog} ! archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}"
 REC_DESC = "rtspsrc location={source} latency=200 protocols=tcp name=src ! rtph264depay ! " + REC_SINK       # another server's worker: its fan-out
+# Backfill (Lesson 16): a range out of the holder's playback door, written as segments in the spool exactly
+# the way a live recording is. `souphttpsrc` because the door is HTTP — a browser has to seek it too — and
+# the range is in the query, so nothing here knows how the vendor addresses time.
+REC_RANGE_DESC = ("souphttpsrc location={source} ! qtdemux ! h264parse ! "
+                  "archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}")
 REC_SHM_DESC = "shmsrc socket-path={path} is-live=true do-timestamp=true name=src ! video/x-h264,stream-format=byte-stream ! " + REC_SINK   # this server's worker: its tee, directly
 
 
@@ -180,6 +185,24 @@ class GstRecActuator(GstActuator):
         self.spool, self.archive, self.seg, self.watchdog = spool, archive, segment_seconds, watchdog_ms
         self.fanout = None
         self.pipelines, self.dead, self.posted = {}, [], []
+
+    # One range from the device's own archive, run to completion: the pipeline ends by itself at EOS, and
+    # every fragment it closed was promoted with `source="edge"` by the caller. Returns what landed in the
+    # spool, so `RecWorker.fetch` can drop anything live recording reached first.
+    def record_range(self, cam, source: str, epoch: int, t0: float, t1: float, spool: str, seg: int = 600) -> list[str]:
+        import os
+        from vms.archive import parse
+        before = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
+        p = Gst.parse_launch(REC_RANGE_DESC.format(source=source, cam=int(cam), epoch=epoch, spool=spool,
+                                                   archive=self.archive, seg=seg))
+        p.set_state(Gst.State.PLAYING)
+        msg = p.get_bus().timed_pop_filtered(Gst.CLOCK_TIME_NONE, Gst.MessageType.EOS | Gst.MessageType.ERROR)
+        p.send_event(Gst.Event.new_eos())                # finalize whatever fragment is open
+        p.set_state(Gst.State.NULL)
+        if msg is not None and msg.type == Gst.MessageType.ERROR:
+            log.error("camera %s: backfill %s-%s: %s", cam, t0, t1, msg.parse_error()[0])
+        after = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
+        return sorted(p for p in after - before if parse(p, spool))
 
     def describe(self, cam: dict) -> str:
         kw = dict(watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0), spool=self.spool, archive=self.archive, seg=self.seg)
