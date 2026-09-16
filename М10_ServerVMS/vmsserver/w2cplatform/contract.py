@@ -364,9 +364,10 @@ class Worker:
     # `test_identity_by_claim_is_a_platform_piece`: two nameless workers get `w-1` and `w-2`; after `w-1`
     # lapses a third gets `w-1` back and its assignment with it; `prefer="w-7"` creates and takes `w-7`.
     def claim_slot(self, prefer: str | None = None, retries: int = 50) -> str:
-        """Become somebody. With `prefer` (Nomad's NOMAD_ALLOC_INDEX, systemd's
-        %i) take that slot, by CAS, even from a holder that has not lapsed —
-        the scheduler is the authority on which process is the current one,
+        """Become somebody. With `prefer` (whatever `runtime.slot` made of
+        SLOT_INDEX or a <ROLE>_NAME) take that slot, by CAS, even from a holder
+        that has not lapsed — the runtime is the authority on which process is
+        the current one,
         and the old holder finds out on its next renewal. Without it, take a
         lapsed slot — its assignment is waiting — before an unused number. Holding is renewed by `renew_slot`; losing it fences the
         instance. The controller never hands names out; a process takes one."""

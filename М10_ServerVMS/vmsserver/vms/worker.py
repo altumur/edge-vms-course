@@ -17,11 +17,15 @@ loop is the process.
 
 What the environment hands a process, on a box or in an allocation:
 
-    WORKER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: w-<index>. The index is the preference;
-                                        the claim (CAS on vms/slots/w-N) is the proof
-    NOMAD_NODE_NAME (or the hostname) -> `server` in the heartbeat: whose resource its events go to, and the host in `live_url`
-    NOMAD_META_labels                 -> `labels` in the heartbeat: what this server can reach; the controller places by them
-    NOMAD_ALLOC_ID                    -> the instance; CAPACITY -> the worker's own number, from М9 Lesson 7's probe
+    WORKER_NAME / SLOT_INDEX     -> the slot to claim: w-<index>. The index is the preference;
+                                    the claim (CAS on vms/slots/w-N) is the proof
+    SERVER_NAME (or the hostname) -> `server` in the heartbeat: whose resource its events go to, and the host in `live_url`
+    LABELS                        -> `labels` in the heartbeat: what this server can reach; the controller places by them
+    INSTANCE_ID                   -> the instance; CAPACITY -> the worker's own number, from М9 Lesson 7's probe
+
+Not one of those names an orchestrator, and that is deliberate: a Quadlet, a
+Nomad jobspec and a Kubernetes manifest each map their own names into these
+five (`w2cplatform/runtime.py`), and the loop never learns which did.
 """
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)

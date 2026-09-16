@@ -15,8 +15,8 @@ resource answers (Lesson 4's two silences). Footage from before the move
 stays where it was written, under the old epoch; the console's timeline
 merges the two.
 
-    RECORDER_NAME / NOMAD_ALLOC_INDEX  -> the slot to claim: r-<index>
-    NOMAD_NODE_NAME (or the hostname)  -> `server` in the heartbeat: whose archive it writes into
+    RECORDER_NAME / SLOT_INDEX     -> the slot to claim: r-<index>
+    SERVER_NAME (or the hostname)  -> `server` in the heartbeat: whose archive it writes into
     SPOOL, ARCHIVE                     -> the archive resource's two roots on this server
     CAPACITY                           -> recordings this server's disks and NIC can take — its own number
 
