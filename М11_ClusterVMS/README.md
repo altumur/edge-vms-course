@@ -4,7 +4,7 @@
 
 Five lessons in which a server is pulled from the wall and, within a number of seconds the workers themselves measured, its worker is holding its cameras again on another server and its recordings are being written by the recorder on another — into another resource — with an edit made *during* the failover already there, because configuration never left the cluster's raft — and when the dead server comes back believing its old worker still owns those cameras, it is fenced twice and the archive is provably intact.
 
-The full design brief is [`module-design.md`](module-design.md); the orchestrator choice and its licence are in [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md).
+The full design brief is [`module-design.md`](module-design.md); the orchestrator choice and its licence are in [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md), and how the module stays independent of that choice is argued in [`СЛОЙ-ВМЕСТО-NOMAD.md`](СЛОЙ-ВМЕСТО-NOMAD.md) and [`thin-seam-vs-provider.md`](thin-seam-vs-provider.md).
 
 ## The thesis
 
@@ -12,13 +12,35 @@ The full design brief is [`module-design.md`](module-design.md); the orchestrato
 |---|---|---|---|
 | What it is | DriverPack with N cameras assigned | the archive on a server's disks; a GPU; a camera-VLAN NIC | the only writer of `vms/*` |
 | How many | `N` — Nomad runs it, the Nomad Autoscaler moves it from the workers' own load; **never the controller** | one per eligible server | one — and safe at two |
-| Identity | a slot `w-<NOMAD_ALLOC_INDEX>`, **claimed by CAS**: the index is the preference, the Variable is the proof | the server's | none: computation over the stores |
+| Identity | a slot `w-<SLOT_INDEX>` — the jobspec maps `NOMAD_ALLOC_INDEX` into that neutral name — **claimed by CAS**: the index is the preference, the Variable is the proof | the server's | none: computation over the stores |
 | Moves? | yes — Nomad reschedules it; a replacement claims the same slot and inherits its assignment | **never** | not needed to move anything |
 | When it is down | its cameras pause until Nomad brings it back; a *released* slot's cameras are redistributed | that server's footage is unavailable — by name — not lost | edits stop; nothing running stops |
 
 > **The controller writes, the platform stores, the worker reads its share.** Because camera 7 is assigned to worker `w-1` in the cluster's raft rather than to Server A, failover rewrites nothing: Nomad reschedules `w-1` and it reads the same assignment from the same raft. What was on Server A is a resource, and a resource stays.
 
 **Cluster is not domain, and they are different sizes.** A cluster is servers close enough to share a network you would bet recording on — one LAN, one room; that boundary is physics. A domain is clusters under one directory and one signer; that boundary is administration. **A worker fails over within its cluster and never across one**, and [М12](../М12_DomainVMS/README.md) is where several clusters meet.
+
+## The orchestrator is an install-time choice
+
+The lessons are taught on Nomad and the bench is a Nomad cluster — but nothing in the reconcile loop names it. **The module runs on Nomad today and must run on Kubernetes without the loop changing**, and that is held at three seams rather than promised in prose.
+
+**The store is a URL.** A process is told `CONFIG_URL` and nothing else: `file:///data/platform/config` on a box — in-process, no daemon, no hop, no second quorum — `nomad://127.0.0.1:4646` in a cluster, `k8s://<namespace>/<prefix>` when there is a site for it. A backend registers itself at import — `register_scheme("nomad", _open_nomad)` at the bottom of [`cluster/variables.py`](clustervms/cluster/variables.py) — so adding Kubernetes adds a *file* and edits no branch in the platform. Those 144 lines are the only place in the module that knows Nomad exists.
+
+**What the runtime hands a process has neutral names.** [`psimplatform/runtime.py`](../М10_ServerVMS/vmsserver/psimplatform/runtime.py) reads five and no more: `<ROLE>_NAME`, `SLOT_INDEX`, `SERVER_NAME`, `LABELS`, `INSTANCE_ID`. A Nomad jobspec maps `NOMAD_ALLOC_INDEX`, `node.unique.name` and `meta.labels` into them; a Kubernetes manifest maps the StatefulSet ordinal and a `fieldRef` on `spec.nodeName`; a Quadlet on a box maps systemd's `%i`. The loop reads five names and never learns who filled them in.
+
+**The index is opaque.** `Index = str | int`. Nomad's `ModifyIndex` is a number; Kubernetes' `resourceVersion` is a string its API conventions forbid you to interpret. So the platform compares indexes for equality and never orders them, subtracts them or counts with them. This is the clause that quietly decides whether a Kubernetes backend is possible at all — and it is checked, not assumed.
+
+It is a claim rather than a hope because the contract is executable. [`tests/test_variables_contract.py`](../М10_ServerVMS/vmsserver/tests/test_variables_contract.py) is ten tests in five clauses — an unwritten key reads `(None, 0)`; `put` returns an index the next read gives back; CAS is the whole of the concurrency story, N racers and one winner; a writer is *refused*, not ignored, outside its prefixes; the index is opaque — and it runs against any backend:
+
+```bash
+CONTRACT_URL=nomad://127.0.0.1:4646 python3 tests/run.py
+```
+
+**A backend is accepted when that file is green against it, not when it looks right.**
+
+**What is deliberately not abstracted.** Placement policy is. `spread`, `distinct_hosts`, the `disconnect` block, the `scaling` stanza and the Autoscaler live in 373 lines of jobspec and 91 lines of ACL policy under [`clustervms/deploy/`](clustervms/deploy/), and every one of those lines is rewritten for Kubernetes — as Deployments and StatefulSets, topology spread constraints, PodDisruptionBudgets, RBAC Roles and an HPA. That is the line the module draws on purpose: **the deployment unit is per orchestrator, the reconcile loop is not.** A worker fenced at its slot by CAS does not become more correct for knowing which scheduler restarted it — which is Lesson 2's argument exactly, and it is what makes the scheduler replaceable at all.
+
+**Status, said plainly.** The Nomad backend is written and the bench runs on it. **The Kubernetes backend is not written.** What exists is the seam, the neutral names, the opaque index and the suite that would accept it. The claim here is not *it runs on Kubernetes today*; it is *nothing in the loop has to change when it does* — and the 32 tests below, which run without Nomad at all, are what keeps that honest.
 
 ## Lessons
 

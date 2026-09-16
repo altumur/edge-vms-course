@@ -1,10 +1,14 @@
 """python3 -m cluster worker | controller | recorder | reccontroller | console | resource — the jobs
 (each resource keeps the event database over its own tree; the recorder is the only writer of footage).
 
-    NOMAD_ADDR, NOMAD_TOKEN            the task's own workload identity (Variables)
+    CONFIG_URL                         the store, as a URL: nomad://host:port here, k8s://ns/prefix at a k8s site,
+                                       file:///path on a bench. Defaults from NOMAD_ADDR; NOMAD_TOKEN is the task's
+                                       own workload identity and is read by the nomad backend alone
     OBJECTS=variables://objects        the object store — heartbeats and the snapshot — as Variables (the default);
                                        s3+http://… when a cluster is large enough to want MinIO; file:///path on a bench
-    NOMAD_ALLOC_INDEX                  worker, recorder: the slot to claim (w-<i>, r-<i>); NOMAD_NODE_NAME the server; NOMAD_META_labels
+    SLOT_INDEX, SERVER_NAME, LABELS    worker, recorder: the slot to claim (w-<i>, r-<i>), the server, what it can reach —
+                                       neutral names (`psimplatform/runtime.py`); the jobspec maps NOMAD_ALLOC_INDEX,
+                                       node.unique.name and meta.labels into them, a k8s manifest the ordinal and a fieldRef
     ARCHIVE                            worker: where its events go (the resource on its server); recorder and resource: the same disks
     SPOOL                              recorder: where its pipelines write before promotion
     RESOURCE_URL                       resource: how the console reaches this server's manifests and events

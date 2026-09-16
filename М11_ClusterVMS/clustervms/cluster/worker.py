@@ -1,8 +1,11 @@
 """The worker as an allocation — and it is М10's `VmsWorker`, unchanged.
-What Nomad hands a process (NOMAD_ALLOC_INDEX, NOMAD_NODE_NAME,
-NOMAD_META_labels, NOMAD_ALLOC_ID, CAPACITY) the worker reads from its
-environment on a box exactly as in an allocation; this module keeps the
-name М11's lessons used and the `env=` calling convention.
+What a runtime hands a process (SLOT_INDEX, SERVER_NAME, LABELS,
+INSTANCE_ID, CAPACITY — a Nomad jobspec maps NOMAD_ALLOC_INDEX and
+node.unique.name into those neutral names, a Kubernetes manifest the
+StatefulSet ordinal and a fieldRef) the worker reads from its environment on
+a box exactly as in an allocation; this module keeps the name М11's lessons
+used and the `env=` calling convention. Nothing here names an orchestrator:
+see `psimplatform/runtime.py`.
 
 Nothing here is new behaviour. A worker on a cluster is a worker on a box
 whose stores happen to be raft.

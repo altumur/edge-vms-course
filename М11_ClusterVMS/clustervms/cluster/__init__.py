@@ -4,9 +4,9 @@ Built ON М10's `vmsserver/` (imported, not copied): the same `psimplatform`
 contract and the same `vms/` controller, worker and archive resource. This
 package supplies what a cluster adds and nothing else:
 
-    variables.py    Nomad Variables over HTTP (ModifyIndex, cas) — and the fake with the promised semantics
+    variables.py    Nomad Variables over HTTP (ModifyIndex, cas) — one backend behind `open_vars`, registered as `nomad://`
     objectstore.py  MinIO / S3 (SigV4 in s3.py) — the heartbeats and the domain's snapshots
-    worker.py       the worker as an allocation: a slot from NOMAD_ALLOC_INDEX, labels from the server
+    worker.py       the worker as an allocation: a slot from SLOT_INDEX, labels from the server
     controller.py   the controller as a job: placement under label constraints; the snapshot for М12
     resource.py     the archive resource as a system job: its heartbeat, its manifests served
     timeline.py     one camera across two resources; *unavailable*, never *lost*

@@ -1,7 +1,7 @@
 """The recorder as an allocation — and it is М10's `RecWorker`, unchanged.
-Nomad hands it what it hands a worker (NOMAD_ALLOC_INDEX → slot r-<i>,
-NOMAD_NODE_NAME → the server whose archive it writes into, NOMAD_META_labels,
-NOMAD_ALLOC_ID, CAPACITY); it claims `rec/slots/r-<i>` by CAS, reads the
+The runtime hands it what it hands a worker (SLOT_INDEX → slot r-<i>,
+SERVER_NAME → the server whose archive it writes into, LABELS, INSTANCE_ID,
+CAPACITY); it claims `rec/slots/r-<i>` by CAS, reads the
 assignment the rec controller wrote, subscribes to each camera's fan-out from
 whichever worker holds it (the VMS heartbeat's `live_url`), and writes
 footage into rec/<cam>/e<epoch>/ on ITS server's archive.
