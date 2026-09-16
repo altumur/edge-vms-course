@@ -15,11 +15,12 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from typing import Protocol
 
 
 from w2cplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
-from w2cplatform.variables import register_scheme
+from w2cplatform.variables import register_scheme, safe_path
 
 
 class Variables(Protocol):
@@ -64,24 +65,31 @@ class NomadVariables:
                 return 404, None
             raise
 
+    # The key, checked and then percent-encoded for a URL. `safe_path` is the platform's rule and it
+    # matters MORE here than on a box: this path goes into a URL, where a `..` meets HTTP normalisation —
+    # ours, a proxy's, or the server's — and the ACL that let it through was matched against the string
+    # BEFORE that. `quote` covers the rest: a space or a `#` in a unit's name would otherwise end the path.
+    def _key(self, path: str) -> str:
+        return quote(safe_path(path), safe="/")
+
     def get(self, path: str) -> tuple[dict | None, int]:
-        status, body = self._req("GET", f"{self.addr}/v1/var/{path}?namespace={self.namespace}")
+        status, body = self._req("GET", f"{self.addr}/v1/var/{self._key(path)}?namespace={self.namespace}")
         if status == 404 or body is None:
             return None, 0
         return dict(body["Items"]), int(body["ModifyIndex"])
 
     def put(self, path: str, items: dict, cas: int | None = None) -> int:
         q = f"namespace={self.namespace}" + (f"&cas={cas}" if cas is not None else "")
-        _, body = self._req("PUT", f"{self.addr}/v1/var/{path}?{q}", {"Items": {k: str(v) for k, v in items.items()}})
+        _, body = self._req("PUT", f"{self.addr}/v1/var/{self._key(path)}?{q}", {"Items": {k: str(v) for k, v in items.items()}})
         return int(body["ModifyIndex"])
 
     def list(self, prefix: str) -> list[str]:
-        status, body = self._req("GET", f"{self.addr}/v1/vars?prefix={prefix}&namespace={self.namespace}")
+        status, body = self._req("GET", f"{self.addr}/v1/vars?prefix={quote(prefix, safe=chr(47))}&namespace={self.namespace}")
         return [v["Path"] for v in (body or [])]
 
     def delete(self, path: str, cas: int | None = None) -> None:
         q = f"namespace={self.namespace}" + (f"&cas={cas}" if cas is not None else "")
-        self._req("DELETE", f"{self.addr}/v1/var/{path}?{q}")
+        self._req("DELETE", f"{self.addr}/v1/var/{self._key(path)}?{q}")
 
 
 class FakeVariables:
@@ -111,6 +119,7 @@ class FakeVariables:
                 raise Forbidden(f"{self.writer} may not write {path}")
 
     def get(self, path):
+        safe_path(path)
         with self._lock:
             if path not in self._items:
                 return None, 0
@@ -118,6 +127,7 @@ class FakeVariables:
             return dict(items), idx
 
     def put(self, path, items, cas=None):
+        safe_path(path)          # the same key rule as the real store: the fake may not be laxer
         self._acl(path)
         with self._lock:
             _, current = self._items.get(path, (None, 0))
@@ -132,6 +142,7 @@ class FakeVariables:
             return sorted(p for p in self._items if p.startswith(prefix))
 
     def delete(self, path, cas=None):
+        safe_path(path)
         self._acl(path)
         with self._lock:
             _, current = self._items.get(path, (None, 0))

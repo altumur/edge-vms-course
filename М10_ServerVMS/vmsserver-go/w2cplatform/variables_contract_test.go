@@ -18,6 +18,7 @@
 //  5. the Index is OPAQUE. It is compared for equality and nothing else, because
 //     Kubernetes' resourceVersion is a string and arithmetic on it is meaningless.
 //     Clause 5 is the one that quietly decides whether the k8s backend is possible.
+//  6. a key has exactly ONE spelling: ".." and a leading "/" are REFUSED, not repaired.
 package w2cplatform_test
 
 import (
@@ -164,6 +165,48 @@ func TestContractAWriterIsRefusedOutsideItsPrefixes(t *testing.T) {
 	}
 	if items, _, _ := w.Get("contract/yours/k"); items != nil {
 		t.Fatal(items)
+	}
+}
+
+func TestContractAKeyHasOneSpelling(t *testing.T) {
+	// Refused, not repaired, and by every backend — because the same text becomes
+	// three things: the key, the prefix an ACL is matched against, and (through
+	// UnitDir) a directory on a resource's disk. Un-normalised, vms/a/../b and
+	// vms/b are two keys one person reads as one, each with its own index, so two
+	// writers both win their CAS. Normalised downstream — a URL, a tree — they
+	// collapse into one, and the ACL was matched against the string BEFORE that.
+	v := store(t)
+	for _, bad := range []string{"vms/a/../b", "../etc/passwd", "/vms/a", ""} {
+		if _, err := v.Put(bad, p.Items{"x": "1"}, p.Absent); err == nil {
+			t.Fatalf("a store accepted %q as a key", bad)
+		}
+	}
+	if _, err := v.Put("vms/..foo", p.Items{"x": "1"}, p.Absent); err != nil {
+		t.Fatal("dots that are not a segment are just a name:", err)
+	}
+	if items, _, _ := v.Get("vms/..foo"); !reflect.DeepEqual(items, p.Items{"x": "1"}) {
+		t.Fatal(items)
+	}
+}
+
+func TestContractTwoSpellingsAreNeverOnePlace(t *testing.T) {
+	// The same rule arriving through the encoding instead of through the path: a
+	// backend that maps "/" to "%2F" without escaping "%" first makes the key
+	// `a%2Fb` and the key `a/b` the same file — and List then reports one of them,
+	// so the collision is invisible.
+	v := store(t)
+	v.Put("a/b", p.Items{"who": "slash"}, p.Absent)
+	v.Put("a%2Fb", p.Items{"who": "percent"}, p.Absent)
+	if items, _, _ := v.Get("a/b"); items["who"] != "slash" {
+		t.Fatal(items)
+	}
+	if items, _, _ := v.Get("a%2Fb"); items["who"] != "percent" {
+		t.Fatal(items)
+	}
+	got, _ := v.List("a")
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, []string{"a%2Fb", "a/b"}) {
+		t.Fatal(got)
 	}
 }
 

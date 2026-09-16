@@ -83,11 +83,17 @@ class Variables(Protocol):
     def list(self, prefix: str) -> list[str]: ...
 
 
-# Refuses a path containing `..` or starting with `/` (raises `ValueError`) and returns it unchanged. Called
-# on every path before it is turned into a filename, so a caller cannot escape `<root>/vars/`.
-def _safe(path: str) -> str:
-    if ".." in path or path.startswith("/"):
-        raise ValueError(path)
+# A key must have exactly ONE spelling, and this is where that is enforced. It is not (only) about escaping
+# `<root>/vars/`: the same text becomes a key here, a prefix the ACL is matched against, and — through
+# `events.unit_dir` — a directory on a resource's disk. `..` breaks all three differently. Without
+# normalisation `vms/a/../b` and `vms/b` are two keys one person reads as one, each with its own
+# ModifyIndex, so two writers both win their CAS. With normalisation somewhere downstream (a URL, a tree)
+# they collapse into one — but the ACL was matched against the un-normalised string, which is how a token
+# for `rec/recordings/*` reaches `vms/cameras/7`. Refused loudly, never repaired: a caller that meant
+# `vms/b` should say `vms/b`.
+def safe_path(path: str) -> str:
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        raise ValueError(f"not a key: {path!r}")
     return path
 
 
@@ -154,7 +160,11 @@ class FileVariables:
     # Maps a variable path to its file: `<root>/vars/<path with / encoded as %2F>.json`. One flat directory,
     # so `list` is a single `listdir`.
     def _file(self, path: str) -> str:
-        return os.path.join(self.dir, _safe(path).replace("/", "%2F") + ".json")
+        # `%` is escaped FIRST, or the encoding is not reversible: without it the key `a%2Fb` and the key
+        # `a/b` would be the same file, and `list` would report one of them — the same "two keys, one
+        # place" bug `safe_path` refuses above, arriving through the encoding instead of through the path.
+        name = safe_path(path).replace("%", "%25").replace("/", "%2F")
+        return os.path.join(self.dir, name + ".json")
 
     # Opens the lock file and takes an exclusive `fcntl.flock` on it; the returned file object is used as a
     # context manager, and closing it releases the lock. This serialises every `put`/`delete` across all
@@ -234,7 +244,7 @@ class FileVariables:
         out = []
         for f in os.listdir(self.dir):
             if f.endswith(".json"):
-                p = f[:-5].replace("%2F", "/")
+                p = f[:-5].replace("%2F", "/").replace("%25", "%")   # decoded in the reverse order of _file
                 if p.startswith(prefix):
                     out.append(p)
         return sorted(out)

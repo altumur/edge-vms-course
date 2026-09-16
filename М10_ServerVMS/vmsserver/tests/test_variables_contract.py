@@ -18,6 +18,7 @@ The contract, in five clauses:
 5.  the index is OPAQUE. It is compared for equality and nothing else, because
     Kubernetes' `resourceVersion` is a string and arithmetic on it is meaningless.
     Clause 5 is the one that quietly decides whether the k8s backend is possible.
+6.  a key has exactly ONE spelling: `..` and a leading `/` are REFUSED, not repaired.
 """
 import os
 import tempfile
@@ -115,6 +116,39 @@ def test_a_writer_is_refused_outside_its_prefixes():
     except Forbidden:
         pass
     assert v.get("contract/yours/k")[0] is None
+
+
+def test_a_key_has_one_spelling():
+    """Refused, not repaired, and by every backend — because the same text becomes three
+    things: the key, the prefix an ACL is matched against, and (through `events.unit_dir`)
+    a directory on a resource's disk. Un-normalised, `vms/a/../b` and `vms/b` are two keys
+    one person reads as one, each with its own index, so two writers both win their CAS.
+    Normalised downstream — a URL, a tree — they collapse into one, and the ACL was matched
+    against the string BEFORE that. A store that silently accepts either shape cannot keep
+    one-writer-per-prefix, whatever its ACL says."""
+    v = _store()
+    for bad in ("vms/a/../b", "../etc/passwd", "/vms/a", ""):
+        try:
+            v.put(bad, {"x": "1"}, cas=0)
+            assert False, f"a store accepted {bad!r} as a key"
+        except ValueError:
+            pass
+        except Exception as e:                       # a remote store may refuse it its own way
+            assert "not a key" in str(e) or "400" in str(e) or "404" in str(e), e
+    v.put("vms/..foo", {"x": "1"}, cas=0)            # dots that are not a segment are just a name
+    assert v.get("vms/..foo")[0] == {"x": "1"}
+
+
+def test_two_spellings_are_never_one_place():
+    """The same rule arriving through the encoding instead of through the path: a backend that
+    maps `/` to `%2F` without escaping `%` first makes the key `a%2Fb` and the key `a/b` the
+    same file — and `list` then reports one of them, so the collision is invisible."""
+    v = _store()
+    v.put("a/b", {"who": "slash"}, cas=0)
+    v.put("a%2Fb", {"who": "percent"}, cas=0)
+    assert v.get("a/b")[0] == {"who": "slash"}
+    assert v.get("a%2Fb")[0] == {"who": "percent"}
+    assert sorted(v.list("a")) == ["a%2Fb", "a/b"]
 
 
 def test_the_index_is_opaque():

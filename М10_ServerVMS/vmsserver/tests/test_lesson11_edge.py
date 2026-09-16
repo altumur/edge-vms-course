@@ -16,7 +16,7 @@ import os
 import time
 import urllib.request
 
-from w2cplatform.spec import SpecController
+from w2cplatform.spec import Refused, SpecController
 from datetime import datetime, timezone
 
 from vms.archive import ArchiveResource, Manifest, Segment, segment_path, subtract
@@ -225,3 +225,31 @@ def test_subtraction_is_one_rule():
     assert subtract((0, 100), [(20, 40), (60, 80)]) == [(0, 20), (40, 60), (80, 100)]
     assert subtract((0, 100), [(-10, 10), (90, 200)]) == [(10, 90)]
     assert subtract((0, 100), [(40, 60), (50, 70)]) == [(0, 40), (70, 100)]
+
+
+def test_a_units_id_is_a_name_and_not_a_path():
+    """Where the text actually comes from: a subsystem whose id is a FIELD (`rec`, `id: cam`)
+    takes the unit's id verbatim from the operator's body — only `_next_id` protects a numeric
+    one. From there the same string becomes the key `rec/recordings/<id>`, the prefix the
+    console's token is matched against (`rec/recordings/*` — which `rec/recordings/../../…`
+    passes), and a directory on the resource (`unit_dir`). Refused at the door, as a 400."""
+    box, ctl, con, con_vars = _box()
+    rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)
+
+    for bad in ("../../cameras/7", "a/b", ".."):
+        try:
+            rec.create({"cam": bad})
+            assert False, f"a unit id was accepted as a path: {bad!r}"
+        except Refused as e:
+            assert "name, not a path" in str(e), e
+
+    r = rec.create({"cam": "7"})                       # the ordinary case is untouched
+    assert r["id"] == "7" and box.vars.get("rec/recordings/7")[0]["cam"] == "7"
+
+    # and one layer down the store refuses the same shapes on its own, whoever calls it
+    for bad in ("rec/recordings/../../cameras/7", "/rec/recordings/7"):
+        try:
+            box.vars.put(bad, {"cam": "7"}, cas=0)
+            assert False, f"the store accepted {bad!r}"
+        except ValueError:
+            pass

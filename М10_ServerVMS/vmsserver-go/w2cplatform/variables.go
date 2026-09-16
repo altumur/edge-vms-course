@@ -115,12 +115,28 @@ func Allowed(path string, allowed []string) bool {
 	return false
 }
 
-func safe(path string) (string, error) {
-	if strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
-		return "", fmt.Errorf("bad path %q", path)
+// SafePath: a key must have exactly ONE spelling, and this is where that is
+// enforced. It is not (only) about escaping the store's directory: the same
+// text becomes a key, the prefix an ACL is matched against, and — through
+// UnitDir — a directory on a resource's disk. Un-normalised, `vms/a/../b` and
+// `vms/b` are two keys one person reads as one, each with its own Index, so two
+// writers both win their CAS. Normalised downstream (a URL, a tree) they
+// collapse into one, and the ACL was matched against the string BEFORE that.
+// Refused loudly, never repaired. Dots that are not a whole segment are just a
+// name: `vms/..foo` is a key, `vms/../foo` is not.
+func SafePath(path string) (string, error) {
+	if path == "" || strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("not a key: %q", path)
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("not a key: %q", path)
+		}
 	}
 	return path, nil
 }
+
+func safe(path string) (string, error) { return SafePath(path) }
 
 // -- the seam: which store is behind the contract, said as a URL ------------
 // A process is told CONFIG_URL and nothing else. `file://` is in-process — on
@@ -208,7 +224,12 @@ func (v *FileVariables) file(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(v.dir, strings.ReplaceAll(p, "/", "%2F")+".json"), nil
+	// `%` is escaped FIRST, or the encoding is not reversible: without it the key
+	// `a%2Fb` and the key `a/b` would be the same file, and List would report one
+	// of them — the same "two keys, one place" bug SafePath refuses above,
+	// arriving through the encoding instead of through the path.
+	name := strings.ReplaceAll(strings.ReplaceAll(p, "%", "%25"), "/", "%2F")
+	return filepath.Join(v.dir, name+".json"), nil
 }
 
 func (v *FileVariables) lock() (*os.File, error) {
@@ -327,6 +348,7 @@ func (v *FileVariables) List(prefix string) ([]string, error) {
 	for _, e := range ents {
 		if strings.HasSuffix(e.Name(), ".json") {
 			p := strings.ReplaceAll(strings.TrimSuffix(e.Name(), ".json"), "%2F", "/")
+			p = strings.ReplaceAll(p, "%25", "%") // decoded in the reverse order of file()
 			if strings.HasPrefix(p, prefix) {
 				out = append(out, p)
 			}

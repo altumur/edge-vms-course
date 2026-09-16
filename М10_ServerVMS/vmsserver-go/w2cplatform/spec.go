@@ -571,6 +571,14 @@ func (c *SpecController) Create(fields map[string]any) (Row, error) {
 		if fields[c.Spec.ID] == nil || name == "" {
 			return nil, &Refused{fmt.Sprintf("a %s unit needs a %s", c.Spec.Name, c.Spec.ID)}
 		}
+		// A named unit's id comes VERBATIM from the operator's body, and from here
+		// it becomes three things: the key <sub>/<rows>/<id>, the prefix an ACL is
+		// matched against, and a directory on a resource's disk (UnitDir). So it is
+		// a name, not a path. SafePath refuses the same shapes one layer down; this
+		// is a 400 to the person who typed it rather than a 500 from the store.
+		if strings.Contains(name, "/") || name == "." || name == ".." {
+			return nil, &Refused{fmt.Sprintf("a %s %s is a name, not a path: %q", c.Spec.Name, c.Spec.ID, name)}
+		}
 		if it, _, _ := c.Vars.Get(c.rowKey(name)); it != nil {
 			return nil, &Refused{fmt.Sprintf("%s unit %s exists", c.Spec.Name, name)}
 		}

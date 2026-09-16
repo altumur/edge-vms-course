@@ -376,6 +376,13 @@ class SpecController(Controller):
             uid = str(fields.get(self.spec.id) or "")
             if not uid:
                 raise Refused(f"a {self.spec.name} unit needs a {self.spec.id}")
+            # A named unit's id comes VERBATIM from the operator's body, and from here it becomes three
+            # things: the key `<sub>/<rows>/<id>`, the prefix an ACL is matched against, and a directory on
+            # a resource's disk (`events.unit_dir`). So it is a name, not a path: no separators, and not a
+            # relative one. `variables.safe_path` refuses the same shapes one layer down — this one is a
+            # 400 to the person who typed it rather than a 500 from the store.
+            if "/" in uid or uid in (".", ".."):
+                raise Refused(f"a {self.spec.name} {self.spec.id} is a name, not a path: {uid!r}")
             old, idx = self.vars.get(self._row_key(uid))
             if old and old.get("deleted") != "true":
                 raise Refused(f"{self.spec.name} unit {uid} exists")
