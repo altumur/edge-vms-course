@@ -27,8 +27,8 @@
 | 6 | [`archivesink`](06-archivesink.md) | `splitmuxsink` в спул, эпоха в каждом пути, `format-location`; что начинает `fragment-closed` и почему порядок подтверждения именно такой. |
 | 7 | [Архив I — два дерева и перенос](07-the-archive-two-trees.md) | Пути, `Segment`, `Manifest.append/read`, `ArchiveResource.promote`; убийство на седьмой минуте и что именно теряется. |
 | 8 | [Архив II — починка, хранение, таймлайн](08-the-archive-repair-retention-timeline.md) | `repair` из одних файлов, `retain` по строке записи, `timeline` с отсечёнными эпохами, `ArchivePolicy` — проход, который регистратор вешает на ресурс. |
-| 9 | Актуаторы и раздача | `GstActuator` с двумя ветвями `tee`, `GstRecActuator` с двумя источниками, `FanOut` на GstRtspServer; почему раздача — это RTSP, а не multicast, и когда это разделяемая память. |
-| 10 | `vmsrecorder` | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
+| 9 | [Актуаторы и раздача](09-actuators-and-the-fan-out.md) | `GstActuator` с двумя ветвями `tee`, `GstRecActuator` с двумя источниками, `FanOut` на GstRtspServer; почему раздача — это RTSP, а не multicast, и когда это разделяемая память. |
+| 10 | [`vmsrecorder`](10-vmsrecorder.md) | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
 | 11 | Процесс ресурса | `vms_routes` (`/manifest`, `/segment` с Range) и `vms_resource` — `Resource` из М10A с политикой регистратора и базой событий; цикл процесса. |
 | 12 | Консоль VMS | `/timeline/<id>`, `/segment/<path>`, дверь WHEP; `LiveFront`; дерево монтирования на четыре подсистемы. |
 | 13 | Живое видео | `live.subsystem.yaml`, `LiveGateway`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
