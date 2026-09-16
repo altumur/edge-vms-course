@@ -47,7 +47,7 @@ func recSetup(t *testing.T) *recBox {
 func recorder(t *testing.T, box *testbox.Box, name, server string, capacity int) *vms.RecWorker {
 	t.Helper()
 	arch := vms.NewArchiveResource(box.Spool, box.Archive, 600, box.Wall.Now)
-	r, err := vms.NewRecWorker(name, box.Vars.AsWriter("vmsrecorder", "rec/epoch/*", "rec/slots/*"), box.Objects, vms.NewFakeActuator(), arch,
+	r, err := vms.NewRecWorker(name, box.Vars.AsWriter("recworker", "rec/epoch/*", "rec/slots/*"), box.Objects, vms.NewFakeActuator(), arch,
 		vms.VmsWorkerOptions{WorkerOptions: p.WorkerOptions{Clock: box.Clock.Now, Wall: box.Wall.Now}, Server: server, Capacity: capacity, Env: vms.Env{}})
 	if err != nil {
 		t.Fatal(err)

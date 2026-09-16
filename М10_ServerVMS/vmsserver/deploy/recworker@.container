@@ -1,14 +1,14 @@
-# /etc/containers/systemd/vmsrecorder@.container — the recorder, the fourth
+# /etc/containers/systemd/recworker@.container — the recorder, the fourth
 # subsystem's worker and the only one placed on top of the archive.
-# `systemctl start vmsrecorder@r-1` — the instance name is the slot it claims.
+# `systemctl start recworker@r-1` — the instance name is the slot it claims.
 # It holds no camera: it subscribes to the fan-out of whichever worker does
 # (live_url from the VMS heartbeat) and writes footage into rec/<cam>/e<epoch>/
-# on this box's archive. In М11 this unit becomes vmsrecorder.nomad.hcl, a job
+# on this box's archive. In М11 this unit becomes recworker.nomad.hcl, a job
 # constrained to meta.archive, one per server by policy.
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # vmsrecorder@.container — the recorder as a Quadlet template: `systemctl start vmsrecorder@r-1`
+# # recworker@.container — the recorder as a Quadlet template: `systemctl start recworker@r-1`
 #
 # **Role.** The Quadlet unit for the `rec` subsystem's worker. `python3 -m vms recorder`: `RecWorker` claims
 # the slot `%i`, reads `rec/workers/<r>` and the recording rows it names, subscribes each to the camera's

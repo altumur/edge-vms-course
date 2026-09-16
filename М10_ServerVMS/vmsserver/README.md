@@ -43,7 +43,7 @@ vmsserver/
     actuator.py                Lesson 4  GstActuator: driverpacksrc ! h264parse ! watchdog ! tee ! rtph264pay ! udpsink, per camera, published by FanOut; the bus drained into (dead, posted)
                                Lesson 5  GstRecActuator: shmsrc (the worker on this server) or rtspsrc ! rtph264depay (another server), then h264parse ! watchdog ! archivesink — the recorder's pipeline
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container (no spool),
-                               vmsrecorder@.container (the only writer of segments), vmscontroller.container, vmsreccontroller.container, vmsconsole.container, vmsresource.container,
+                               recworker@.container (the only writer of segments), vmscontroller.container, vmsreccontroller.container, vmsconsole.container, vmsresource.container,
                                vmsgateway@.container, vmslivecontroller.container, vmsdetworker@.container, vmsdetcontroller.container, vms.env.example, check-quadlet.sh
   tests/                       59 tests, milliseconds, no GStreamer
 ```

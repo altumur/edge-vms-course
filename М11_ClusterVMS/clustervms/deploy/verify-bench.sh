@@ -32,14 +32,14 @@ done
 [ "$archives" -ge 1 ] && ok "$archives server(s) declare meta.archive (the resource has somewhere to be)" || bad "no server declares meta.archive"
 
 # 3
-for j in vmsworker vmscontroller vmsrecorder vmsreccontroller console resource autoscaler; do
+for j in vmsworker vmscontroller recworker vmsreccontroller console resource autoscaler; do
   nomad job validate "$HERE/$j.nomad.hcl" >/dev/null 2>&1 && ok "$j.nomad.hcl validates" || bad "$j.nomad.hcl: $(nomad job validate "$HERE/$j.nomad.hcl" 2>&1 | tail -1)"
 done
 
 # 4 — policy semantics with a token that carries ONLY the worker's policy
 nomad acl policy apply -description vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1
-nomad acl policy apply -description vmsrecorder vmsrecorder "$HERE/vmsrecorder-policy.hcl" >/dev/null 2>&1
+nomad acl policy apply -description recworker recworker "$HERE/recworker-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description vmsreccontroller vmsreccontroller "$HERE/vmsreccontroller-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description resource resource "$HERE/resource-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description console console "$HERE/console-policy.hcl" >/dev/null 2>&1
@@ -67,7 +67,7 @@ fi
 # 5 — the binding to the JOB's workload identity, which is what the product relies on
 nomad acl policy apply -namespace default -job vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsworker" || bad "policy binding to job failed"
 nomad acl policy apply -namespace default -job vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmscontroller" || bad "policy binding to vmscontroller failed"
-nomad acl policy apply -namespace default -job vmsrecorder vmsrecorder "$HERE/vmsrecorder-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsrecorder" || bad "policy binding to vmsrecorder failed"
+nomad acl policy apply -namespace default -job recworker recworker "$HERE/recworker-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job recworker" || bad "policy binding to recworker failed"
 nomad acl policy apply -namespace default -job vmsreccontroller vmsreccontroller "$HERE/vmsreccontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsreccontroller" || bad "policy binding to vmsreccontroller failed"
 nomad acl policy apply -namespace default -job console console "$HERE/console-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job console" || bad "policy binding to console failed"
 alloc="$(nomad job allocs -json vmsworker 2>/dev/null | python3 -c 'import sys,json;a=[x for x in json.load(sys.stdin) if x["ClientStatus"]=="running"];print(a[0]["ID"] if a else "")')"

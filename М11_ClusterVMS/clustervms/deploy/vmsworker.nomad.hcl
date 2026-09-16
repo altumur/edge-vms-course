@@ -2,7 +2,7 @@
 # HOLDS the camera — one connection, one epoch, one fan-out (rtsp://<server>:
 # 8554/<cam>) that the recorder, the gateway and the detectors subscribe to —
 # and writes the camera's events into the resource on its server. It records
-# nothing: footage is vmsrecorder.nomad.hcl's, the job with the disks.
+# nothing: footage is recworker.nomad.hcl's, the job with the disks.
 # count = N and NOTHING in the VMS decides N: the operator sets the bounds,
 # the Nomad Autoscaler moves count from the workers' own load. Each
 # allocation claims slot w-<NOMAD_ALLOC_INDEX> by CAS on a Variable — the

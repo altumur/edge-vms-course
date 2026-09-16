@@ -1,7 +1,7 @@
 # rec.subsystem.yaml — the recorder: the FOURTH subsystem, and the only one placed on top of the archive.
 #
 # A unit is one camera's recording, named by the camera: `rec/recordings/<cam>`. The recorder worker
-# (`vms/recorder.py`, `vmsrecorder@`) subscribes to the camera's fan-out from whichever VMS worker holds it
+# (`vms/recorder.py`, `recworker@`) subscribes to the camera's fan-out from whichever VMS worker holds it
 # (the `live_url` in the VMS heartbeat — never a second connection to the camera), takes `rec/epoch/<cam>`,
 # and writes footage into `rec/<cam>/e<epoch>/` on ITS server's archive, with the manifest beside it. The
 # worker that holds the camera may be anywhere; the recorder must be where disks are — `requires: resource`

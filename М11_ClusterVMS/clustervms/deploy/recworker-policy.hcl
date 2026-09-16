@@ -1,4 +1,4 @@
-# deploy/vmsrecorder-policy.hcl — bound to job vmsrecorder's workload identity.
+# deploy/recworker-policy.hcl — bound to job recworker's workload identity.
 # A recorder writes its epochs (by CAS, when it starts a recording) and its
 # slot (by CAS, when it claims r-<i>) and nothing else — never a recording
 # row, never placement, never anything under vms/. It READS vms/: the

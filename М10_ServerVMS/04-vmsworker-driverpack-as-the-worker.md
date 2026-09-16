@@ -226,4 +226,4 @@ Which means a vendor SDK that segfaults inside a pipeline takes the loop with it
 
 ## Where this is going
 
-The worker holds the camera and records nothing. [**Lesson 5**](05-vmsrecorder-the-fourth-subsystem.md) is the process that does — a subscriber to this fan-out, placed where the disks are — and [**Lesson 6**](06-vmscontroller.md) builds the one that tells both what to hold: the controller — the only writer of placement, stored with a reason, safe at two, never needed to recover.
+The worker holds the camera and records nothing. [**Lesson 5**](05-recworker-the-fourth-subsystem.md) is the process that does — a subscriber to this fan-out, placed where the disks are — and [**Lesson 6**](06-vmscontroller.md) builds the one that tells both what to hold: the controller — the only writer of placement, stored with a reason, safe at two, never needed to recover.

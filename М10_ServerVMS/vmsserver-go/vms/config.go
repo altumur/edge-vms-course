@@ -5,7 +5,7 @@
 //	reconciler.go        М9 Lesson 6's loop, unchanged: desired persisted, actual derived
 //	archive.go           the archive as a resource: two trees — rec/<cam>/ media (spool → promote → manifest), vms/<cam>/ events; retention as a policy
 //	worker.go            vmsworker — DriverPack as the worker: holds N cameras against an assignment, one fan-out each, events, no footage
-//	recorder.go          vmsrecorder — the fourth subsystem's worker: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on its server's archive
+//	recorder.go          recworker — the fourth subsystem's worker: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on its server's archive
 //	rec.subsystem.yaml   the recorder's spec: requires: resource, servers: distinct, near: vms
 //	controller.go        vmscontroller — the platform's SpecController run from the spec, in the VMS's words
 //	console.go           the one-box console: the read model from heartbeats; writes go to the controller

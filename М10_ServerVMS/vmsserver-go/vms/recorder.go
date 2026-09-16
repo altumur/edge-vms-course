@@ -1,6 +1,6 @@
 package vms
 
-// vmsrecorder — the fourth subsystem's worker: the only one placed on top of
+// recworker — the fourth subsystem's worker: the only one placed on top of
 // the archive. A recorder is a worker in the platform's sense (a slot claimed
 // by CAS — r-1 — an assignment read from the store, an epoch per unit, a
 // heartbeat with capacity and headroom) whose unit is one camera's RECORDING,

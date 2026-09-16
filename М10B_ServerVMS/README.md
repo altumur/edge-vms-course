@@ -28,7 +28,7 @@
 | 7 | [Архив I — два дерева и перенос](07-the-archive-two-trees.md) | Пути, `Segment`, `Manifest.append/read`, `ArchiveResource.promote`; убийство на седьмой минуте и что именно теряется. |
 | 8 | [Архив II — починка, хранение, таймлайн](08-the-archive-repair-retention-timeline.md) | `repair` из одних файлов, `retain` по строке записи, `timeline` с отсечёнными эпохами, `ArchivePolicy` — проход, который регистратор вешает на ресурс. |
 | 9 | [Актуаторы и раздача](09-actuators-and-the-fan-out.md) | `GstActuator` с двумя ветвями `tee`, `GstRecActuator` с двумя источниками, `FanOut` на GstRtspServer; почему раздача — это RTSP, а не multicast, и когда это разделяемая память. |
-| 10 | [`vmsrecorder`](10-vmsrecorder.md) | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
+| 10 | [`recworker`](10-recworker.md) | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
 | 11 | [Процесс ресурса](11-the-resource-process.md) | `vms_routes` (`/manifest`, `/segment` с Range) и `vms_resource` — `Resource` из М10A с политикой регистратора и базой событий; цикл процесса. |
 | 12 | [Консоль VMS](12-the-vms-console.md) | `/timeline/<id>`, `/segment/<path>`, дверь WHEP; `LiveFront`; дерево монтирования на четыре подсистемы. |
 | 13 | [Живое видео](13-live-video.md) | `live.subsystem.yaml`, `LiveGateway`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
@@ -45,7 +45,7 @@
 systemctl stop vmscontroller            # ничего работающее не останавливается
 systemctl kill -s KILL vmsworker@w-1    # регистратор теряет источник и переподписывается под новой эпохой,
                                         # а правка, сделанная пока воркер был мёртв, применяется из хранилища
-systemctl kill -s KILL vmsrecorder@r-1  # открытый сегмент потерян, закрытый в спуле переносится на старте
+systemctl kill -s KILL recworker@r-1  # открытый сегмент потерян, закрытый в спуле переносится на старте
 ```
 
 Нажмите *Live*: консоль создаёт `live/streams/1` на первом предложении, контроллер размещает её на шлюзе с наибольшим запасом зрителей, шлюз подписывается на ту же раздачу один раз и отвечает по WHEP; пятьдесят вкладок — пятьдесят peer'ов на одной подписке, и heartbeat воркера не меняется ни на байт.

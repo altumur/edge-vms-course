@@ -4,4 +4,4 @@
 
 ## Notes
 - `tests/conftest.py::Cluster.recorder(index, server)` builds one over that server's `ArchiveResource`, as `worker()` builds a worker.
-- The jobspec is `deploy/vmsrecorder.nomad.hcl`: the archive constraint, `spread`, `rec/policy {servers: distinct}` by default; the rec controller (`python3 -m cluster reccontroller`) moves its recordings when its server dies — `test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_written`.
+- The jobspec is `deploy/recworker.nomad.hcl`: the archive constraint, `spread`, `rec/policy {servers: distinct}` by default; the rec controller (`python3 -m cluster reccontroller`) moves its recordings when its server dies — `test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_written`.

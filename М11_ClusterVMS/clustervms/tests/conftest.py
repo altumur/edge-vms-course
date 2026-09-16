@@ -58,7 +58,7 @@ class Cluster:
 
     def recorder(self, index: int, server: str, capacity: int = 50, actuator=None, alloc=None) -> ClusterRecorder:
         """A recorder allocation on `server`: writes into THAT server's archive resource."""
-        return ClusterRecorder(self.vars.as_writer("vmsrecorder", ["rec/epoch/*", "rec/slots/*"]), self.objects,
+        return ClusterRecorder(self.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), self.objects,
                                actuator or FakeActuator(), env=self.env(index, server, alloc), archive=self.servers[server].resource,
                                clock=self.clock, wall=self.wall, capacity=capacity)
 

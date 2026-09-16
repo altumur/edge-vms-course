@@ -116,9 +116,9 @@ def test_who_may_write_where_is_in_the_mounts_too():
     assert "/data/spool" not in vols("vmsworker@.container")                            # the worker records nothing: no spool
     assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # its events, vms/<cam>/, on this box's resource
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
-    assert vols("vmsrecorder@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
-    assert "/data/media" not in vols("vmsrecorder@.container")                          # it never reads a camera: it subscribes to the fan-out
-    assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("vmsrecorder@.container")["/run/vms"]
+    assert vols("recworker@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
+    assert "/data/media" not in vols("recworker@.container")                          # it never reads a camera: it subscribes to the fan-out
+    assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("recworker@.container")["/run/vms"]
     assert "/data/archive" not in vols("vmsreccontroller.container")
     assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
 ```
@@ -321,7 +321,7 @@ def test_the_units_run_the_entrypoints_the_package_has():
 
 ```bash
 systemctl enable --now vmsresource vmscontroller vmsreccontroller vmsconsole
-systemctl enable --now vmsworker@w-1 vmsrecorder@r-1
+systemctl enable --now vmsworker@w-1 recworker@r-1
 systemctl enable --now vmslivecontroller vmsgateway@g-1
 systemctl enable --now vmsdetcontroller vmsdetworker@d-1
 ```
@@ -338,7 +338,7 @@ curl -X POST localhost:8080/cameras -H 'Idempotency-Key: a1' \
 ```bash
 systemctl stop vmscontroller            # ничего работающее не останавливается
 systemctl kill -s KILL vmsworker@w-1    # регистратор переподписывается под новой эпохой
-systemctl kill -s KILL vmsrecorder@r-1  # открытый сегмент потерян, закрытый переносится на старте
+systemctl kill -s KILL recworker@r-1  # открытый сегмент потерян, закрытый переносится на старте
 ```
 
 Три команды — три свойства, обещанные в начале модуля.

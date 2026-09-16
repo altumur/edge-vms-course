@@ -1,4 +1,4 @@
-"""vmsrecorder — the fourth subsystem's worker: the only one placed on top of the archive.
+"""recworker — the fourth subsystem's worker: the only one placed on top of the archive.
 
 A recorder is a worker in the platform's sense (a slot claimed by CAS —
 `r-1` — an assignment read from the store, an epoch per unit, a heartbeat
@@ -41,7 +41,7 @@ from .archive import ArchiveResource, overlaps, parse, subtract
 from .config import rec_row
 from .worker import FakeActuator, VmsWorker
 
-log = logging.getLogger("vmsrecorder")
+log = logging.getLogger("recworker")
 REC = Subsystem("rec")
 
 

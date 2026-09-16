@@ -190,7 +190,7 @@ def test_backfill_closes_our_gaps_and_what_it_fetches_is_ours():
     SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     now = 1000000.0                                   # backfill takes its own `now`; the heartbeats keep the box's
-    r = RecWorker("r-1", box.vars.as_writer("vmsrecorder", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
                   FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
                   env={}, window=(22, 6), keep_days=1.0, settle=1000.0)
     r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()

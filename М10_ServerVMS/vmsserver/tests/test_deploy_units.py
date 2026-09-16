@@ -30,7 +30,7 @@ def test_the_units_run_the_entrypoints_the_package_has():
     assert entrypoints == {"worker", "controller", "recorder", "reccontroller", "console", "resource", "gateway", "livecontroller", "detworker", "detcontroller"}
     for name, entry in [("vmsworker@.container", "worker"), ("vmscontroller.container", "controller"),
                         ("vmsconsole.container", "console"), ("vmsresource.container", "resource"),
-                        ("vmsrecorder@.container", "recorder"), ("vmsreccontroller.container", "reccontroller"),
+                        ("recworker@.container", "recorder"), ("vmsreccontroller.container", "reccontroller"),
                         ("vmsgateway@.container", "gateway"), ("vmslivecontroller.container", "livecontroller"),
                         ("vmsdetworker@.container", "detworker"), ("vmsdetcontroller.container", "detcontroller")]:
         u = unit(name)
@@ -50,14 +50,14 @@ def test_who_may_write_where_is_in_the_mounts_too():
     assert "/data/spool" not in vols("vmsworker@.container")                            # the worker records nothing: no spool
     assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # its events, vms/<cam>/, on this box's resource
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
-    assert vols("vmsrecorder@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
-    assert vols("vmsrecorder@.container")["/data/archive"] == "/data/archive:z"
-    assert "/data/media" not in vols("vmsrecorder@.container")                          # it never reads a camera: it subscribes to the fan-out
-    assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("vmsrecorder@.container")["/run/vms"]   # the tee's shared memory: written by the worker, read by the recorder beside it
+    assert vols("recworker@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
+    assert vols("recworker@.container")["/data/archive"] == "/data/archive:z"
+    assert "/data/media" not in vols("recworker@.container")                          # it never reads a camera: it subscribes to the fan-out
+    assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("recworker@.container")["/run/vms"]   # the tee's shared memory: written by the worker, read by the recorder beside it
     assert "/data/archive" not in vols("vmsreccontroller.container")
     assert vols("vmsresource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
     assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
-    assert unit("vmsrecorder@.container")["Container"]["StopTimeout"] == "20"          # SIGTERM finalizes the open segment
+    assert unit("recworker@.container")["Container"]["StopTimeout"] == "20"          # SIGTERM finalizes the open segment
     assert unit("vmsresource.container")["Service"]["Restart"] == "always"             # a process, not a timer: the database lives in it
 
 

@@ -134,16 +134,16 @@ def worker() -> None:
         srv.shutdown()
 
 
-# Builds `vmsrecorder` — the fourth subsystem's worker, the only one placed on top of the archive:
+# Builds `recworker` — the fourth subsystem's worker, the only one placed on top of the archive:
 # - the slot: `RECORDER_NAME`, else `r-$NOMAD_ALLOC_INDEX`, else whichever is free; Variables as writer
-#   `vmsrecorder` with `["rec/epoch/*", "rec/slots/*"]`.
+#   `recworker` with `["rec/epoch/*", "rec/slots/*"]`.
 # - `gstvms.actuator.GstRecActuator(spool, archive, SEGMENT_SECONDS)` — `rtspsrc ! archivesink` per
 #   recording, subscribed to the worker's fan-out; without GStreamer the fake, which records nothing.
 # - `RecWorker(...)`: promotes what the last instance closed but did not promote, then runs — the worker's
 #   loop, plus a re-subscription when a camera's holder moves, plus promotion on every pass.
 def recorder() -> None:
     from .recorder import RecWorker
-    vars_ = open_vars(CONFIG_URL, writer="vmsrecorder", acl={"vmsrecorder": ["rec/epoch/*", "rec/slots/*"]})
+    vars_ = open_vars(CONFIG_URL, writer="recworker", acl={"recworker": ["rec/epoch/*", "rec/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive")
     try:

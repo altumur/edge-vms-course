@@ -1,14 +1,14 @@
-# deploy/vmsrecorder.nomad.hcl — the recorder: the fourth subsystem's worker
+# deploy/recworker.nomad.hcl — the recorder: the fourth subsystem's worker
 # and the ONLY job placed on top of the archive for footage. A worker holds the
 # camera (one connection, one fan-out); a recorder subscribes to that fan-out
 # and writes rec/<cam>/e<epoch>/ on ITS server's disks. count = N as for the
 # worker: the operator's bounds, the Autoscaler's move; each allocation
 # claims slot r-<NOMAD_ALLOC_INDEX> by CAS (Lesson 2, the same proof).
-job "vmsrecorder" {
+job "recworker" {
   datacenters = ["room-a"]
   type        = "service"
 
-  group "vmsrecorder" {
+  group "recworker" {
     count = 2
 
     scaling {
@@ -52,7 +52,7 @@ job "vmsrecorder" {
       reconcile            = "best_score"
     }
 
-    task "vmsrecorder" {
+    task "recworker" {
       driver = "podman"
       kill_timeout = "20s"                           # SIGTERM finalizes the open segment; the last pass promotes it
       identity { env = true }

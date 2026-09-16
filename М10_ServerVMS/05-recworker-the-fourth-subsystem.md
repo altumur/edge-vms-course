@@ -1,4 +1,4 @@
-# Lesson 5 — `vmsrecorder`: the Fourth Subsystem, and the Only One on the Archive
+# Lesson 5 — `recworker`: the Fourth Subsystem, and the Only One on the Archive
 
 **Module:** ServerVMS — the platform's shape on one server (Module 10)
 **You will build:** recording as a subsystem of its own — `rec.subsystem.yaml`, whose unit is one camera's *recording* and whose capacity is what a server's disks can take; the recorder, a worker that holds no camera but subscribes to the tee of the worker that does — through shared memory when they share a server, over the RTSP fan-out when they do not — and writes footage into `rec/<cam>/e<epoch>/` on *its* server's archive; the affinity that puts the two together when there is room; the operator's *Record* toggle; and the proof that when the camera's worker fails over, the recording stays where the disks are and re-subscribes.
@@ -154,7 +154,7 @@ rec_con.delete("2"); rec_ctl.unplace_deleted()
 rec_ctl.assignment("r-1").units == [];  r.reconcile_once() -> [('stop', 2)]
 ```
 
-**Deliverable:** `vmsrecorder@r-1` beside `vmsworker@w-1` on the box; *Record* pressed on the page and a segment in `rec/1/e1/` ten minutes later; the worker killed and restarted, the recorder's log saying *re-subscribing* and a new `e2` directory; *Stop recording* and the pipeline gone within one pass; `test_lesson5_recorder.py` green.
+**Deliverable:** `recworker@r-1` beside `vmsworker@w-1` on the box; *Record* pressed on the page and a segment in `rec/1/e1/` ten minutes later; the worker killed and restarted, the recorder's log saying *re-subscribing* and a new `e2` directory; *Stop recording* and the pipeline gone within one pass; `test_lesson5_recorder.py` green.
 
 ---
 

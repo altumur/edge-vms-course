@@ -33,7 +33,7 @@ def _box():
 
 def _recorder(box, name="r-1", server="srv-1", capacity=50):
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
-    r = RecWorker(name, box.vars.as_writer("vmsrecorder", ["rec/epoch/*", "rec/slots/*"]), box.objects, FakeActuator(), archive=arch,
+    r = RecWorker(name, box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects, FakeActuator(), archive=arch,
                   clock=box.clock, wall=box.wall, server=server, capacity=capacity, env={})
     r.heartbeat_once()
     return r

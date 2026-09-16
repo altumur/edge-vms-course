@@ -1,4 +1,4 @@
-# Урок 10 — `vmsrecorder`
+# Урок 10 — `recworker`
 
 **Модуль:** М10B — ServerVMS (часть вторая)
 **Вы напишете:** `vms/rec.subsystem.yaml` — четвёртую подсистему, первую с `near`; и `vms/recorder.py` — `RecWorker`: `source` из чужого heartbeat'а, `enrich`, `status_extra`, `status`, `resubscribe`, `promote_closed`, `metrics_text`.

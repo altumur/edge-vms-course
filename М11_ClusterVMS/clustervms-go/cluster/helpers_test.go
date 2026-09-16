@@ -95,7 +95,7 @@ func (c *Cluster) recorder(t testing.TB, index int, server string, capacity int)
 	if capacity == 0 {
 		capacity = 50
 	}
-	r, err := cluster.NewClusterRecorder(c.Vars.AsWriter("vmsrecorder", "rec/epoch/*", "rec/slots/*"), c.Objects, vms.NewFakeActuator(),
+	r, err := cluster.NewClusterRecorder(c.Vars.AsWriter("recworker", "rec/epoch/*", "rec/slots/*"), c.Objects, vms.NewFakeActuator(),
 		c.Servers[server].Resource, c.env(index, server, ""), vms.VmsWorkerOptions{WorkerOptions: p.WorkerOptions{Clock: c.Clock.Now, Wall: c.Wall.Now}, Capacity: capacity})
 	if err != nil {
 		t.Fatal(err)

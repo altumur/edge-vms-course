@@ -68,7 +68,7 @@ func main() {
 		log.Printf("worker %s (instance %s) claimed its slot", w.Name, w.Instance)
 		w.Run(2*time.Second, stop)
 	case "recorder": // the only writer of footage: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on THIS box's archive
-		vars := openVars(root, "vmsrecorder", "rec/epoch/*", "rec/slots/*")
+		vars := openVars(root, "recworker", "rec/epoch/*", "rec/slots/*")
 		log.Println("no GStreamer in the Go port: the fake actuator records nothing")
 		r, err := vms.NewRecWorker(os.Getenv("RECORDER_NAME"), vars, objects, vms.NewFakeActuator(), vms.NewArchiveResource(spool, archive, 600, nil),
 			vms.VmsWorkerOptions{Capacity: capacity})

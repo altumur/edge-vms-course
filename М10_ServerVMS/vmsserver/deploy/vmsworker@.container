@@ -49,7 +49,7 @@ EnvironmentFile=/data/config/vms.env
 # the two stores, read-write: the worker writes `vms/epoch/*`, `vms/slots/*` (its token) and its heartbeat
 # object. `:z` relabels for SELinux, shared.
 Volume=/data/platform:/data/platform:z
-# no spool: the worker records nothing — the recorder does (`vmsrecorder@.container`). Read-write here
+# no spool: the worker records nothing — the recorder does (`recworker@.container`). Read-write here
 # because the camera's event buckets, `vms/<cam>/e<epoch>/`, are the worker's, on this server's resource;
 # it never writes under `rec/`.
 Volume=/data/archive:/data/archive:z
