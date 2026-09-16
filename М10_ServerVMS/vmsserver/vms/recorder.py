@@ -32,7 +32,7 @@ import logging
 import os
 import time
 
-from psimplatform.console import heartbeats
+from psimplatform.console import holder_of
 from psimplatform.contract import Subsystem
 from psimplatform.objects import ObjectStore
 from psimplatform.variables import Variables
@@ -83,14 +83,14 @@ class RecWorker(VmsWorker):
         The source is the worker's shared-memory branch (`live_shm`, shm://…) when that worker is on
         THIS server — the same bytes with no RTSP hop, no fan-out process on the recording path — and
         its RTSP fan-out (`live_url`) otherwise."""
-        for hb in heartbeats(self.objects, "vms/").values():
-            for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
-                    server = hb.extra.get("server", "?")
-                    if server == self.server and st.get("live_shm"):
-                        return server, st["live_shm"]
-                    return server, st["live_url"]
-        return None
+        found = holder_of(self.objects, "vms/", cam, self.wall(), phase="running", field="live_url")
+        if found is None:
+            return None
+        _, hb, st = found
+        server = hb.extra.get("server", "?")
+        if server == self.server and st.get("live_shm"):
+            return server, st["live_shm"]
+        return server, st["live_url"]
 
     # A recording's pipeline needs a source: `rtspsrc location=<live_url> ! archivesink` under this
     # recorder's epoch. No source (the camera is held by nobody yet) means "cannot start now": the
@@ -182,11 +182,10 @@ class RecWorker(VmsWorker):
     # `(cam, playback_url, coverage)` for a recording whose camera is held by a worker that serves the
     # device's own archive — found the way everything is found here: in the holder's heartbeat.
     def device_source(self, cam) -> tuple[str, dict] | None:
-        for hb in heartbeats(self.objects, "vms/").values():
-            for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("playback_url") and st.get("coverage"):
-                    return st["playback_url"], st["coverage"]
-        return None
+        found = holder_of(self.objects, "vms/", cam, self.wall(), field="playback_url")
+        if found is None or not found[2].get("coverage"):
+            return None                       # no phase: a channel held only for its archive answers too
+        return found[2]["playback_url"], found[2]["coverage"]
 
     # Bounded work, on request — never in the ordinary pass, the way `rebalance(budget)` is bounded
     # (Lesson 13): backfill competes with live for the device's uplink, so it gets a ceiling and an hour.

@@ -31,7 +31,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from psimplatform import runtime
-from psimplatform.console import SendMixin, heartbeats
+from psimplatform.console import SendMixin, heartbeats, holder_of
 from psimplatform.contract import Worker
 from psimplatform.spec import SpecController
 from psimplatform.variables import Variables
@@ -93,11 +93,11 @@ class LiveGateway(Worker):
     # -- where a camera's RTP is: the VMS heartbeat, never a call to the worker ----------------------
     def rtp_source(self, cam: str):
         """`(server, live_url, epoch)` of the worker holding the camera — its RTSP fan-out, on any server."""
-        for hb in heartbeats(self.objects, "vms/").values():
-            for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
-                    return hb.extra.get("server", "?"), st["live_url"], int(st.get("epoch", 0))
-        return None
+        found = holder_of(self.objects, "vms/", cam, self.wall(), phase="running", field="live_url")
+        if found is None:
+            return None
+        _, hb, st = found
+        return hb.extra.get("server", "?"), st["live_url"], int(st.get("epoch", 0))
 
     # -- the reconcile pass: make the subscriptions equal the assignment -------------------------------
     def reconcile_once(self, now: float | None = None) -> list[str]:

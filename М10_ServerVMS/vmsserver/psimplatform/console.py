@@ -116,7 +116,12 @@ def send_file(handler, path: str, content_type: str) -> None:
 # Every worker's last heartbeat under `prefix`, whatever its age — the read model's and `/metrics`' source.
 # Same scan as `Controller.workers_seen` without the age filter.
 def heartbeats(objects, prefix: str) -> dict[str, Heartbeat]:
-    """Every worker's last heartbeat, whatever its age — the read model's source."""
+    """Every worker's last heartbeat, WHATEVER ITS AGE — the read model's source.
+
+    The read model wants the stale ones: it shows them muted, as "last known state".
+    Anyone asking *who can I talk to right now* wants `holders()` below instead — a
+    catalogue with the health filter inside it, so that no caller has to remember it.
+    Four of them forgot."""
     out = {}
     for key in objects.list(prefix):
         if key.endswith("/heartbeat"):
@@ -125,6 +130,36 @@ def heartbeats(objects, prefix: str) -> dict[str, Heartbeat]:
                 hb = Heartbeat.from_bytes(raw)
                 out[hb.worker] = hb
     return out
+
+
+# -- the catalogue: who is reachable, and who holds what ----------------------------------------------
+# `heartbeats` answers "what did each of them last say", which is what a screen wants. This answers "who
+# can I talk to", which is what a subscriber wants — and the difference is one comparison that every
+# caller was making differently or not at all (the recorder, the gateway and the detector leant on a dead
+# worker's last `phase: running`; the console's playback route checked nothing).
+#
+# It is the `?passing=true` of a service catalogue, and it is here rather than in each caller for the
+# reason Consul put it in the query: a filter that callers apply by hand is a filter callers forget.
+def holders(objects, prefix: str, now: float, lost_after: float = 45.0) -> dict[str, Heartbeat]:
+    """The heartbeats fresh enough to act on."""
+    return {w: hb for w, hb in heartbeats(objects, prefix).items() if now - hb.ts <= lost_after}
+
+
+# `(worker, its heartbeat, the unit's status entry)` for the process holding `unit` right now, or None.
+# `phase` narrows it further when the caller needs the unit to be doing something and not merely held:
+# a recorder subscribes to a fan-out only in `running`, while a playback door answers in `held` too.
+def holder_of(objects, prefix: str, unit, now: float, lost_after: float = 45.0,
+              phase: str | None = None, field: str | None = None):
+    for w, hb in sorted(holders(objects, prefix, now, lost_after).items()):
+        for st in hb.status:
+            if str(st.get("id")) != str(unit):
+                continue
+            if phase is not None and st.get("phase") != phase:
+                continue
+            if field is not None and not st.get(field):
+                continue
+            return w, hb, st
+    return None
 
 
 # A retried POST must be the same POST whichever console answers it, so the key lives in the store, not in a

@@ -138,7 +138,9 @@ def test_a_dead_gateway_loses_its_fan_outs_to_the_survivor_and_viewers_reconnect
         g1.reconcile_once(); g1.heartbeat_once()
         assert _whep(base, 1)[0] == 201
         # g-1 dies: its slot lapses, the controller redistributes, g-2 subscribes, the viewer's next offer lands there
-        box.clock.advance(60); box.wall.advance(60); g2.heartbeat_once()               # g-1 silent for a minute; g-2 still here
+        box.clock.advance(60); box.wall.advance(60)
+        g2.heartbeat_once(); w.heartbeat_once()      # g-1 silent for a minute; g-2 and the camera's holder still here
+
         assert live_ctl.released_slots() == []                                           # a crash releases nothing…
         assert live_ctl.redistribute() == []                                             # …and the controller moves nothing on its own
         live_ctl.retire("g-1")                                                           # the operator (or Nomad's stop) releases the slot

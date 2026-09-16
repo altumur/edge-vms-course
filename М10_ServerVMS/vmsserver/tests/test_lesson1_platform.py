@@ -170,3 +170,57 @@ def test_the_resource_is_a_platform_job_that_mirrors_any_subsystems_buckets():
     box.vars.put("other/retention", {"days": 1})
     box.wall.advance(3 * 86400)
     assert res["srv-a"].retain() == 1 and buckets_under(roots["srv-a"], "other", "y", 600) == []   # each subsystem's days, from its own row
+
+
+def test_a_worker_that_released_its_slot_stops_receiving_units():
+    """Deregistration, the one thing a service catalogue has that a heartbeat does not.
+
+    A worker that lets go of its slot has said it is leaving. Its heartbeat is still
+    seconds old and will stay "live" for `lost_after`, so without this the controller
+    keeps placing NEW units on a process on its way out — and the next pass moves them
+    off again. Churn at every scale-in and every rolling update. `redistribute` already
+    read `Slot.released`; placement did not."""
+    from vms.config import SPEC
+    from vms.controller import VmsController
+    from vms.worker import FakeActuator, VmsWorker
+    from tests.conftest import Box
+
+    box = Box()
+    ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
+    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    w1 = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
+    w2 = VmsWorker("w-2", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-2", archive_root=box.archive)
+    w1.heartbeat_once(); w2.heartbeat_once()
+
+    w1.heartbeat_once(); w1.release_slot()                    # an orderly stop: a last word, then let go
+    assert "w-1" in ctl.workers_seen()                        # still in the catalogue: its heartbeat is seconds old
+    con.create_camera({"source": "driverpack://file/a.mp4"})
+    assert ctl.ensure_placed()[0].worker == "w-2"             # …and still not a place to put work
+
+
+def test_a_subscriber_is_not_handed_a_holder_that_has_gone_silent():
+    """`heartbeats()` returns every last word whatever its age — the read model wants the
+    stale ones, to show them muted. A SUBSCRIBER wants only who is reachable, and each of
+    the four that ask (recorder, gateway, detector, console) used to decide that for
+    itself: three leant on a dead worker's last `phase: running`, the fourth checked
+    nothing. `holders()`/`holder_of()` put the filter in the catalogue, where it cannot
+    be forgotten."""
+    from psimplatform.console import heartbeats, holder_of, holders
+    from vms.config import SPEC
+    from vms.controller import VmsController
+    from vms.worker import FakeActuator, VmsWorker
+    from tests.conftest import Box
+
+    box = Box()
+    ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
+    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
+    w.heartbeat_once(); con.create_camera({"source": "driverpack://file/a.mp4"}); ctl.ensure_placed()
+    w.reconcile_once(); w.heartbeat_once()
+
+    assert holder_of(box.objects, "vms/", 1, box.wall(), phase="running", field="live_url") is not None
+
+    box.wall.advance(60)                                      # the holder stops saying anything
+    assert heartbeats(box.objects, "vms/")["w-1"].status[0]["phase"] == "running"   # its LAST word still says so
+    assert holders(box.objects, "vms/", box.wall()) == {}                            # …and it is not reachable
+    assert holder_of(box.objects, "vms/", 1, box.wall(), phase="running", field="live_url") is None

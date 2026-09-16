@@ -53,7 +53,7 @@ import time
 import urllib.error
 import urllib.request
 
-from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from psimplatform.console import PAGE, Mount, SpecConsole, heartbeats, holder_of, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
 from psimplatform.eventdatabase import MergedIndex
 from psimplatform.spec import Refused, SpecController
 
@@ -74,6 +74,12 @@ class LiveFront:
         self.ctl, self.live = ctl, live_ctl
 
     # Every gateway's last heartbeat: url, capacity, headroom, per-stream status.
+    #
+    # Deliberately NOT `holders()`: this is the one lookup that wants the stale ones. A gateway that has
+    # gone quiet still holds the placement, and proxying to its address gets `OSError` — which the caller
+    # turns into "gateway g-2 is not answering — unavailable, not lost". Filter it out here and that
+    # becomes "no gateway holds this stream yet", which is a different fact and a worse one: the operator
+    # would be told the stream was never placed when in truth its gateway is down.
     def gateways(self) -> dict:
         return heartbeats(self.live.objects, "live/")
 
@@ -154,31 +160,26 @@ class LiveFront:
 # between the drawing and the click would make a stored worker name a 404; resolving at request time costs
 # one heartbeat read and cannot go stale. The fourth consumer of the same move, after the recorder, the
 # gateway and the detector.
-def device_playback(objects, cam) -> str | None:
-    for hb in heartbeats(objects, "vms/").values():
-        for st in hb.status:
-            if str(st.get("id")) == str(cam) and st.get("playback_url"):
-                return st["playback_url"]
-    return None
+def device_playback(objects, cam, now: float) -> str | None:
+    found = holder_of(objects, "vms/", cam, now, field="playback_url")
+    return None if found is None else found[2]["playback_url"]
 
 
 # What the DEVICE has and we do not — drawn only where our own footage does not cover it. The same
 # subtraction the recorder fetches by (Lesson 16): one rule, two uses, so the picture and the work cannot
 # disagree. A span like this is the one that will disappear — our archive keeps thirty days, a card keeps
 # three — which is why the page offers to pin it.
-def device_spans(objects, cam, ours: list[dict], t0: float, t1: float) -> list[dict]:
-    for hb in heartbeats(objects, "vms/").values():
-        for st in hb.status:
-            if str(st.get("id")) != str(cam) or not st.get("coverage"):
-                continue
-            cov = st["coverage"]
-            want = (max(float(cov["from"]), t0), min(float(cov["to"]), t1))
-            if want[1] <= want[0]:
-                return []
-            have = [(s["start"], s["end"]) for s in ours]
-            return [{"start": a, "end": b, "media": None, "epoch": 0, "source": "device",
-                     "fenced": False, "device": True} for a, b in subtract(want, have)]
-    return []
+def device_spans(objects, cam, ours: list[dict], t0: float, t1: float, now: float) -> list[dict]:
+    found = holder_of(objects, "vms/", cam, now, field="coverage")
+    if found is None:
+        return []
+    cov = found[2]["coverage"]
+    want = (max(float(cov["from"]), t0), min(float(cov["to"]), t1))
+    if want[1] <= want[0]:
+        return []
+    have = [(s["start"], s["end"]) for s in ours]
+    return [{"start": a, "end": b, "media": None, "epoch": 0, "source": "device",
+             "fenced": False, "device": True} for a, b in subtract(want, have)]
 
 
 def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, ctl=None):
@@ -186,6 +187,7 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
     archive we wrote and from the one we did not, and the WHEP door to the live
     gateways. Returns None when a route is not ours, so the console answers 404."""
     ctl = ctl if ctl is not None else (live.ctl if live is not None else None)
+    con_wall = (ctl.wall if ctl is not None else time.time)   # the catalogue needs "now" to know who is reachable
 
     def extra(handler, method, path, q):
         if live is not None and path.startswith("/whep/"):
@@ -205,7 +207,7 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
         if method != "GET" or archive is None:
             return None
         if (path == "/segment" or path == "/segment/") and ctl is not None:                 # the device's own footage, through its holder
-            url = device_playback(ctl.objects, q.get("cam"))
+            url = device_playback(ctl.objects, q.get("cam"), con_wall())
             if url is None:
                 return 503, {"detail": "nobody holds this camera right now", "error": "unheld"}
             return 200, {"playback": f"{url}?from={q.get('from', 0)}&to={q.get('to', 1e12)}"}
@@ -219,7 +221,7 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
             cid = int(path.rsplit("/", 1)[1])
             t0, t1 = float(q.get("from", 0)), float(q.get("to", 1e12))
             ours = Manifest(archive.root, cid).timeline(t0, t1)
-            extra = device_spans(ctl.objects, cid, ours, t0, t1) if ctl is not None else []
+            extra = device_spans(ctl.objects, cid, ours, t0, t1, con_wall()) if ctl is not None else []
             return 200, sorted(ours + extra,
                                key=lambda d: (d["start"], d["epoch"]))
         return None

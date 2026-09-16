@@ -552,9 +552,16 @@ class SpecController(Controller):
 
     # The given list, or the workers seen heartbeating in the last 45 s; minus those whose resource is
     # silent when the spec requires one; sorted.
+    # Who may receive units now. Three exclusions, and the third is the one a catalogue teaches: a worker
+    # that RELEASED its slot said it is leaving, and a service catalogue's answer to that is deregistration —
+    # gone from the list at once, not in `lost_after` seconds when its heartbeat finally ages out. We have
+    # the fact (`Slot.released`) and used it only to move units OFF such a worker (`redistribute`); without
+    # this line the very next `place()` could put a new one back ON it, and the pass after that would move
+    # it off again. A departure that still collects work is churn at every scale-in and every update.
     def _pool(self, workers):
         pool = sorted(workers if workers is not None else self.workers_seen())
-        gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool))
+        leaving = {n for n, s in self.slots().items() if s.released}
+        gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool)) | leaving
         return [w for w in pool if w not in gone]
 
     # `near: <sub>`: the worker of that subsystem whose heartbeat status lists this unit's id in phase

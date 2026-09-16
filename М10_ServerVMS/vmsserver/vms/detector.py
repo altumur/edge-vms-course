@@ -20,7 +20,7 @@ import os
 import time
 
 from psimplatform import runtime
-from psimplatform.console import heartbeats
+from psimplatform.console import holder_of
 from psimplatform.contract import Worker
 from psimplatform.events import EventLog
 from psimplatform.variables import Variables
@@ -67,11 +67,8 @@ class DetWorker(Worker):
     # -- where the camera's RTP is: the VMS heartbeat, never a call to the worker ---------------------
     def rtp_source(self, cam: str):
         """`(server, live_url)` of the worker holding the camera — its RTSP fan-out, on any server."""
-        for hb in heartbeats(self.objects, "vms/").values():
-            for st in hb.status:
-                if str(st.get("id")) == str(cam) and st.get("phase") == "running" and st.get("live_url"):
-                    return hb.extra.get("server", "?"), st["live_url"]
-        return None
+        found = holder_of(self.objects, "vms/", cam, self.wall(), phase="running", field="live_url")
+        return None if found is None else (found[1].extra.get("server", "?"), found[2]["live_url"])
 
     def unit_row(self, unit: str) -> dict | None:
         it, _ = self.vars.get(DET.config("units", unit))

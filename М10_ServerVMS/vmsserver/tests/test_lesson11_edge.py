@@ -150,7 +150,7 @@ def test_the_console_draws_the_device_only_where_we_have_nothing():
 
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     ours = [{"start": 200.0, "end": 400.0}, {"start": 600.0, "end": 700.0}]
-    spans = device_spans(box.objects, 1, ours, 0.0, 1000.0)
+    spans = device_spans(box.objects, 1, ours, 0.0, 1000.0, box.wall())
     assert [(s["start"], s["end"]) for s in spans] == [(0.0, 200.0), (400.0, 600.0), (700.0, 1000.0)]
     assert all(s["source"] == "device" and s["media"] is None for s in spans)
 
