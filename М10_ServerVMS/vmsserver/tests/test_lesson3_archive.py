@@ -20,7 +20,10 @@ def write_segment(root, cam, epoch, start, size=1000, mtime=None):
 
 
 def test_parse_and_paths():
-    assert parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a") == (7, 5, utc("2026-09-12T10:10:00"))
+    # The middle segment is the UNIT, and it comes back as a string: the path grammar does not know that
+    # `id: cam` makes today's unit a camera number, and a recording named `7-backup` parses the same way.
+    assert parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a") == ("7", 5, utc("2026-09-12T10:10:00"))
+    assert parse("/a/rec/7-backup/e5/20260912T101000Z.mp4", "/a") == ("7-backup", 5, utc("2026-09-12T10:10:00"))
     assert parse("/a/rec/7/e5/manifest.jsonl", "/a") is None and parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a") is None   # the worker's tree holds no media
 
 
@@ -111,13 +114,13 @@ def test_events_are_buckets_on_the_resource_recording_or_not():
     assert parse_bucket(p, box.archive) == ("vms", "7", 3, t0) and read_bucket(p)[0]["zone"] == "gate"
     log.append(t0 + 40.0, "silent")                                             # the event with no segment, by definition
     p2 = log.append(t0 + 700.0, "person", score=0.9)                            # the next bucket: rolled by the clock
-    assert subsystems_under(box.archive) == {"vms": ["7"]} and res.cameras() == []   # watched, not recorded: buckets, no rec/ tree
+    assert subsystems_under(box.archive) == {"vms": ["7"]} and res.units() == []   # watched, not recorded: buckets, no rec/ tree
     assert Manifest(box.archive, 7).timeline(t0, t0 + 1200) == []              # the manifest indexes media, and there is none
     db = EventDatabase(box.archive, "box", wall=box.wall)
     assert db.rebuild()["added"] == 3 and [e["kind"] for e in db.query(t0, t0 + 1200, cam=7)["events"]] == ["motion", "silent", "person"]
     # now a recorder records the camera under ITS epoch, into rec/: the timeline has a span, the events are still the worker's
     seg = res.promote(write_segment(box.spool, 7, 4, "2026-09-12T10:10:00", mtime=t0 + 1200))
-    assert seg.path == "rec/7/e4/20260912T101000Z.mp4" and res.cameras() == [7]
+    assert seg.path == "rec/7/e4/20260912T101000Z.mp4" and res.units() == ["7"]   # the tree is unchanged on disk: the unit IS the camera while `id: cam`
     tl = Manifest(box.archive, 7).timeline(t0, t0 + 1200, current_epoch=4)
     assert [(x["media"] is not None, x["epoch"], x["fenced"]) for x in tl] == [(True, 4, False)]
     assert subsystems_under(box.archive) == {"rec": ["7"], "vms": ["7"]}         # two trees, two writers, one camera

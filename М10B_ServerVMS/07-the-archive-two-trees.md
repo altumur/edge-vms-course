@@ -1,7 +1,7 @@
 # Урок 7 — Архив I: два дерева и перенос
 
 **Модуль:** М10B — ServerVMS (часть вторая)
-**Вы напишете:** первую половину `vms/archive.py` — грамматику путей (`segment_path`, `parse`, `event_log`), `Segment`, `Manifest` (`append`, `read`, `rewrite`), `ArchiveResource.__init__`, `promote`, `_move`, `cameras`, `closed_in_spool`, `usage`.
+**Вы напишете:** первую половину `vms/archive.py` — грамматику путей (`segment_path`, `parse`, `event_log`), `Segment`, `Manifest` (`append`, `read`, `rewrite`), `ArchiveResource.__init__`, `promote`, `_move`, `units`, `closed_in_spool`, `usage`.
 **Время:** ~85 минут.
 
 ## Зачем этот урок
@@ -11,8 +11,8 @@
 Начинается он с картинки, которая объясняет модуль лучше любого текста, — **две ветки на одном ресурсе**:
 
 ```
-<archive>/rec/<cam>/e<epoch>/<start>Z.mp4          видео: пишет РЕГИСТРАТОР
-<archive>/rec/<cam>/manifest.jsonl                 индекс видео, рядом с ним
+<archive>/rec/<unit>/e<epoch>/<start>Z.mp4         видео: пишет РЕГИСТРАТОР
+<archive>/rec/<unit>/manifest.jsonl                индекс видео, рядом с ним
 <archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl события: пишет ДЕРЖАТЕЛЬ камеры
 ```
 
@@ -65,7 +65,7 @@ EVENTS_SUB = "vms"   # the worker's tree: the camera's event buckets
 
 Раскладка — платформенная: `<subsystem>/<unit>/…`, та же, что у ресурса в уроке 16 М10A. Не «специальный каталог для видео», а обычное дерево подсистемы на ресурсе, рядом с которым завтра встанет дерево детекторов.
 
-Правило «один писатель на префикс», которое в М10A держало хранилище конфигурации, здесь держит **файловую систему**. В `rec/<cam>/` пишет один процесс — регистратор, держащий эпоху этой записи. В `vms/<cam>/` — один процесс, держатель камеры. Никакой координации между ними не нужно, потому что они не пересекаются.
+Правило «один писатель на префикс», которое в М10A держало хранилище конфигурации, здесь держит **файловую систему**. В `rec/<unit>/` пишет один процесс — регистратор, держащий эпоху этой записи. В `vms/<cam>/` — один процесс, держатель камеры. Никакой координации между ними не нужно, потому что они не пересекаются.
 
 ```python
 def event_log(root: str, cam: int, epoch: int, bucket_seconds: int = 600) -> EventLog:
@@ -83,28 +83,34 @@ SEGMENT = re.compile(r"^(\d{8}T\d{6}Z)\.mp4$")
 EPOCH_DIR = re.compile(r"^e(\d+)$")
 
 
-def segment_path(root: str, cam: int, epoch: int, start: datetime) -> str:
-    return os.path.join(root, SUB, str(cam), f"e{epoch}", start.strftime("%Y%m%dT%H%M%SZ") + ".mp4")
+def segment_path(root: str, unit: str, epoch: int, start: datetime) -> str:
+    return os.path.join(root, SUB, str(unit), f"e{epoch}", start.strftime("%Y%m%dT%H%M%SZ") + ".mp4")
 ```
+
+Средний сегмент — **единица**, а не камера, и на этом стоит остановиться, потому что сегодня это одна и та же строка. `rec.subsystem.yaml` говорит `id: cam`: запись названа камерой, которую записывает. Значит `rec/7/` — и путь, и камера, и единица одновременно.
+
+Но код путей знать об этом не должен. В тот день, когда у камеры появятся две записи — на разных серверах или с разными настройками хранения, — единица станет `7-main` и `7-backup`, а грамматика не изменится ни на символ. Назвать параметр `cam` и обернуть его в `int()` — ровно то, что превращает тот день из одной строки YAML в переписывание четырёх модулей.
+
+Это общее правило, и оно повторяется в курсе: **платформа знает единицу, подсистема знает, что единица — камера.** Здесь оно спускается на уровень ниже — в имена каталогов.
 
 `root` — параметр, и **одна и та же функция строит путь в спуле и в архиве**. Грамматика одинакова, значит перенос — это смена корня и ничего больше. Увидим это в `promote`.
 
 Формат `%Y%m%dT%H%M%SZ` — компактный ISO без разделителей: `20260915T141000Z`. Без двоеточий, потому что двоеточие в имени файла — беда на половине файловых систем; `Z` в конце — потому что время UTC, и об этом должно быть написано в самом имени.
 
 ```python
-def parse(path: str, root: str) -> tuple[int, int, datetime] | None:
+def parse(path: str, root: str) -> tuple[str, int, datetime] | None:
     rel = os.path.relpath(path, root).split(os.sep)
-    if len(rel) != 4 or rel[0] != SUB or not rel[1].isdigit() or not EPOCH_DIR.match(rel[2]):
+    if len(rel) != 4 or rel[0] != SUB or not rel[1] or not EPOCH_DIR.match(rel[2]):
         return None
     m = SEGMENT.match(rel[3])
     if not m:
         return None
-    return int(rel[1]), int(rel[2][1:]), datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    return rel[1], int(rel[2][1:]), datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
 ```
 
 Обратная функция, и это **центр всей отказоустойчивости архива**.
 
-Ровно четыре сегмента пути: подсистема, камера, эпоха, файл. Каждый проверяется. Всё, что не подходит, — `None`, а не исключение: `parse` применяется к результату обхода каталога, где лежат и манифесты, и временные файлы, и чужое, и «не сегмент» — это нормальный ответ, а не ошибка.
+Ровно четыре сегмента пути: подсистема, единица, эпоха, файл. Каждый проверяется — и единица проверяется только на непустоту, а не на «состоит из цифр»: `7-backup` такой же законный каталог, как `7`. Всё, что не подходит, — `None`, а не исключение: `parse` применяется к результату обхода каталога, где лежат и манифесты, и временные файлы, и чужое, и «не сегмент» — это нормальный ответ, а не ошибка.
 
 Что даёт обратимость. **Из одного файла восстанавливается вся строка манифеста, кроме размера и конца — и те берутся из `os.stat`.** Значит, манифест — не источник истины, а кэш. Потеряли, повредили, заменили диск — обошли каталоги и собрали заново (`repair` в уроке 8).
 
@@ -115,7 +121,7 @@ def parse(path: str, root: str) -> tuple[int, int, datetime] | None:
 ```python
 @dataclass(frozen=True)
 class Segment:
-    cam: int
+    unit: str             # the recording this footage belongs to; `id: cam` makes it the camera's id today
     epoch: int
     start: float          # unix seconds
     end: float
@@ -123,7 +129,7 @@ class Segment:
     bytes: int
 
     def line(self) -> str:
-        return json.dumps({"kind": "media", "cam": self.cam, "epoch": self.epoch, "start": self.start, "end": self.end,
+        return json.dumps({"kind": "media", "unit": self.unit, "epoch": self.epoch, "start": self.start, "end": self.end,
                            "path": self.path, "bytes": self.bytes})
 ```
 
@@ -287,11 +293,13 @@ class Manifest:
 Обратите внимание: `parse(p, self.spool)` отсеивает всё, что не является сегментом, — та же функция, что строит и разбирает пути.
 
 ```python
-    def cameras(self) -> list[int]:
+    def units(self) -> list[str]:
         try:
-            return sorted(int(d) for d in os.listdir(os.path.join(self.root, SUB)) if d.isdigit())
+            names = [d for d in os.listdir(os.path.join(self.root, SUB))
+                     if os.path.isdir(os.path.join(self.root, SUB, d))]
         except FileNotFoundError:
             return []
+        return sorted(names, key=lambda d: (0, int(d), "") if d.isdigit() else (1, 0, d))
 ```
 
 Список камер — это **список каталогов**. Не запрос к контроллеру, не чтение конфигурации: ресурс знает о камерах ровно то, что у него на диске. Камера, удалённая из конфигурации, здесь ещё есть — и должна быть, пока её видео не истекло по сроку хранения.

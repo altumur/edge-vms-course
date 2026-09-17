@@ -56,11 +56,11 @@
 
 ```python
         added = dropped = 0
-        for cam in self.cameras():
-            man = Manifest(self.root, cam)
+        for unit in self.units():
+            man = Manifest(self.root, unit)
             lines = {s.path: s for s in man.read()}
             present = {}
-            for d, _, files in os.walk(unit_dir(self.root, SUB, str(cam))):
+            for d, _, files in os.walk(unit_dir(self.root, SUB, unit)):
                 for f in files:
                     p = os.path.join(d, f)
                     parsed = parse(p, self.root)
@@ -192,10 +192,10 @@ class ArchivePolicy:
     def pass_(self, now: float) -> dict:
         rep = self.res.repair()
         removed = 0
-        for cam in self.res.cameras():
-            items, _ = self.vars.get(f"{SUB}/recordings/{cam}")
+        for unit in self.res.units():
+            items, _ = self.vars.get(f"{SUB}/recordings/{unit}")   # строка самой единицы: её хранение, а не камеры
             days = int(items.get("retention_days", 30)) if items else 30
-            removed += self.res.retain(cam, days, now)
+            removed += self.res.retain(unit, days, now)
         return {**rep, "media_removed": removed}
 ```
 

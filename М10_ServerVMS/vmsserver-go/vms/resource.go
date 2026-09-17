@@ -38,7 +38,7 @@ func ResourceRoutes(archive *ArchiveResource) p.Extra {
 				w.WriteHeader(404)
 				return true
 			}
-			for _, l := range NewManifest(root, cam).Lines() {
+			for _, l := range NewManifest(root, strconv.Itoa(cam)).Lines() {
 				io.WriteString(w, l+"\n")
 			}
 			return true

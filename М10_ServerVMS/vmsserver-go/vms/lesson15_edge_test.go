@@ -289,11 +289,11 @@ func TestBackfillClosesOurGapsAndWhatItFetchesIsOurs(t *testing.T) {
 
 	// two recordings of ours with an hour missing between them
 	for _, span := range [][2]float64{{now - 80000, now - 76400}, {now - 70000, now - 66400}} {
-		pth := vms.SegmentPath(box.Archive, 1, epoch, time.Unix(int64(span[0]), 0).UTC())
+		pth := vms.SegmentPath(box.Archive, "1", epoch, time.Unix(int64(span[0]), 0).UTC())
 		os.MkdirAll(filepath.Dir(pth), 0o755)
 		os.WriteFile(pth, []byte("x"), 0o644)
 		rel, _ := filepath.Rel(box.Archive, pth)
-		vms.NewManifest(box.Archive, 1).Append(vms.Segment{Cam: 1, Epoch: epoch, Start: span[0], End: span[1], Path: rel, Bytes: 1, Source: "live"})
+		vms.NewManifest(box.Archive, "1").Append(vms.Segment{Unit: "1", Epoch: epoch, Start: span[0], End: span[1], Path: rel, Bytes: 1, Source: "live"})
 	}
 	eq(t, r.OurCoverage(1), [][2]float64{{now - 80000, now - 76400}, {now - 70000, now - 66400}})
 
@@ -319,7 +319,7 @@ func TestBackfillClosesOurGapsAndWhatItFetchesIsOurs(t *testing.T) {
 	}
 
 	edge := []vms.Segment{}
-	for _, s := range vms.NewManifest(box.Archive, 1).Read() {
+	for _, s := range vms.NewManifest(box.Archive, "1").Read() {
 		if s.Source == "edge" {
 			edge = append(edge, s)
 		}
@@ -335,7 +335,7 @@ func TestBackfillClosesOurGapsAndWhatItFetchesIsOurs(t *testing.T) {
 	if r.Backfilled != len(edge) || !strings.Contains(r.MetricsText(), "rec_segments_backfilled") {
 		t.Fatal(r.Backfilled, len(edge))
 	}
-	if n := r.Archive.Retain(1, 0, now+10); n < len(edge) { // ours: retention takes it like the rest
+	if n := r.Archive.Retain("1", 0, now+10); n < len(edge) { // ours: retention takes it like the rest
 		t.Fatal(n, len(edge))
 	}
 }

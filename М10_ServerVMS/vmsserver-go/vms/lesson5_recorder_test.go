@@ -112,7 +112,7 @@ func TestARecordingIsAUnitPlacedOnTheArchiveAndFedByTheWorkersTee(t *testing.T) 
 	// a segment the pipeline closed is promoted into rec/<cam>/e<epoch>/ and indexed beside it — the worker's tree stays events-only
 	pth := writeSegment(t, box.Spool, 1, 1, "2026-09-12T10:00:00", 100, box.Wall.Now()-600)
 	r.PumpOnce()
-	if _, err := os.Stat(pth); r.Promoted != 1 || err == nil || vms.NewManifest(box.Archive, 1).Read()[0].Path != "rec/1/e1/20260912T100000Z.mp4" {
+	if _, err := os.Stat(pth); r.Promoted != 1 || err == nil || vms.NewManifest(box.Archive, "1").Read()[0].Path != "rec/1/e1/20260912T100000Z.mp4" {
 		t.Fatal(r.Promoted, err)
 	}
 	w.Observe(1, "motion", nil)

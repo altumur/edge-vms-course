@@ -216,7 +216,7 @@ class FakeActuator:
         t = t0
         while t < t1:
             end = min(t + seg, t1)
-            p = segment_path(spool, int(cam), epoch, datetime.fromtimestamp(t, timezone.utc).replace(microsecond=0))
+            p = segment_path(spool, str(cam), epoch, datetime.fromtimestamp(t, timezone.utc).replace(microsecond=0))
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "wb") as f:
                 f.write(b"\x00" * 16)

@@ -16,6 +16,7 @@ import os
 import time
 import urllib.request
 
+from w2cplatform.contract import Heartbeat
 from w2cplatform.spec import Refused, SpecController
 from datetime import datetime, timezone
 
@@ -253,3 +254,43 @@ def test_a_units_id_is_a_name_and_not_a_path():
             assert False, f"the store accepted {bad!r}"
         except ValueError:
             pass
+
+
+def test_spread_by_keeps_two_copies_off_one_server():
+    """The placement gap the archive's unit-keyed tree opens up. Two units that name the
+    same camera exist to survive ONE server dying, so a second copy beside the first is
+    not a compromise — it is the failure the operator was insuring against. `spread_by`
+    is therefore a FILTER: unplaceable is the honest answer, co-located is not.
+
+    It also has to beat `near`, which pulls a recorder towards the camera's holder and
+    would otherwise pull both copies to the same place."""
+    from w2cplatform.spec import SubsystemSpec
+    box, ctl, con, con_vars = _box()
+
+    spec = SubsystemSpec.from_dict({
+        "name": "copy",
+        "unit": {"rows": "copies", "id": "name",
+                 "fields": {"name": {"type": "string", "required": True}, "cam": {"type": "string", "required": True}}},
+        "placement": {"capacity": {"from": "capacity", "fallback": 50}, "spread_by": "cam"},
+    })
+    assert spec.spread_by == "cam"
+
+    admin = SpecController(spec, box.vars, box.objects, wall=box.wall)
+    for w, server in (("w-1", "srv-1"), ("w-2", "srv-2")):
+        box.objects.put(spec.sub.heartbeat_key(w),
+                        Heartbeat(w, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50}).to_bytes())
+
+    admin.create({"name": "7-main", "cam": "7"})
+    admin.create({"name": "7-backup", "cam": "7"})
+    admin.create({"name": "8-main", "cam": "8"})
+    admin.ensure_placed()
+
+    where = {u: admin.placement(u).worker for u in ("7-main", "7-backup") if admin.placement(u)}
+    assert len(where) == 2 and where["7-main"] != where["7-backup"]        # the whole point: different servers
+    assert admin.server_of(where["7-main"]) != admin.server_of(where["7-backup"])
+    assert admin.placement("8-main") is not None                          # another camera is unaffected
+
+    # a third copy of camera 7 has nowhere to go, and says so instead of doubling up
+    admin.create({"name": "7-third", "cam": "7"})
+    admin.ensure_placed()
+    assert admin.placement("7-third") is None and "7-third" in [u["id"] for u in admin.unplaceable()]

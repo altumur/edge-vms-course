@@ -27,7 +27,7 @@ type RangeRecorder interface {
 // OurCoverage: what this archive already holds for the camera, seams under
 // Stitch closed over.
 func (r *RecWorker) OurCoverage(cam int) [][2]float64 {
-	return r.Archive.Coverage(cam, r.Stitch)
+	return r.Archive.Coverage(strconv.Itoa(cam), r.Stitch)
 }
 
 // Gaps: what the device has and we do not, bounded at BOTH ends. Not older than

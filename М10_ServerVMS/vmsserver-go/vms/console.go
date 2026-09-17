@@ -130,7 +130,7 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, wall p.Clock) p.Ext
 			cid, _ := p.LastSegmentInt(path)
 			from, to := p.QueryRange(req)
 			spans := []map[string]any{}
-			for _, s := range NewManifest(archive.Root, cid).Timeline(from, to, 0) {
+			for _, s := range NewManifest(archive.Root, strconv.Itoa(cid)).Timeline(from, to, 0) {
 				spans = append(spans, s.ToMap())
 			}
 			if ctl != nil { // ours first, then the device's in the holes: one answer, sorted

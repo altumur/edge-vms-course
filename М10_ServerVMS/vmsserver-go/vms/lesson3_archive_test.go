@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func utc(s string) time.Time {
 func ts(s string) float64 { return float64(utc(s).Unix()) }
 
 func writeSegment(t *testing.T, root string, cam, epoch int, start string, size int, mtime float64) string {
-	pth := vms.SegmentPath(root, cam, epoch, utc(start))
+	pth := vms.SegmentPath(root, strconv.Itoa(cam), epoch, utc(start))
 	os.MkdirAll(filepath.Dir(pth), 0o755)
 	if err := os.WriteFile(pth, make([]byte, size), 0o644); err != nil {
 		t.Fatal(err)
@@ -42,9 +43,14 @@ func touch(pth string, mtime float64) {
 }
 
 func TestParseAndPaths(t *testing.T) {
-	cam, epoch, start, ok := vms.Parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a")
-	if !ok || cam != 7 || epoch != 5 || !start.Equal(utc("2026-09-12T10:10:00")) {
-		t.Fatal(cam, epoch, start, ok)
+	// The middle segment is the UNIT, and it comes back as a string: the path grammar does not know that
+	// `id: cam` makes today's unit a camera number, and a recording named "7-backup" parses the same way.
+	unit, epoch, start, ok := vms.Parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a")
+	if !ok || unit != "7" || epoch != 5 || !start.Equal(utc("2026-09-12T10:10:00")) {
+		t.Fatal(unit, epoch, start, ok)
+	}
+	if u, _, _, ok := vms.Parse("/a/rec/7-backup/e5/20260912T101000Z.mp4", "/a"); !ok || u != "7-backup" {
+		t.Fatal(u, ok)
 	}
 	if _, _, _, ok := vms.Parse("/a/rec/7/e5/manifest.jsonl", "/a"); ok {
 		t.Fatal("manifest is not a segment")
@@ -68,7 +74,7 @@ func TestPromoteIsTheAcknowledgementOrder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(box.Archive, seg.Path)); err != nil { // 1. in the archive, whole
 		t.Fatal(err)
 	}
-	lines := vms.NewManifest(box.Archive, 7).Read() // 2. named in the manifest
+	lines := vms.NewManifest(box.Archive, "7").Read() // 2. named in the manifest
 	if len(lines) != 1 || lines[0].Epoch != 3 || lines[0].End-lines[0].Start != 600 || lines[0].Bytes != 1000 {
 		t.Fatal(lines)
 	}
@@ -90,7 +96,7 @@ func TestKillMidSegmentOpenLostClosedKept(t *testing.T) {
 		t.Fatal(got)
 	}
 	res.Promote(late, 0, "live")
-	if len(vms.NewManifest(box.Archive, 7).Read()) != 7 {
+	if len(vms.NewManifest(box.Archive, "7").Read()) != 7 {
 		t.Fatal("seven")
 	}
 	if len(res.ClosedInSpool(30, now)) != 0 { // the open segment is what a kill loses
@@ -104,19 +110,19 @@ func TestManifestRebuiltFromTheFilesAlone(t *testing.T) {
 	for _, m := range []string{"10:00:00", "10:10:00", "10:20:00"} {
 		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T"+m, 1000, 0), 0, "live")
 	}
-	orig := vms.NewManifest(box.Archive, 7).Read()
-	os.Remove(vms.NewManifest(box.Archive, 7).Path) // the index did not travel
+	orig := vms.NewManifest(box.Archive, "7").Read()
+	os.Remove(vms.NewManifest(box.Archive, "7").Path) // the index did not travel
 	if rep := res.Repair(); rep != (vms.RepairReport{3, 0}) {
 		t.Fatal(rep)
 	}
-	rebuilt := vms.NewManifest(box.Archive, 7).Read()
+	rebuilt := vms.NewManifest(box.Archive, "7").Read()
 	for i := range orig {
 		if rebuilt[i].Path != orig[i].Path || rebuilt[i].Epoch != orig[i].Epoch || rebuilt[i].Start != orig[i].Start {
 			t.Fatal(rebuilt, orig)
 		}
 	}
 	os.Remove(filepath.Join(box.Archive, orig[0].Path)) // a file went missing under a line
-	if rep := res.Repair(); rep != (vms.RepairReport{0, 1}) || len(vms.NewManifest(box.Archive, 7).Read()) != 2 {
+	if rep := res.Repair(); rep != (vms.RepairReport{0, 1}) || len(vms.NewManifest(box.Archive, "7").Read()) != 2 {
 		t.Fatal(rep)
 	}
 	if rep := res.Repair(); rep != (vms.RepairReport{0, 0}) { // idempotent
@@ -130,7 +136,7 @@ func TestTimelineMarksAFencedEpochAndSpansTwoResources(t *testing.T) {
 	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:00:00", 1000, ts("2026-09-12T10:10:00")), 0, "live")
 	res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:20:00")), 0, "live")
 	res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-09-12T10:10:00", 1000, ts("2026-09-12T10:15:00")), 0, "live") // the zombie's
-	tl := vms.NewManifest(box.Archive, 7).Timeline(ts("2026-09-12T10:05:00"), ts("2026-09-12T10:30:00"), 4)
+	tl := vms.NewManifest(box.Archive, "7").Timeline(ts("2026-09-12T10:05:00"), ts("2026-09-12T10:30:00"), 4)
 	var got [][2]any
 	for _, s := range tl {
 		got = append(got, [2]any{s.Epoch, s.Fenced})
@@ -141,7 +147,7 @@ func TestTimelineMarksAFencedEpochAndSpansTwoResources(t *testing.T) {
 	// a second resource (another server) holds later footage: the console merges two manifests
 	other := vms.NewArchiveResource(box.Spool+"2", box.Archive+"2", 600, nil)
 	other.Promote(writeSegment(t, other.Spool, 7, 5, "2026-09-12T10:20:00", 1000, ts("2026-09-12T10:30:00")), 0, "live")
-	merged := append(vms.NewManifest(box.Archive, 7).Timeline(0, 1e12, 0), vms.NewManifest(other.Root, 7).Timeline(0, 1e12, 0)...)
+	merged := append(vms.NewManifest(box.Archive, "7").Timeline(0, 1e12, 0), vms.NewManifest(other.Root, "7").Timeline(0, 1e12, 0)...)
 	var epochs []int
 	for _, s := range merged {
 		epochs = append(epochs, s.Epoch)
@@ -158,10 +164,10 @@ func TestRetentionIsAPolicyOnTheResource(t *testing.T) {
 	for _, day := range []string{"01", "10", "19"} {
 		res.Promote(writeSegment(t, box.Spool, 7, 3, "2026-10-"+day+"T10:00:00", 1000, ts("2026-10-"+day+"T10:10:00")), 0, "live")
 	}
-	if res.Retain(7, 8, now) != 2 { // cutoff 12 Oct: the 1st and the 10th go
+	if res.Retain("7", 8, now) != 2 { // cutoff 12 Oct: the 1st and the 10th go
 		t.Fatal("retain")
 	}
-	left := vms.NewManifest(box.Archive, 7).Read()
+	left := vms.NewManifest(box.Archive, "7").Read()
 	if _, err := os.Stat(filepath.Join(box.Archive, "rec", "7", "e3", "20261001T100000Z.mp4")); len(left) != 1 || err == nil {
 		t.Fatal(left)
 	}
@@ -186,12 +192,12 @@ func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
 	if sub, unit, epoch, start, ok := p.ParseBucket(pth, box.Archive); !ok || sub != "vms" || unit != "7" || epoch != 3 || start != t0 || p.ReadBucket(pth)[0]["zone"] != "gate" {
 		t.Fatal(pth)
 	}
-	log.Append(t0+40.0, "silent", nil)                                                                                 // the event with no segment, by definition
-	p2, _ := log.Append(t0+700.0, "person", map[string]any{"score": 0.9})                                              // the next bucket: rolled by the clock
-	if under := p.SubsystemsUnder(box.Archive); len(under) != 1 || len(under["vms"]) != 1 || len(res.Cameras()) != 0 { // watched, not recorded: buckets, no rec/ tree
+	log.Append(t0+40.0, "silent", nil)                                                                               // the event with no segment, by definition
+	p2, _ := log.Append(t0+700.0, "person", map[string]any{"score": 0.9})                                            // the next bucket: rolled by the clock
+	if under := p.SubsystemsUnder(box.Archive); len(under) != 1 || len(under["vms"]) != 1 || len(res.Units()) != 0 { // watched, not recorded: buckets, no rec/ tree
 		t.Fatal(under)
 	}
-	if tl := vms.NewManifest(box.Archive, 7).Timeline(t0, t0+1200, 0); len(tl) != 0 { // the manifest indexes media, and there is none
+	if tl := vms.NewManifest(box.Archive, "7").Timeline(t0, t0+1200, 0); len(tl) != 0 { // the manifest indexes media, and there is none
 		t.Fatal(tl)
 	}
 	db := p.NewEventDatabase(box.Archive, "box", box.Wall.Now, 600)
@@ -205,10 +211,10 @@ func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
 	eqs(t, kinds, []string{"motion", "silent", "person"})
 	// now a recorder records the camera under ITS epoch, into rec/: the timeline has a span, the events are still the worker's
 	seg, _ := res.Promote(writeSegment(t, box.Spool, 7, 4, "2026-09-12T10:10:00", 1000, t0+1200), 0, "live")
-	if seg.Path != "rec/7/e4/20260912T101000Z.mp4" || len(res.Cameras()) != 1 {
+	if seg.Path != "rec/7/e4/20260912T101000Z.mp4" || len(res.Units()) != 1 {
 		t.Fatal(seg)
 	}
-	tl := vms.NewManifest(box.Archive, 7).Timeline(t0, t0+1200, 4)
+	tl := vms.NewManifest(box.Archive, "7").Timeline(t0, t0+1200, 4)
 	if len(tl) != 1 || tl[0].Media == "" || tl[0].Epoch != 4 || tl[0].Fenced {
 		t.Fatal(tl)
 	}
@@ -216,11 +222,11 @@ func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
 		t.Fatal(under)
 	}
 	// repair rebuilds the manifest from the files; media retention is the recorder's, bucket retention the platform's
-	os.Remove(vms.NewManifest(box.Archive, 7).Path)
+	os.Remove(vms.NewManifest(box.Archive, "7").Path)
 	if rep := res.Repair(); rep != (vms.RepairReport{1, 0}) {
 		t.Fatal(rep)
 	}
-	if res.Retain(7, 1, t0+3*86400) != 1 || len(vms.NewManifest(box.Archive, 7).Read()) != 0 {
+	if res.Retain("7", 1, t0+3*86400) != 1 || len(vms.NewManifest(box.Archive, "7").Read()) != 0 {
 		t.Fatal("retain")
 	}
 	for _, f := range []string{pth, p2} { // the recorder's retention never touches the worker's buckets

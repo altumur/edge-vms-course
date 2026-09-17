@@ -159,7 +159,7 @@ class RecWorker(VmsWorker):
     # everything" — it is the difference between two coverages. Desired: continuous. Actual: the manifest.
     # The difference is the work. Lesson 2's loop, over time instead of pipelines.
     def our_coverage(self, cam) -> list[tuple[float, float]]:
-        return self.archive.coverage(int(cam), self.stitch)
+        return self.archive.coverage(str(cam), self.stitch)
 
     # What the device has and we do not, bounded at both ends. Not older than our own retention — otherwise
     # backfill and retention chase each other round the clock, for ever. Not fresher than `settle` — the

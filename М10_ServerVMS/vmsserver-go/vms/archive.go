@@ -41,33 +41,38 @@ var (
 	epochDirRe = regexp.MustCompile(`^e(\d+)$`)
 )
 
-func SegmentPath(root string, cam, epoch int, start time.Time) string {
-	return filepath.Join(root, Sub, strconv.Itoa(cam), "e"+strconv.Itoa(epoch), start.UTC().Format(p.Stamp)+".mp4")
+// SegmentPath: <root>/rec/<unit>/e<epoch>/<start>Z.mp4 — the same grammar in
+// the spool and the archive.
+//
+// The middle segment is the UNIT, not the camera. Today they are the same
+// string, because rec.subsystem.yaml says `id: cam` — a recording is named by
+// the camera it records. The path code must not know that: the day a camera
+// gets two recordings (two servers, two profiles) the unit is "7-main" and
+// "7-backup", and this grammar keeps working unchanged.
+func SegmentPath(root, unit string, epoch int, start time.Time) string {
+	return filepath.Join(root, Sub, unit, "e"+strconv.Itoa(epoch), start.UTC().Format(p.Stamp)+".mp4")
 }
 
-// Parse a segment path under root -> (cam, epoch, start).
-func Parse(path, root string) (cam, epoch int, start time.Time, ok bool) {
+// Parse a segment path under root -> (unit, epoch, start).
+func Parse(path, root string) (unit string, epoch int, start time.Time, ok bool) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) != 4 || parts[0] != Sub || !epochDirRe.MatchString(parts[2]) {
+	if len(parts) != 4 || parts[0] != Sub || parts[1] == "" || !epochDirRe.MatchString(parts[2]) {
 		return
-	}
-	if cam, err = strconv.Atoi(parts[1]); err != nil {
-		return 0, 0, time.Time{}, false
 	}
 	m := segmentRe.FindStringSubmatch(parts[3])
 	if m == nil {
-		return 0, 0, time.Time{}, false
+		return "", 0, time.Time{}, false
 	}
 	start, err = time.Parse(p.Stamp, m[1])
 	if err != nil {
-		return 0, 0, time.Time{}, false
+		return "", 0, time.Time{}, false
 	}
 	epoch, _ = strconv.Atoi(parts[2][1:])
-	return cam, epoch, start, true
+	return parts[1], epoch, start, true
 }
 
 // EventLogFor is the camera's event log on this resource: what the worker
@@ -77,7 +82,8 @@ func EventLogFor(root string, cam, epoch, bucketSeconds int) *p.EventLog {
 }
 
 type Segment struct {
-	Cam   int     `json:"cam"`
+	// Unit: the recording this footage belongs to; `id: cam` makes it the camera's id today.
+	Unit  string  `json:"unit"`
 	Epoch int     `json:"epoch"`
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
@@ -97,7 +103,7 @@ func (s Segment) Line() string {
 	if src == "" {
 		src = "live"
 	}
-	b, _ := json.Marshal(map[string]any{"kind": "media", "cam": s.Cam, "epoch": s.Epoch, "start": s.Start, "end": s.End,
+	b, _ := json.Marshal(map[string]any{"kind": "media", "unit": s.Unit, "epoch": s.Epoch, "start": s.Start, "end": s.End,
 		"path": s.Path, "bytes": s.Bytes, "source": src})
 	return string(b)
 }
@@ -112,7 +118,14 @@ func SegmentFromLine(line string) (Segment, error) {
 	if src == "" {
 		src = "live" // every line written before Lesson 15 is live footage
 	}
-	return Segment{int(p.ToFloat(d["cam"])), int(p.ToFloat(d["epoch"])), p.ToFloat(d["start"]), p.ToFloat(d["end"]), path, int64(p.ToFloat(d["bytes"])), src}, nil
+	unit, _ := d["unit"].(string)
+	if unit == "" { // `cam` is what a line written before the unit-keyed tree says
+		unit = p.Str(d["cam"])
+		if f, isNum := d["cam"].(float64); isNum {
+			unit = strconv.Itoa(int(f))
+		}
+	}
+	return Segment{unit, int(p.ToFloat(d["epoch"])), p.ToFloat(d["start"]), p.ToFloat(d["end"]), path, int64(p.ToFloat(d["bytes"])), src}, nil
 }
 
 // Span is one entry of a timeline: a media segment under the recorder's epoch.
@@ -130,8 +143,8 @@ func (s Span) ToMap() map[string]any {
 // Manifest: per camera, append-only, beside the footage.
 type Manifest struct{ Path string }
 
-func NewManifest(archiveRoot string, cam int) *Manifest {
-	return &Manifest{filepath.Join(p.UnitDir(archiveRoot, Sub, strconv.Itoa(cam)), "manifest.jsonl")}
+func NewManifest(archiveRoot, unit string) *Manifest {
+	return &Manifest{filepath.Join(p.UnitDir(archiveRoot, Sub, unit), "manifest.jsonl")}
 }
 
 type liner interface{ Line() string }
@@ -256,7 +269,7 @@ func (a *ArchiveResource) Promote(spoolPath string, end float64, source string) 
 	if source == "" {
 		source = "live"
 	}
-	cam, epoch, start, ok := Parse(spoolPath, a.Spool)
+	unit, epoch, start, ok := Parse(spoolPath, a.Spool)
 	if !ok {
 		return Segment{}, fmt.Errorf("not a segment path: %s", spoolPath)
 	}
@@ -274,8 +287,8 @@ func (a *ArchiveResource) Promote(spoolPath string, end float64, source string) 
 	if err := move(spoolPath, dest); err != nil {
 		return Segment{}, err
 	}
-	seg := Segment{cam, epoch, float64(start.Unix()), end, rel, st.Size(), source}
-	return seg, NewManifest(a.Root, cam).Append(seg)
+	seg := Segment{unit, epoch, float64(start.Unix()), end, rel, st.Size(), source}
+	return seg, NewManifest(a.Root, unit).Append(seg)
 }
 
 func move(src, dest string) error {
@@ -296,18 +309,31 @@ func move(src, dest string) error {
 }
 
 // Cameras: the cameras with a rec/ tree — recorded, now or once.
-func (a *ArchiveResource) Cameras() []int {
+// Units: the units with a rec/<unit>/ directory. Strings, sorted so that
+// numeric names — which is all of them while `id: cam` holds — come out in
+// numeric order rather than "1, 10, 2".
+func (a *ArchiveResource) Units() []string {
 	ents, err := os.ReadDir(filepath.Join(a.Root, Sub))
 	if err != nil {
 		return nil
 	}
-	var out []int
+	var out []string
 	for _, e := range ents {
-		if n, err := strconv.Atoi(e.Name()); err == nil {
-			out = append(out, n)
+		if e.IsDir() {
+			out = append(out, e.Name())
 		}
 	}
-	sort.Ints(out)
+	sort.Slice(out, func(i, j int) bool {
+		a, aerr := strconv.Atoi(out[i])
+		b, berr := strconv.Atoi(out[j])
+		if aerr == nil && berr == nil {
+			return a < b
+		}
+		if aerr == nil != (berr == nil) {
+			return aerr == nil
+		}
+		return out[i] < out[j]
+	})
 	return out
 }
 
@@ -333,25 +359,25 @@ type RepairReport struct{ Added, Dropped int }
 // Repair: make the manifests agree with the files. Idempotent.
 func (a *ArchiveResource) Repair() RepairReport {
 	var rep RepairReport
-	for _, cam := range a.Cameras() {
-		man := NewManifest(a.Root, cam)
+	for _, unit := range a.Units() {
+		man := NewManifest(a.Root, unit)
 		lines := map[string]Segment{}
 		for _, s := range man.Read() {
 			lines[s.Path] = s
 		}
 		present := map[string]bool{}
-		filepath.WalkDir(p.UnitDir(a.Root, Sub, strconv.Itoa(cam)), func(pth string, d fs.DirEntry, err error) error {
+		filepath.WalkDir(p.UnitDir(a.Root, Sub, unit), func(pth string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
-			if c, epoch, start, ok := Parse(pth, a.Root); ok {
+			if u, epoch, start, ok := Parse(pth, a.Root); ok {
 				rel, _ := filepath.Rel(a.Root, pth)
 				rel = filepath.ToSlash(rel)
 				present[rel] = true
 				if _, have := lines[rel]; !have {
 					st, _ := os.Stat(pth)
 					// a file cannot say where it came from: a rebuilt line reads "live"
-					lines[rel] = Segment{c, epoch, float64(start.Unix()), float64(st.ModTime().UnixNano()) / 1e9, rel, st.Size(), "live"}
+					lines[rel] = Segment{u, epoch, float64(start.Unix()), float64(st.ModTime().UnixNano()) / 1e9, rel, st.Size(), "live"}
 					rep.Added++
 				}
 			}
@@ -374,9 +400,9 @@ func (a *ArchiveResource) Repair() RepairReport {
 
 // Retain: delete media older than days — the file first, then the line.
 // The buckets are the platform's to retain, by the VMS row's events_retention_days.
-func (a *ArchiveResource) Retain(cam int, days, now float64) int {
+func (a *ArchiveResource) Retain(unit string, days, now float64) int {
 	cutoff := now - days*86400
-	man := NewManifest(a.Root, cam)
+	man := NewManifest(a.Root, unit)
 	var keep []Segment
 	removed := 0
 	for _, s := range man.Read() {
@@ -397,11 +423,11 @@ func (a *ArchiveResource) Retain(cam int, days, now float64) int {
 // `stitch` seconds closed over. It is what a timeline is drawn from and what
 // backfill measures itself against — segment boundaries are an implementation
 // detail of recording, not something an operator should have to see.
-func (a *ArchiveResource) Coverage(cam int, stitch float64) [][2]float64 {
+func (a *ArchiveResource) Coverage(unit string, stitch float64) [][2]float64 {
 	if stitch == 0 {
 		stitch = 2
 	}
-	segs := NewManifest(a.Root, cam).Read()
+	segs := NewManifest(a.Root, unit).Read()
 	sort.Slice(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
 	runs := [][2]float64{}
 	for _, s := range segs {
@@ -488,13 +514,13 @@ type ArchivePolicy struct {
 func (ap *ArchivePolicy) Pass(now float64) map[string]any {
 	rep := ap.Res.Repair()
 	removed := 0
-	for _, cam := range ap.Res.Cameras() {
-		items, _, _ := ap.Vars.Get(Sub + "/recordings/" + strconv.Itoa(cam))
+	for _, unit := range ap.Res.Units() {
+		items, _, _ := ap.Vars.Get(Sub + "/recordings/" + unit) // the unit's own row: its retention, not the camera's
 		days := 30
 		if items != nil {
 			days = atoiDef(items["retention_days"], 30)
 		}
-		removed += ap.Res.Retain(cam, float64(days), now)
+		removed += ap.Res.Retain(unit, float64(days), now)
 	}
 	return map[string]any{"added": rep.Added, "dropped": rep.Dropped, "media_removed": removed}
 }

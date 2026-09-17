@@ -170,6 +170,11 @@ class SubsystemSpec:
     servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
     near: str = "none"            # a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
+    # `spread_by: <field>` — units sharing a value of that field go on DIFFERENT servers. Unlike `near` this
+    # is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
+    # is, and a second copy on the same server is not a second copy. Unplaceable while no other server
+    # qualifies, and that is the honest answer — `/unplaceable` says so rather than quietly co-locating.
+    spread_by: str = ""
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
     running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
@@ -190,7 +195,8 @@ class SubsystemSpec:
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
-                   near=str(pl.get("near", "none")), dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
+                   near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
+                   dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
 
@@ -473,7 +479,31 @@ class SpecController(Controller):
     # Workers passing the spec's constraint against their labels.
     def eligible(self, row: dict, workers: list[str]) -> list[str]:
         rule = CONSTRAINTS[self.spec.constraint]
-        return [w for w in workers if rule(row, self.labels_of(w))]
+        out = [w for w in workers if rule(row, self.labels_of(w))]
+        return [w for w in out if self.server_of(w) not in self.servers_taken(row)]
+
+    # The servers already carrying a unit that shares this row's `spread_by` value — where this one may
+    # therefore NOT go. Empty when the subsystem does not ask to spread, which is every subsystem today.
+    #
+    # Read the whole rule in one sentence: two recordings of one camera exist to survive one server, so
+    # putting them on one server is not a compromise, it is the failure the operator was buying insurance
+    # against. `near` pulls a recorder towards the camera's holder and would otherwise pull BOTH copies to
+    # the same place — the preference loses to the filter, and the reason says which.
+    def servers_taken(self, row: dict) -> set[str]:
+        field = self.spec.spread_by
+        if not field:
+            return set()
+        value = row.get(field)
+        if value in (None, ""):
+            return set()
+        mine, taken = str(row["id"]), set()
+        for other in self.units():
+            if str(other["id"]) == mine or str(other.get(field)) != str(value):
+                continue
+            pl = self.placement(other["id"])
+            if pl is not None:
+                taken.add(self.server_of(pl.worker))
+        return taken
 
     # -- the administrator's knobs: one row, `<name>/policy`, written by the console ---------------
     # `servers`: `shared` (default) — every worker is a place to put units, two on one server included (a

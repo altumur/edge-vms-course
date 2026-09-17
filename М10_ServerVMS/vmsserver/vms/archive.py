@@ -1,8 +1,8 @@
 """The archive as a resource — server-bound, no controller, a policy.
 
-    <spool>/rec/<cam>/e<epoch>/<start>Z.mp4        the open segment, and closed ones not yet promoted
-    <archive>/rec/<cam>/e<epoch>/<start>Z.mp4      promoted: the resource's media — the RECORDER's tree
-    <archive>/rec/<cam>/manifest.jsonl             one line per media segment: the index beside the footage
+    <spool>/rec/<unit>/e<epoch>/<start>Z.mp4       the open segment, and closed ones not yet promoted
+    <archive>/rec/<unit>/e<epoch>/<start>Z.mp4     promoted: the resource's media — the RECORDER's tree
+    <archive>/rec/<unit>/manifest.jsonl            one line per media segment: the index beside the footage
     <archive>/vms/<cam>/e<epoch>/<start>Z.events.jsonl
                                                    the camera's EVENT BUCKETS — the platform's event log
                                                    (w2cplatform.events), written by the WORKER holding the
@@ -13,7 +13,8 @@ Two subsystems, two trees, one camera. The worker (`vms`) holds the camera —
 one connection, one epoch, the fan-out — and writes what it observes into
 `vms/<cam>/`. The recorder (`rec`) is placed on a server with an archive,
 subscribes to the worker's fan-out, and writes footage under its own epoch
-into `rec/<cam>/`. A camera that is watched and never recorded has buckets
+into `rec/<unit>/` — the recording's own directory, which `id: cam` makes the
+camera's number today and need not tomorrow. A camera that is watched and never recorded has buckets
 and no `rec/` tree; a camera whose recorder moved has footage under two
 servers' `rec/` trees, merged by the console. The manifest indexes media
 only; events are indexed by the resource's event database.
@@ -41,7 +42,7 @@ job: its own pass over its own part of the tree.
 # # archive.py — the archive resource: promotion, the manifest, repair, media retention; the recorder's tree
 #
 # **Role in the module.** Lesson 3 (the archive as a resource) and Lesson 6 (the recorder). Media lives under
-# `rec/<cam>/e<epoch>/` on the recorder's server; the camera's event buckets live under `vms/<cam>/e<epoch>/`
+# `rec/<unit>/e<epoch>/` on the recorder's server; the camera's event buckets live under `vms/<cam>/e<epoch>/`
 # on the worker's server (`event_log`, the platform's `EventLog`). `segment_path`/`parse` name and read the
 # media paths; `Manifest` is the per-camera index beside the footage — media lines only, since the events
 # are indexed by the resource's event database; `ArchiveResource` promotes closed segments from the spool,
@@ -50,7 +51,7 @@ job: its own pass over its own part of the tree.
 #
 # ## Module-level names
 # - `SUB = "rec"` — the recorder's tree; `EVENTS_SUB = "vms"` — the worker's, for `event_log`.
-# - `SEGMENT`, `EPOCH_DIR` — the path grammar: `<sub>/<cam>/e<epoch>/<YYYYMMDDTHHMMSSZ>.mp4`.
+# - `SEGMENT`, `EPOCH_DIR` — the path grammar: `<sub>/<unit>/e<epoch>/<YYYYMMDDTHHMMSSZ>.mp4`.
 #
 # ## Notes
 # - `test_promote_then_line_then_spool_copy_gone`, `test_manifest_rebuilt_from_the_files_alone`,
@@ -76,23 +77,29 @@ SEGMENT = re.compile(r"^(\d{8}T\d{6}Z)\.mp4$")
 EPOCH_DIR = re.compile(r"^e(\d+)$")
 
 
-# `<root>/rec/<cam>/e<epoch>/<start>Z.mp4` — the same grammar in the spool and the archive.
-def segment_path(root: str, cam: int, epoch: int, start: datetime) -> str:
-    return os.path.join(root, SUB, str(cam), f"e{epoch}", start.strftime("%Y%m%dT%H%M%SZ") + ".mp4")
+# `<root>/rec/<unit>/e<epoch>/<start>Z.mp4` — the same grammar in the spool and the archive.
+#
+# The middle segment is the UNIT, not the camera. Today they are the same string, because
+# `rec.subsystem.yaml` says `id: cam` — a recording is named by the camera it records. But the path code
+# must not know that: the day a camera gets two recordings (two servers, two profiles), the unit is
+# `7-main` and `7-backup` and this grammar keeps working unchanged. Naming the argument `cam` and casting
+# it with `int()` is how that day becomes a rewrite of four modules instead of one line of YAML.
+def segment_path(root: str, unit: str, epoch: int, start: datetime) -> str:
+    return os.path.join(root, SUB, str(unit), f"e{epoch}", start.strftime("%Y%m%dT%H%M%SZ") + ".mp4")
 
 
-# The inverse: `(cam, epoch, start)` or `None` for anything that is not a segment path under `root`.
-def parse(path: str, root: str) -> tuple[int, int, datetime] | None:
+# The inverse: `(unit, epoch, start)` or `None` for anything that is not a segment path under `root`.
+def parse(path: str, root: str) -> tuple[str, int, datetime] | None:
     rel = os.path.relpath(path, root).split(os.sep)
-    if len(rel) != 4 or rel[0] != SUB or not rel[1].isdigit() or not EPOCH_DIR.match(rel[2]):
+    if len(rel) != 4 or rel[0] != SUB or not rel[1] or not EPOCH_DIR.match(rel[2]):
         return None
     m = SEGMENT.match(rel[3])
     if not m:
         return None
-    return int(rel[1]), int(rel[2][1:]), datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    return rel[1], int(rel[2][1:]), datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
 
 
-def event_log(root: str, cam: int, epoch: int, bucket_seconds: int = 600) -> EventLog:
+def event_log(root: str, cam, epoch: int, bucket_seconds: int = 600) -> EventLog:
     """The camera's event log on this resource: what the worker holding the
     camera's epoch writes into, recording or not — `vms/<cam>/`, not `rec/`."""
     return EventLog(root, EVENTS_SUB, str(cam), epoch, bucket_seconds)
@@ -102,7 +109,7 @@ def event_log(root: str, cam: int, epoch: int, bucket_seconds: int = 600) -> Eve
 # `bytes`.
 @dataclass(frozen=True)
 class Segment:
-    cam: int
+    unit: str             # the recording this footage belongs to; `id: cam` makes it the camera's id today
     epoch: int
     start: float          # unix seconds
     end: float
@@ -115,22 +122,23 @@ class Segment:
     source: str = "live"
 
     def line(self) -> str:
-        return json.dumps({"kind": "media", "cam": self.cam, "epoch": self.epoch, "start": self.start, "end": self.end,
+        return json.dumps({"kind": "media", "unit": self.unit, "epoch": self.epoch, "start": self.start, "end": self.end,
                            "path": self.path, "bytes": self.bytes, "source": self.source})
 
     @classmethod
     def from_line(cls, line: str) -> "Segment":
         d = json.loads(line)
-        return cls(int(d["cam"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["bytes"]),
+        unit = d.get("unit", d.get("cam"))        # `cam` is what a line written before the unit-keyed tree says
+        return cls(str(unit), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["bytes"]),
                    d.get("source", "live"))
 
 
-# Per camera, append-only, beside the footage: `<archive>/rec/<cam>/manifest.jsonl`. Media lines only.
+# Per unit, append-only, beside the footage: `<archive>/rec/<unit>/manifest.jsonl`. Media lines only.
 class Manifest:
-    """Per camera, append-only, beside the footage."""
+    """Per unit, append-only, beside the footage."""
 
-    def __init__(self, archive_root: str, cam: int):
-        self.path = os.path.join(unit_dir(archive_root, SUB, str(cam)), "manifest.jsonl")
+    def __init__(self, archive_root: str, unit):
+        self.path = os.path.join(unit_dir(archive_root, SUB, str(unit)), "manifest.jsonl")
 
     def append(self, entry: Segment) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -189,23 +197,26 @@ class ArchiveResource:
         parsed = parse(spool_path, self.spool)
         if parsed is None:
             raise ValueError(f"not a segment path: {spool_path}")
-        cam, epoch, start = parsed
+        unit, epoch, start = parsed
         st = os.stat(spool_path)
         end = end if end is not None else st.st_mtime
         rel = os.path.relpath(spool_path, self.spool)
         dest = os.path.join(self.root, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         self._move(spool_path, dest)                    # 1. into the archive, atomically (same filesystem)
-        seg = Segment(cam, epoch, start.timestamp(), end, rel, st.st_size, source)
-        Manifest(self.root, cam).append(seg)            # 2. then the line
+        seg = Segment(unit, epoch, start.timestamp(), end, rel, st.st_size, source)
+        Manifest(self.root, unit).append(seg)           # 2. then the line
         return seg
 
-    # The camera ids with a `rec/<cam>/` directory.
-    def cameras(self) -> list[int]:
+    # The units with a `rec/<unit>/` directory. Strings, and sorted so that numeric names — which is all
+    # of them while `id: cam` holds — come out in numeric order rather than "1, 10, 2".
+    def units(self) -> list[str]:
         try:
-            return sorted(int(d) for d in os.listdir(os.path.join(self.root, SUB)) if d.isdigit())
+            names = [d for d in os.listdir(os.path.join(self.root, SUB))
+                     if os.path.isdir(os.path.join(self.root, SUB, d))]
         except FileNotFoundError:
             return []
+        return sorted(names, key=lambda d: (0, int(d), "") if d.isdigit() else (1, 0, d))
 
     @staticmethod
     def _move(src: str, dest: str) -> None:
@@ -232,20 +243,20 @@ class ArchiveResource:
         line names (with the epoch from the path), drop lines whose file is
         gone. Idempotent."""
         added = dropped = 0
-        for cam in self.cameras():
-            man = Manifest(self.root, cam)
+        for unit in self.units():
+            man = Manifest(self.root, unit)
             lines = {s.path: s for s in man.read()}
             present = {}
-            for d, _, files in os.walk(unit_dir(self.root, SUB, str(cam))):
+            for d, _, files in os.walk(unit_dir(self.root, SUB, unit)):
                 for f in files:
                     p = os.path.join(d, f)
                     parsed = parse(p, self.root)
                     if parsed:
                         present[os.path.relpath(p, self.root)] = parsed
-            for rel, (c, epoch, start) in present.items():
+            for rel, (u, epoch, start) in present.items():
                 if rel not in lines:
                     st = os.stat(os.path.join(self.root, rel))
-                    lines[rel] = Segment(c, epoch, start.timestamp(), st.st_mtime, rel, st.st_size)
+                    lines[rel] = Segment(u, epoch, start.timestamp(), st.st_mtime, rel, st.st_size)
                     added += 1
             for rel in list(lines):
                 if rel not in present:
@@ -258,21 +269,21 @@ class ArchiveResource:
     # that makes it work at all: between two segments there is always a seam — the fraction of a second it
     # takes to close one and open the next. Count a seam as a gap and a day of continuous ten-minute
     # recording has 144 of them.
-    def coverage(self, cam: int, stitch: float = 2.0) -> list[tuple[float, float]]:
+    def coverage(self, unit, stitch: float = 2.0) -> list[tuple[float, float]]:
         runs: list[list[float]] = []
-        for s in sorted(Manifest(self.root, cam).read(), key=lambda s: s.start):
+        for s in sorted(Manifest(self.root, unit).read(), key=lambda s: s.start):
             if runs and s.start <= runs[-1][1] + stitch:
                 runs[-1][1] = max(runs[-1][1], s.end)
             else:
                 runs.append([s.start, s.end])
         return [(a, b) for a, b in runs]
 
-    def retain(self, cam: int, days: float, now: float) -> int:
+    def retain(self, unit, days: float, now: float) -> int:
         """Delete media older than `days`: the file first, then the line. The
         buckets are the platform's to retain (vms/retention/<cam>, written by the
         VMS controller); the resource's event database forgets their rows."""
         cutoff = now - days * 86400
-        man = Manifest(self.root, cam)
+        man = Manifest(self.root, unit)
         keep, removed = [], 0
         for s in man.read():
             if s.end < cutoff:
@@ -332,8 +343,8 @@ class ArchivePolicy:
     def pass_(self, now: float) -> dict:
         rep = self.res.repair()
         removed = 0
-        for cam in self.res.cameras():
-            items, _ = self.vars.get(f"{SUB}/recordings/{cam}")
+        for unit in self.res.units():
+            items, _ = self.vars.get(f"{SUB}/recordings/{unit}")   # the unit's own row: its retention, not the camera's
             days = int(items.get("retention_days", 30)) if items else 30
-            removed += self.res.retain(cam, days, now)
+            removed += self.res.retain(unit, days, now)
         return {**rep, "media_removed": removed}

@@ -150,7 +150,7 @@ func (f *FakeActuator) RecordRange(unit, url string, epoch int, t0, t1 float64, 
 		if end > t1 {
 			end = t1
 		}
-		pth := SegmentPath(spool, cam, epoch, time.Unix(int64(t), 0).UTC())
+		pth := SegmentPath(spool, strconv.Itoa(cam), epoch, time.Unix(int64(t), 0).UTC())
 		os.MkdirAll(filepath.Dir(pth), 0o755)
 		os.WriteFile(pth, make([]byte, 16), 0o644)
 		// the segment ends where it ends: Promote reads mtime
