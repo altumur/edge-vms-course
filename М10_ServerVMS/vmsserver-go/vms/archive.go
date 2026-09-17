@@ -77,8 +77,8 @@ func Parse(path, root string) (unit string, epoch int, start time.Time, ok bool)
 
 // EventLogFor is the camera's event log on this resource: what the worker
 // holding the camera's epoch writes into, recorded or not — vms/<cam>/e<epoch>/.
-func EventLogFor(root string, cam, epoch, bucketSeconds int) *p.EventLog {
-	return p.NewEventLog(root, EventsSub, strconv.Itoa(cam), epoch, bucketSeconds)
+func EventLogFor(root, cam string, epoch, bucketSeconds int) *p.EventLog {
+	return p.NewEventLog(root, EventsSub, cam, epoch, bucketSeconds)
 }
 
 type Segment struct {

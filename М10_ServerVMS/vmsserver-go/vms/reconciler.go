@@ -24,7 +24,7 @@ type ActuatorFunc func(verb string, cam Camera) bool
 
 type Action struct {
 	Verb string
-	ID   int
+	ID   string
 }
 
 type Failure struct {
@@ -41,19 +41,19 @@ type Position struct {
 type Reconciler struct {
 	Store         Store
 	Actuator      ActuatorFunc
-	Actual        map[int]int // camera id -> revision   IN MEMORY ONLY
-	Failures      map[int]*Failure
+	Actual        map[string]int // unit id -> revision   IN MEMORY ONLY
+	Failures      map[string]*Failure
 	MaxBackoff    float64
 	StallFailures int
 }
 
 func NewReconciler(store Store, act ActuatorFunc) *Reconciler {
-	return &Reconciler{store, act, map[int]int{}, map[int]*Failure{}, 60, 3}
+	return &Reconciler{store, act, map[string]int{}, map[string]*Failure{}, 60, 3}
 }
 
 func (r *Reconciler) Reconcile(now float64) []Action {
-	desired := map[int]Camera{}
-	var order []int
+	desired := map[string]Camera{}
+	var order []string
 	for _, c := range r.Store.Desired() {
 		if c.Enabled {
 			desired[c.ID] = c
@@ -83,11 +83,11 @@ func (r *Reconciler) Reconcile(now float64) []Action {
 			actions = append(actions, Action{"failed", cid})
 		}
 	}
-	var running []int
+	var running []string
 	for cid := range r.Actual { // the stop loop walks what is RUNNING
 		running = append(running, cid)
 	}
-	sort.Ints(running)
+	sort.Strings(running)
 	for _, cid := range running {
 		if _, ok := desired[cid]; !ok {
 			r.Actuator("stop", Camera{ID: cid})
@@ -98,7 +98,7 @@ func (r *Reconciler) Reconcile(now float64) []Action {
 	return actions
 }
 
-func (r *Reconciler) fail(cid int, now float64) {
+func (r *Reconciler) fail(cid string, now float64) {
 	n := 1
 	if f := r.Failures[cid]; f != nil {
 		n = f.N + 1
@@ -108,16 +108,16 @@ func (r *Reconciler) fail(cid int, now float64) {
 	r.Failures[cid] = &Failure{n, now + delay, delay}
 }
 
-func (r *Reconciler) Lost(cid int, now float64) {
+func (r *Reconciler) Lost(cid string, now float64) {
 	delete(r.Actual, cid)
 	r.fail(cid, now)
 }
 
 // Clear is what a fence does: the pipelines were stopped underneath the loop.
-func (r *Reconciler) Clear() { r.Actual = map[int]int{} }
+func (r *Reconciler) Clear() { r.Actual = map[string]int{} }
 
-func (r *Reconciler) Status() map[int]Position {
-	out := map[int]Position{}
+func (r *Reconciler) Status() map[string]Position {
+	out := map[string]Position{}
 	for _, cam := range r.Store.Desired() {
 		if !cam.Enabled {
 			continue

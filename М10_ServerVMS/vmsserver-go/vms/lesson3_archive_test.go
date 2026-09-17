@@ -187,7 +187,7 @@ func TestEventsAreBucketsOnTheResourceRecordingOrNot(t *testing.T) {
 	res := vms.NewArchiveResource(box.Spool, box.Archive, 600, box.Wall.Now)
 	t0 := ts("2026-09-12T10:00:00")
 	box.Wall.Set(t0 + 2000)
-	log := vms.EventLogFor(box.Archive, 7, 3, 600)                          // the worker holds epoch 3 for camera 7
+	log := vms.EventLogFor(box.Archive, "7", 3, 600)                        // the worker holds epoch 3 for camera 7
 	pth, _ := log.Append(t0+12.5, "motion", map[string]any{"zone": "gate"}) // not recorded: still an event
 	if sub, unit, epoch, start, ok := p.ParseBucket(pth, box.Archive); !ok || sub != "vms" || unit != "7" || epoch != 3 || start != t0 || p.ReadBucket(pth)[0]["zone"] != "gate" {
 		t.Fatal(pth)

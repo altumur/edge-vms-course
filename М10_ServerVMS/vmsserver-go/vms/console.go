@@ -32,8 +32,8 @@ import (
 
 // DevicePlayback: the door of whoever holds this camera right now, or "". No
 // phase is asked for — a channel held only for its archive answers too.
-func DevicePlayback(objects p.ObjectStore, cam int, now float64) string {
-	h, ok := p.HolderOf(objects, "vms/", strconv.Itoa(cam), now, p.HolderQuery{Field: "playback_url"})
+func DevicePlayback(objects p.ObjectStore, cam string, now float64) string {
+	h, ok := p.HolderOf(objects, "vms/", cam, now, p.HolderQuery{Field: "playback_url"})
 	if !ok {
 		return ""
 	}
@@ -45,8 +45,8 @@ func DevicePlayback(objects p.ObjectStore, cam int, now float64) string {
 // (Lesson 16): one rule, two uses, so the picture and the work cannot disagree.
 // A span like this is the one that will disappear — our archive keeps thirty
 // days, a card keeps three — which is why the page offers to pin it.
-func DeviceSpans(objects p.ObjectStore, cam int, ours []map[string]any, t0, t1, now float64) []map[string]any {
-	h, ok := p.HolderOf(objects, "vms/", strconv.Itoa(cam), now, p.HolderQuery{Field: "coverage"})
+func DeviceSpans(objects p.ObjectStore, cam string, ours []map[string]any, t0, t1, now float64) []map[string]any {
+	h, ok := p.HolderOf(objects, "vms/", cam, now, p.HolderQuery{Field: "coverage"})
 	if !ok {
 		return []map[string]any{}
 	}
@@ -79,7 +79,28 @@ func DeviceSpans(objects p.ObjectStore, cam int, ours []map[string]any, t0, t1, 
 // VmsRoutes: what the VMS adds to the generic console — the media, from the
 // archive we wrote and from the one we did not. Returns false when a route is
 // not ours, so the console answers 404.
-func VmsRoutes(archive *ArchiveResource, ctl *VmsController, wall p.Clock) p.Extra {
+// RecordingsOf: a camera's footage lives under the units that record it, and the
+// archive is keyed by unit. With `id: cam` there is exactly one such unit and its
+// name is the camera's number — so this returns ["7"] for camera 7 and the answer
+// is the one the console always gave. The day a camera has two recordings it
+// returns both, and the timeline below merges them without another line changing.
+func RecordingsOf(recCtl *p.SpecController, cam string) []string {
+	if recCtl == nil {
+		return []string{cam} // no rec controller mounted: the old assumption, said out loud
+	}
+	out := []string{}
+	for _, r := range recCtl.Units() {
+		if p.Str(r["cam"]) == cam || (r["cam"] == nil && p.Str(r["id"]) == cam) {
+			out = append(out, p.Str(r["id"]))
+		}
+	}
+	if len(out) == 0 {
+		return []string{cam} // nothing declared: the camera's own name, so old footage still shows
+	}
+	return out
+}
+
+func VmsRoutes(archive *ArchiveResource, ctl *VmsController, recCtl *p.SpecController, wall p.Clock) p.Extra {
 	if wall == nil {
 		wall = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	}
@@ -103,7 +124,7 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, wall p.Clock) p.Ext
 			// than proxying the bytes: the holder is the only process with the
 			// session, and a proxy would put the console on the recording path.
 			cam, _ := strconv.Atoi(req.URL.Query().Get("cam"))
-			url := DevicePlayback(ctl.Objects, cam, wall())
+			url := DevicePlayback(ctl.Objects, strconv.Itoa(cam), wall())
 			if url == "" {
 				p.SendJSON(w, 503, map[string]any{"detail": "nobody holds this camera right now", "error": "unheld"})
 				return true
@@ -128,13 +149,16 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, wall p.Clock) p.Ext
 			return true
 		case strings.HasPrefix(path, "/timeline/"):
 			cid, _ := p.LastSegmentInt(path)
+			cam := strconv.Itoa(cid)
 			from, to := p.QueryRange(req)
 			spans := []map[string]any{}
-			for _, s := range NewManifest(archive.Root, strconv.Itoa(cid)).Timeline(from, to, 0) {
-				spans = append(spans, s.ToMap())
+			for _, unit := range RecordingsOf(recCtl, cam) { // every recording of this camera…
+				for _, s := range NewManifest(archive.Root, unit).Timeline(from, to, 0) {
+					spans = append(spans, s.ToMap()) // …merged into one timeline
+				}
 			}
 			if ctl != nil { // ours first, then the device's in the holes: one answer, sorted
-				spans = append(spans, DeviceSpans(ctl.Objects, cid, spans, from, to, wall())...)
+				spans = append(spans, DeviceSpans(ctl.Objects, cam, spans, from, to, wall())...)
 			}
 			sort.SliceStable(spans, func(i, j int) bool {
 				if a, b := p.ToFloat(spans[i]["start"]), p.ToFloat(spans[j]["start"]); a != b {
@@ -153,7 +177,7 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, wall p.Clock) p.Ext
 // token over RecSpec). Both answer /events from the same merge over the resources' databases.
 func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recCtl *p.SpecController) *p.Mount {
 	index := p.NewMergedIndex(ctl.Objects, nil, wall) // no database here: the resource process's, asked over HTTP
-	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive, ctl, wall), Media: archive != nil, Index: index}
+	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive, ctl, recCtl, wall), Media: archive != nil, Index: index}
 	if archive != nil {
 		o.MarksRoot = archive.Root
 	}

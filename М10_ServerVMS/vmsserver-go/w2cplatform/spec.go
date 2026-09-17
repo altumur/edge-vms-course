@@ -182,10 +182,15 @@ type SubsystemSpec struct {
 	Requires         string // "resource": a worker is eligible only while its server's resource is not silent
 	Servers          string // the default of the `servers` policy knob: shared | distinct (the console may change it)
 	Near             string // a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
-	TieBreak         string
-	DeadBand         float64
-	Snapshot         []string
-	RunningGauge     string // the console's gauge for units in phase "running": <name>_<RunningGauge>
+	// `spread_by: <field>` — units sharing a value of that field go on DIFFERENT servers. Unlike Near this
+	// is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
+	// is, and a second copy on the same server is not a second copy. Unplaceable while no other server
+	// qualifies, and that is the honest answer — /unplaceable says so rather than quietly co-locating.
+	SpreadBy     string
+	TieBreak     string
+	DeadBand     float64
+	Snapshot     []string
+	RunningGauge string // the console's gauge for units in phase "running": <name>_<RunningGauge>
 }
 
 func asMap(v any) map[string]any {
@@ -264,6 +269,9 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if nr, ok := pl["near"].(string); ok {
 		s.Near = nr
+	}
+	if sb, ok := pl["spread_by"].(string); ok {
+		s.SpreadBy = sb
 	}
 	if tb, ok := pl["tie_break"].(string); ok {
 		s.TieBreak = tb
@@ -700,13 +708,43 @@ func (c *SpecController) Load(worker string) int { return len(c.Assignment(worke
 
 func (c *SpecController) Eligible(r Row, workers []string) []string {
 	rule := Constraints[c.Spec.Constraint]
+	taken := c.ServersTaken(r)
 	out := []string{}
 	for _, w := range workers {
-		if rule(r, c.LabelsOf(w)) {
+		if rule(r, c.LabelsOf(w)) && !taken[c.ServerOf(w)] {
 			out = append(out, w)
 		}
 	}
 	return out
+}
+
+// The servers already carrying a unit that shares this row's SpreadBy value — where this one may
+// therefore NOT go. Empty when the subsystem does not ask to spread, which is every subsystem today.
+//
+// Read the whole rule in one sentence: two recordings of one camera exist to survive one server, so
+// putting them on one server is not a compromise, it is the failure the operator was buying insurance
+// against. Near pulls a recorder towards the camera's holder and would otherwise pull BOTH copies to
+// the same place — the preference loses to the filter, and the reason says which.
+func (c *SpecController) ServersTaken(r Row) map[string]bool {
+	field := c.Spec.SpreadBy
+	taken := map[string]bool{}
+	if field == "" {
+		return taken
+	}
+	value := Str(r[field])
+	if r[field] == nil || value == "" {
+		return taken
+	}
+	mine := r.ID()
+	for _, other := range c.Units() {
+		if other.ID() == mine || Str(other[field]) != value {
+			continue
+		}
+		if pl := c.Placement(other.ID()); pl != nil {
+			taken[c.ServerOf(pl.Worker)] = true
+		}
+	}
+	return taken
 }
 
 // The administrator's knobs: one row, <name>/policy, written by the console.

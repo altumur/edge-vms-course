@@ -41,14 +41,14 @@ func TestCRUDByCASAndWhatItRefuses(t *testing.T) {
 	box := testbox.NewBox()
 	ctl := vms.NewVmsController(box.Vars, box.Objects, 0, box.Wall.Now)
 	r := mustCreate(t, ctl, map[string]any{"name": "gate", "source": "driverpack://file/gate.mp4"})
-	if r.ID != 1 || r.Revision != 1 || ctl.Camera(1).Name != "gate" {
+	if r.ID != "1" || r.Revision != 1 || ctl.Camera("1").Name != "gate" {
 		t.Fatal(r)
 	}
-	if u, _ := ctl.UpdateCamera(1, map[string]any{"events_retention_days": 14}); u.Revision != 2 {
+	if u, _ := ctl.UpdateCamera("1", map[string]any{"events_retention_days": 14}); u.Revision != 2 {
 		t.Fatal(u)
 	}
 	for _, bad := range []map[string]any{{"worker": "w-1"}, {"revision": 9}, {"phase": "running"}, {"epoch": 3}, {"placement": map[string]any{}}} {
-		_, err := ctl.UpdateCamera(1, bad)
+		_, err := ctl.UpdateCamera("1", bad)
 		var refused *vms.Refused
 		if !errors.As(err, &refused) || !strings.Contains(refused.Msg, "may not set") {
 			t.Fatal("must refuse", bad, err)
@@ -59,8 +59,8 @@ func TestCRUDByCASAndWhatItRefuses(t *testing.T) {
 	if !errors.As(err, &refused) || !strings.Contains(refused.Msg, "needs a source") {
 		t.Fatal(err)
 	}
-	ctl.DeleteCamera(1)
-	if ctl.Camera(1) != nil || len(ctl.Cameras()) != 0 {
+	ctl.DeleteCamera("1")
+	if ctl.Camera("1") != nil || len(ctl.Cameras()) != 0 {
 		t.Fatal("deleted")
 	}
 }
@@ -80,7 +80,7 @@ func TestPlacementIsStoredWithAReasonAndAddingAWorkerMovesNothing(t *testing.T) 
 			t.Fatal(pl)
 		}
 	}
-	before := map[int]string{}
+	before := map[string]string{}
 	count := map[string]int{}
 	for _, c := range ctl.Cameras() {
 		before[c.ID] = ctl.Where(c.ID)
@@ -90,7 +90,7 @@ func TestPlacementIsStoredWithAReasonAndAddingAWorkerMovesNothing(t *testing.T) 
 		t.Fatal(count)
 	}
 	mustCreate(t, ctl, src(7))
-	if pl, _ := ctl.Place(7, []string{"w-1", "w-2"}); pl != nil { // the system is full
+	if pl, _ := ctl.Place("7", []string{"w-1", "w-2"}); pl != nil { // the system is full
 		t.Fatal(pl)
 	}
 	ctl.EnsurePlaced([]string{"w-1", "w-2", "w-3"}) // a worker arrives
@@ -99,8 +99,8 @@ func TestPlacementIsStoredWithAReasonAndAddingAWorkerMovesNothing(t *testing.T) 
 			t.Fatal(c)
 		}
 	}
-	if ctl.Where(7) != "w-3" || ctl.Placement(7).Rev != 1 || ctl.Placement(7).At != box.Wall.Now() { // the new one went to the new worker
-		t.Fatal(ctl.Placement(7))
+	if ctl.Where("7") != "w-3" || ctl.Placement("7").Rev != 1 || ctl.Placement("7").At != box.Wall.Now() { // the new one went to the new worker
+		t.Fatal(ctl.Placement("7"))
 	}
 }
 
@@ -124,7 +124,7 @@ func TestCapacityIsTheWorkersWordNotTheControllers(t *testing.T) {
 	if len(placed) != 8 || ctl.Load("w-1") != 2 || ctl.Load("w-2") != 6 { // the ninth waits: the system is full
 		t.Fatal(len(placed))
 	}
-	if pl, _ := ctl.Place(9, nil); pl != nil || ctl.Headroom() != 8 { // headroom is stale until they heartbeat again
+	if pl, _ := ctl.Place("9", nil); pl != nil || ctl.Headroom() != 8 { // headroom is stale until they heartbeat again
 		t.Fatal(pl, ctl.Headroom())
 	}
 	small.ReconcileOnce()
@@ -132,8 +132,8 @@ func TestCapacityIsTheWorkersWordNotTheControllers(t *testing.T) {
 	small.HeartbeatOnce()
 	big.HeartbeatOnce()
 	eq(t, ctl.Headroom(), 0)
-	if !strings.Contains(ctl.Placement(1).Reason, "(6)") && !strings.Contains(ctl.Placement(2).Reason, "(6)") { // the reason says whose number it was
-		t.Fatal(ctl.Placement(1).Reason)
+	if !strings.Contains(ctl.Placement("1").Reason, "(6)") && !strings.Contains(ctl.Placement("2").Reason, "(6)") { // the reason says whose number it was
+		t.Fatal(ctl.Placement("1").Reason)
 	}
 }
 
@@ -201,7 +201,7 @@ func TestRebalanceIsExplicitBudgetedAndStopsInTheDeadBand(t *testing.T) {
 	if !strings.Contains(ctl.Placement(moves[0].Camera).Reason, "rebalance") || ctl.Load("w-1") != 5 || ctl.Load("w-2") != 3 {
 		t.Fatal(ctl.Load("w-1"), ctl.Load("w-2"))
 	}
-	eq(t, ctl.Rebalance(5, 0.10, []string{"w-1", "w-2"}), []vms.Move{{4, "w-1", "w-2"}}) // one more, then inside the dead band
+	eq(t, ctl.Rebalance(5, 0.10, []string{"w-1", "w-2"}), []vms.Move{{"4", "w-1", "w-2"}}) // one more, then inside the dead band
 }
 
 func TestTheFailureArithmetic(t *testing.T) {
@@ -217,7 +217,7 @@ func TestTheFailureArithmetic(t *testing.T) {
 	ctl.EnsurePlaced(nil)
 	w.ReconcileOnce()
 	w.HeartbeatOnce()
-	eq(t, act.RunningIDs(), []int{1, 2})
+	eq(t, act.RunningIDs(), []string{"1", "2"})
 	// controller down: the read model still answers (heartbeats), recording continues, edits stop
 	rows := vms.NewVmsController(box.Vars, box.Objects, 0, box.Wall.Now).ReadModel(45)
 	if len(rows) != 2 || rows[0]["phase"] != "running" || rows[1]["phase"] != "running" {
@@ -225,7 +225,7 @@ func TestTheFailureArithmetic(t *testing.T) {
 	}
 	// worker down: the console shows the last snapshot with its age; edits still land in the store
 	box.Wall.Advance(100)
-	ctl.UpdateCamera(1, map[string]any{"name": "edited while w-1 was down"})
+	ctl.UpdateCamera("1", map[string]any{"name": "edited while w-1 was down"})
 	rows = ctl.ReadModel(45)
 	if rows[0]["worker_state"] != "stale" || rows[0]["age"] != 100.0 {
 		t.Fatal(rows[0])
@@ -263,16 +263,16 @@ func TestScaleInReleasesASlotAndTheControllerRedistributes(t *testing.T) {
 	ws[0].HeartbeatOnce()
 	ws[1].HeartbeatOnce()
 	eq(t, ctl.Redistribute(nil), []vms.Move{})
-	eq(t, ctl.Where(3), "w-3") // a crash is Nomad's to fix; the cameras wait for w-3
-	ws[2].ReleaseSlot()        // scale-in: SIGTERM, an orderly stop
+	eq(t, ctl.Where("3"), "w-3") // a crash is Nomad's to fix; the cameras wait for w-3
+	ws[2].ReleaseSlot()          // scale-in: SIGTERM, an orderly stop
 	moves := ctl.Redistribute(nil)
-	if len(moves) != 2 || moves[0].Camera != 3 || moves[0].From != "w-3" || moves[1].Camera != 6 || moves[1].From != "w-3" {
+	if len(moves) != 2 || moves[0].Camera != "3" || moves[0].From != "w-3" || moves[1].Camera != "6" || moves[1].From != "w-3" {
 		t.Fatal(moves)
 	}
-	if len(ctl.Assignment("w-3").Units) != 0 || !strings.Contains(ctl.Placement(3).Reason, "slot w-3 released") {
-		t.Fatal(ctl.Placement(3))
+	if len(ctl.Assignment("w-3").Units) != 0 || !strings.Contains(ctl.Placement("3").Reason, "slot w-3 released") {
+		t.Fatal(ctl.Placement("3"))
 	}
-	for _, c := range []int{3, 6} {
+	for _, c := range []string{"3", "6"} {
 		if w := ctl.Where(c); w != "w-1" && w != "w-2" {
 			t.Fatal(w)
 		}
@@ -331,10 +331,10 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	if !reflect.DeepEqual(r2, r) || len(ctl.Cameras()) != 1 { // the same POST, not a second camera
 		t.Fatal(r2)
 	}
-	if _, err := con.Place(1, nil); !errors.Is(err, p.ErrForbidden) { // a console token never writes placement
+	if _, err := con.Place("1", nil); !errors.Is(err, p.ErrForbidden) { // a console token never writes placement
 		t.Fatal(err)
 	}
-	if pls, _ := ctl.EnsurePlaced(nil); len(pls) != 1 || pls[0].Worker != "w-1" || ctl.Where(1) != "w-1" { // the controller's pass did
+	if pls, _ := ctl.EnsurePlaced(nil); len(pls) != 1 || pls[0].Worker != "w-1" || ctl.Where("1") != "w-1" { // the controller's pass did
 		t.Fatal(pls)
 	}
 	if st, _, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"worker": "w-9"}, map[string]string{"Idempotency-Key": "k2"}); st != 400 {
@@ -403,13 +403,13 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 		t.Fatal(st)
 	}
 	// the page's writes: disable, then delete — through the controller
-	if st, r, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"enabled": false}, map[string]string{"Idempotency-Key": "k4"}); st != 200 || r["enabled"] != false || ctl.Camera(1).Revision != 2 {
+	if st, r, _ := call(t, "PUT", base+"/cameras/1", map[string]any{"enabled": false}, map[string]string{"Idempotency-Key": "k4"}); st != 200 || r["enabled"] != false || ctl.Camera("1").Revision != 2 {
 		t.Fatal(st, r)
 	}
-	if st, r, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || r["deleted"] != 1.0 || len(ctl.Cameras()) != 0 || ctl.Where(1) != "w-1" { // the row is gone; the placement waits for the pass
+	if st, r, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 200 || r["deleted"] != 1.0 || len(ctl.Cameras()) != 0 || ctl.Where("1") != "w-1" { // the row is gone; the placement waits for the pass
 		t.Fatal(st, r)
 	}
-	if gone := ctl.UnplaceDeleted(); !reflect.DeepEqual(gone, []int{1}) || ctl.Where(1) != "" || len(ctl.Assignment("w-1").Units) != 0 {
+	if gone := ctl.UnplaceDeleted(); !reflect.DeepEqual(gone, []string{"1"}) || ctl.Where("1") != "" || len(ctl.Assignment("w-1").Units) != 0 {
 		t.Fatal(gone)
 	}
 	if st, _, _ := call(t, "DELETE", base+"/cameras/1", nil, nil); st != 404 { // gone is gone
@@ -496,9 +496,9 @@ func TestAReleasedSlotIsNotGivenNewCameras(t *testing.T) {
 	ctl.Redistribute(nil)
 	mustCreate(t, ctl, src(2)) // a camera added DURING the scale-in
 	ctl.EnsurePlaced(nil)
-	for _, c := range []int{1, 2} {
+	for _, c := range []string{"1", "2"} {
 		if w := ctl.Where(c); w != "w-2" {
-			t.Fatalf("camera %d went to %q: a released slot took a new camera", c, w)
+			t.Fatalf("camera %s went to %q: a released slot took a new camera", c, w)
 		}
 	}
 	if len(ctl.Assignment("w-1").Units) != 0 {

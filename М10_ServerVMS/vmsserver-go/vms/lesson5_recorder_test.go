@@ -85,15 +85,15 @@ func TestARecordingIsAUnitPlacedOnTheArchiveAndFedByTheWorkersTee(t *testing.T) 
 	}
 	// the recorder's pass: the pipeline is built from the worker's tee — its shared-memory branch, since the worker is on THIS
 	// server (no RTSP hop, no fan-out process on the recording path) — under the RECORDER's epoch
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 1}) {
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: "1"}) {
 		t.Fatal(acts)
 	}
-	started := fake(r.Act).Started[1]
-	if started.Source != vms.LiveShm(1, vms.ShmDir) || started.Source != "shm:///run/vms/1.shm" || started.Via != "shm" || started.SourceServer != "srv-1" {
+	started := fake(r.Act).Started["1"]
+	if started.Source != vms.LiveShm("1", vms.ShmDir) || started.Source != "shm:///run/vms/1.shm" || started.Via != "shm" || started.SourceServer != "srv-1" {
 		t.Fatal(started)
 	}
-	if vms.LiveURL("srv-1", 1) != "rtsp://srv-1:8554/1" { // what a recorder on another server would read
-		t.Fatal(vms.LiveURL("srv-1", 1))
+	if vms.LiveURL("srv-1", "1") != "rtsp://srv-1:8554/1" { // what a recorder on another server would read
+		t.Fatal(vms.LiveURL("srv-1", "1"))
 	}
 	if it, _, _ := box.Vars.Get("rec/epoch/1"); started.Epoch != 1 || it["epoch"] != "1" || w.Epochs["1"] != 1 { // two epochs, two writers, one camera
 		t.Fatal(started.Epoch, it, w.Epochs)
@@ -115,26 +115,26 @@ func TestARecordingIsAUnitPlacedOnTheArchiveAndFedByTheWorkersTee(t *testing.T) 
 	if _, err := os.Stat(pth); r.Promoted != 1 || err == nil || vms.NewManifest(box.Archive, "1").Read()[0].Path != "rec/1/e1/20260912T100000Z.mp4" {
 		t.Fatal(r.Promoted, err)
 	}
-	w.Observe(1, "motion", nil)
+	w.Observe("1", "motion", nil)
 	if under := p.SubsystemsUnder(box.Archive); len(under) != 2 || under["rec"][0] != "1" || under["vms"][0] != "1" {
 		t.Fatal(under)
 	}
 	// the camera's worker fails over to srv-2: the recorder re-subscribes — to the RTSP fan-out now, the worker is on another
 	// server — same recorder, same disks, same tree; a new pipeline is a new epoch (e1 before the move, e2 after, both here)
 	w2 := worker(t, box, "w-2", vms.NewFakeActuator(), vms.VmsWorkerOptions{Server: "srv-2", ArchiveRoot: box.Archive})
-	ctl.MoveTo(1, "w-2", "test")
+	ctl.MoveTo("1", "w-2", "test")
 	w2.ReconcileOnce()
 	w2.HeartbeatOnce()
 	w.ReconcileOnce()
 	w.HeartbeatOnce()
-	if moved := r.Resubscribe(); len(moved) != 1 || moved[0] != 1 || fake(r.Act).Calls[len(fake(r.Act).Calls)-1] != (vms.Action{Verb: "stop", ID: 1}) {
+	if moved := r.Resubscribe(); len(moved) != 1 || moved[0] != "1" || fake(r.Act).Calls[len(fake(r.Act).Calls)-1] != (vms.Action{Verb: "stop", ID: "1"}) {
 		t.Fatal(moved)
 	}
 	box.Clock.Advance(10)
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 1}) {
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: "1"}) {
 		t.Fatal(acts)
 	}
-	started = fake(r.Act).Started[1]
+	started = fake(r.Act).Started["1"]
 	if started.Source != "rtsp://srv-2:8554/1" || started.Via != "rtsp" || started.Epoch != 2 || recCtl.Where("1") != "r-1" || w2.Epochs["1"] != 2 { // the recording did not move; its source did
 		t.Fatal(started, recCtl.Where("1"))
 	}
@@ -143,8 +143,8 @@ func TestARecordingIsAUnitPlacedOnTheArchiveAndFedByTheWorkersTee(t *testing.T) 
 	mustCreate(t, rb.con, map[string]any{"name": "yard", "source": "driverpack://file/yard.mp4"})
 	mustCreate(t, rb.con, map[string]any{"name": "dock", "source": "driverpack://file/dock.mp4"})
 	ctl.EnsurePlaced(nil)
-	ctl.MoveTo(2, "w-2", "test")
-	ctl.MoveTo(3, "w-2", "test")
+	ctl.MoveTo("2", "w-2", "test")
+	ctl.MoveTo("3", "w-2", "test")
 	w2.ReconcileOnce()
 	w2.HeartbeatOnce()
 	w.ReconcileOnce()
@@ -159,11 +159,11 @@ func TestARecordingIsAUnitPlacedOnTheArchiveAndFedByTheWorkersTee(t *testing.T) 
 	if !strings.HasSuffix(pl2.Reason, "on srv-2, whose resource is unknown, beside w-2 holding it") || !strings.HasSuffix(pl3.Reason, "on srv-1, whose resource is unknown, away from w-2 on srv-2 (no room there)") {
 		t.Fatal(pl2.Reason, pl3.Reason)
 	}
-	if acts := r2.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 2}) || fake(r2.Act).Started[2].Via != "shm" || fake(r2.Act).Started[2].Source != "shm:///run/vms/2.shm" {
-		t.Fatal(acts, fake(r2.Act).Started[2])
+	if acts := r2.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: "2"}) || fake(r2.Act).Started["2"].Via != "shm" || fake(r2.Act).Started["2"].Source != "shm:///run/vms/2.shm" {
+		t.Fatal(acts, fake(r2.Act).Started["2"])
 	}
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 3}) || fake(r.Act).Started[3].Via != "rtsp" || fake(r.Act).Started[3].Source != "rtsp://srv-2:8554/3" {
-		t.Fatal(acts, fake(r.Act).Started[3])
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: "3"}) || fake(r.Act).Started["3"].Via != "rtsp" || fake(r.Act).Started["3"].Source != "rtsp://srv-2:8554/3" {
+		t.Fatal(acts, fake(r.Act).Started["3"])
 	}
 }
 
@@ -174,7 +174,7 @@ func TestARecordingWaitsWhileNobodyHoldsTheCameraAndRecordsWhenSomeoneDoes(t *te
 	r := recorder(t, box, "r-1", "srv-1", 50)
 	recCon.Create(map[string]any{"cam": "2"})
 	recCtl.EnsurePlaced(nil)
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "failed", ID: 2}) { // no source to subscribe to
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "failed", ID: "2"}) { // no source to subscribe to
 		t.Fatal(acts)
 	}
 	r.HeartbeatOnce()
@@ -186,8 +186,8 @@ func TestARecordingWaitsWhileNobodyHoldsTheCameraAndRecordsWhenSomeoneDoes(t *te
 	w.ReconcileOnce()
 	w.HeartbeatOnce()
 	box.Clock.Advance(10)
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: 2}) || fake(r.Act).Started[2].Source != "shm:///run/vms/2.shm" { // held here: the tee's shared memory
-		t.Fatal(acts, fake(r.Act).Started[2])
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "start", ID: "2"}) || fake(r.Act).Started["2"].Source != "shm:///run/vms/2.shm" { // held here: the tee's shared memory
+		t.Fatal(acts, fake(r.Act).Started["2"])
 	}
 	// a camera with no recording is watched, not recorded: it is held (live, detection, events), and has no rec/ tree
 	units := recCtl.Units()
@@ -197,7 +197,7 @@ func TestARecordingWaitsWhileNobodyHoldsTheCameraAndRecordsWhenSomeoneDoes(t *te
 	if cams := ctl.Cameras(); len(cams) != 2 || len(p.SubsystemsUnder(box.Archive)) != 0 {
 		t.Fatal(cams)
 	}
-	w.Observe(1, "motion", nil)
+	w.Observe("1", "motion", nil)
 	if under := p.SubsystemsUnder(box.Archive); len(under) != 1 || under["vms"][0] != "1" {
 		t.Fatal(under)
 	}
@@ -207,7 +207,7 @@ func TestARecordingWaitsWhileNobodyHoldsTheCameraAndRecordsWhenSomeoneDoes(t *te
 	if a := recCtl.Assignment("r-1"); len(a.Units) != 0 {
 		t.Fatal(a)
 	}
-	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "stop", ID: 2}) {
+	if acts := r.ReconcileOnce(); len(acts) != 1 || acts[0] != (vms.Action{Verb: "stop", ID: "2"}) {
 		t.Fatal(acts)
 	}
 }

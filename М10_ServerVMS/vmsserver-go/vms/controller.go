@@ -2,13 +2,11 @@ package vms
 
 // vmscontroller — the only writer of vms/*. It is the platform's
 // SpecController run from vms.subsystem.yaml; this file is the VMS's
-// vocabulary over it (camera, not unit; an int, not a string) and nothing
+// vocabulary over it (camera, not unit) and nothing
 // else. On one box it is a cluster of one: the snapshot still says which
 // server, and it is the hostname.
 
 import (
-	"strconv"
-
 	p "vmsserver/w2cplatform"
 )
 
@@ -20,7 +18,7 @@ type Refused = p.Refused
 var ErrNoSuchCamera = p.ErrNoSuchUnit
 
 type Placement struct {
-	Camera int
+	Camera string
 	Worker string
 	Reason string
 	At     float64
@@ -28,12 +26,12 @@ type Placement struct {
 }
 
 type Move struct {
-	Camera   int
+	Camera   string
 	From, To string
 }
 
 type Unplaceable struct {
-	ID          int      `json:"id"`
+	ID          string   `json:"id"`
 	Labels      []string `json:"labels"`
 	WorkersLive int      `json:"workers_live"`
 }
@@ -42,15 +40,13 @@ func placementOf(pl *p.Placement) *Placement {
 	if pl == nil {
 		return nil
 	}
-	n, _ := strconv.Atoi(pl.Unit)
-	return &Placement{n, pl.Worker, pl.Reason, pl.At, pl.Rev}
+	return &Placement{pl.Unit, pl.Worker, pl.Reason, pl.At, pl.Rev}
 }
 
 func movesOf(ms []p.Move) []Move {
 	out := []Move{}
 	for _, m := range ms {
-		n, _ := strconv.Atoi(m.Unit)
-		out = append(out, Move{n, m.From, m.To})
+		out = append(out, Move{m.Unit, m.From, m.To})
 	}
 	return out
 }
@@ -74,18 +70,18 @@ func (c *VmsController) CreateCamera(fields map[string]any) (Camera, error) {
 	return CameraOf(r), nil
 }
 
-func (c *VmsController) UpdateCamera(cid int, fields map[string]any) (Camera, error) {
-	r, err := c.Update(strconv.Itoa(cid), fields)
+func (c *VmsController) UpdateCamera(cid string, fields map[string]any) (Camera, error) {
+	r, err := c.Update(cid, fields)
 	if err != nil {
 		return Camera{}, err
 	}
 	return CameraOf(r), nil
 }
 
-func (c *VmsController) DeleteCamera(cid int) error { return c.Delete(strconv.Itoa(cid)) }
+func (c *VmsController) DeleteCamera(cid string) error { return c.Delete(cid) }
 
-func (c *VmsController) Camera(cid int) *Camera {
-	r := c.Unit(strconv.Itoa(cid))
+func (c *VmsController) Camera(cid string) *Camera {
+	r := c.Unit(cid)
 	if r == nil {
 		return nil
 	}
@@ -101,16 +97,16 @@ func (c *VmsController) Cameras() []Camera {
 	return out
 }
 
-func (c *VmsController) Placement(cid int) *Placement {
-	return placementOf(c.SpecController.Placement(strconv.Itoa(cid)))
+func (c *VmsController) Placement(cid string) *Placement {
+	return placementOf(c.SpecController.Placement(cid))
 }
 
 func (c *VmsController) Eligible(cam Camera, workers []string) []string {
 	return c.SpecController.Eligible(RowOf(cam), workers)
 }
 
-func (c *VmsController) Place(cid int, workers []string) (*Placement, error) {
-	pl, err := c.SpecController.Place(strconv.Itoa(cid), workers)
+func (c *VmsController) Place(cid string, workers []string) (*Placement, error) {
+	pl, err := c.SpecController.Place(cid, workers)
 	return placementOf(pl), err
 }
 
@@ -126,24 +122,19 @@ func (c *VmsController) EnsurePlaced(workers []string) ([]Placement, error) {
 func (c *VmsController) Unplaceable() []Unplaceable {
 	out := []Unplaceable{}
 	for _, u := range c.SpecController.Unplaceable() {
-		out = append(out, Unplaceable{int(p.ToFloat(u.ID)), u.Labels, u.WorkersLive})
+		out = append(out, Unplaceable{p.Str(u.ID), u.Labels, u.WorkersLive})
 	}
 	return out
 }
 
-func (c *VmsController) Where(cid int) string { return c.SpecController.Where(strconv.Itoa(cid)) }
+func (c *VmsController) Where(cid string) string { return c.SpecController.Where(cid) }
 
-func (c *VmsController) UnplaceDeleted() []int {
-	out := []int{}
-	for _, u := range c.SpecController.UnplaceDeleted() {
-		n, _ := strconv.Atoi(u)
-		out = append(out, n)
-	}
-	return out
+func (c *VmsController) UnplaceDeleted() []string {
+	return c.SpecController.UnplaceDeleted()
 }
 
-func (c *VmsController) MoveTo(cid int, to, reason string) (Placement, error) {
-	pl, err := c.SpecController.MoveTo(strconv.Itoa(cid), to, reason)
+func (c *VmsController) MoveTo(cid string, to, reason string) (Placement, error) {
+	pl, err := c.SpecController.MoveTo(cid, to, reason)
 	return *placementOf(&pl), err
 }
 

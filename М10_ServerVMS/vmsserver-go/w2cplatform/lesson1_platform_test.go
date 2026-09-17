@@ -160,7 +160,13 @@ func TestThePlatformKnowsNothingAboutVideo(t *testing.T) {
 			continue
 		}
 		src, _ := os.ReadFile(filepath.Join(".", e.Name()))
-		s := strings.ToLower(string(src))
+		code := []string{} // the code, not the notes
+		for _, l := range strings.Split(string(src), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(l), "//") {
+				code = append(code, l)
+			}
+		}
+		s := strings.ToLower(strings.Join(code, "\n"))
 		if strings.Contains(s, "vmsserver/vms\"") || strings.Contains(s, "camera") {
 			t.Fatal(e.Name())
 		}

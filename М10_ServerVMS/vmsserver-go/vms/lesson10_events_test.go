@@ -58,7 +58,7 @@ func TestEventsReachTheTimelineThroughTheResourceProcessAndTheConsole(t *testing
 	// the operator marks a moment, and the camera goes silent: two subsystems' events on one resource
 	call(t, "POST", base+"/marks", map[string]any{"cam": 1, "note": "check this"}, map[string]string{"Idempotency-Key": "m1", "X-User": "murat"})
 	box.Wall.Advance(2)
-	act.Dead = []int{1}
+	act.Dead = []string{"1"}
 	w.PumpOnce()
 	eq(t, res.Database.Tail().Added, 2) // the resource's tail; the console was not told
 	st, out, _ := call(t, "GET", base+"/events?cam=1", nil, nil)
@@ -90,8 +90,8 @@ func TestEventsReachTheTimelineThroughTheResourceProcessAndTheConsole(t *testing
 func TestTheDatabaseIsACacheAndRetentionTakesTheRowsWithTheFile(t *testing.T) {
 	box := testbox.NewBox()
 	tt := box.Wall.Now() - 3*86400
-	vms.EventLogFor(box.Archive, 7, 1, 600).Append(tt+10, "motion", map[string]any{"zone": "gate"}) // three days old: past a 1-day policy
-	vms.EventLogFor(box.Archive, 7, 1, 600).Append(box.Wall.Now()-100, "motion", nil)               // fresh
+	vms.EventLogFor(box.Archive, "7", 1, 600).Append(tt+10, "motion", map[string]any{"zone": "gate"}) // three days old: past a 1-day policy
+	vms.EventLogFor(box.Archive, "7", 1, 600).Append(box.Wall.Now()-100, "motion", nil)               // fresh
 	ar := vms.NewArchiveResource(box.Spool, box.Archive, 600, box.Wall.Now)
 	res := vms.NewVmsResource(ar, "srv-1", "http://srv-1", box.Vars, box.Objects, box.Wall.Now, nil)
 	res.Heartbeat()

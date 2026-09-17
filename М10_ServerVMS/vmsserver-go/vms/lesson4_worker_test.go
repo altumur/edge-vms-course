@@ -20,7 +20,8 @@ type fakeStore struct{ rows []vms.Camera }
 func (s *fakeStore) Desired() []vms.Camera { return s.rows }
 
 func cam(i, revision int, enabled bool) vms.Camera {
-	return vms.Camera{ID: i, Name: "cam" + strconv.Itoa(i), Source: "driverpack://file/cam" + strconv.Itoa(i) + ".mp4",
+	id := strconv.Itoa(i) // a unit id is a string: `id: numeric` writes the number, it does not stay one
+	return vms.Camera{ID: id, Name: "cam" + id, Source: "driverpack://file/cam" + id + ".mp4",
 		Enabled: enabled, Priority: 100, Revision: revision}
 }
 
@@ -28,8 +29,7 @@ func actions(a ...string) []vms.Action {
 	out := []vms.Action{}
 	for _, s := range a {
 		verb, id, _ := strings.Cut(s, " ")
-		n, _ := strconv.Atoi(id)
-		out = append(out, vms.Action{Verb: verb, ID: n})
+		out = append(out, vms.Action{Verb: verb, ID: id})
 	}
 	return out
 }
@@ -57,7 +57,7 @@ func TestRevisionBumpRestarts(t *testing.T) {
 	store.rows[0].Revision = 2
 	eq(t, r.Reconcile(0), actions("restart 1"))
 	eq(t, r.Reconcile(0), actions())
-	eq(t, r.Actual[1], 2)
+	eq(t, r.Actual["1"], 2)
 }
 
 func TestDisableAndDelete(t *testing.T) {
@@ -82,10 +82,10 @@ func TestRestartReDerivesActual(t *testing.T) {
 func TestPersistedActualIsACacheThatLies(t *testing.T) {
 	act := vms.NewFakeActuator()
 	liar := vms.NewReconciler(&fakeStore{[]vms.Camera{cam(1, 2, true)}}, act.Actuate)
-	liar.Actual = map[int]int{1: 2} // "saved" from a previous life
+	liar.Actual = map[string]int{"1": 2} // "saved" from a previous life
 	eq(t, liar.Reconcile(0), actions())
-	eq(t, liar.Status()[1].State, vms.Converged)
-	eq(t, act.RunningIDs(), []int{})
+	eq(t, liar.Status()["1"].State, vms.Converged)
+	eq(t, act.RunningIDs(), []string{})
 }
 
 func TestBackoffWithJitterSpreads200Cameras(t *testing.T) {
@@ -94,7 +94,7 @@ func TestBackoffWithJitterSpreads200Cameras(t *testing.T) {
 		rows = append(rows, cam(i, 1, true))
 	}
 	act := vms.NewFakeActuator()
-	act.Failing = func(int) bool { return true }
+	act.Failing = func(string) bool { return true }
 	r := vms.NewReconciler(&fakeStore{rows}, act.Actuate)
 	r.Reconcile(0)
 	var retries []float64
@@ -111,21 +111,21 @@ func TestBackoffWithJitterSpreads200Cameras(t *testing.T) {
 
 func TestLaggingVsStalled(t *testing.T) {
 	act := vms.NewFakeActuator()
-	act.Failing = vms.FailingSet(2)
+	act.Failing = vms.FailingSet("2")
 	r := vms.NewReconciler(&fakeStore{[]vms.Camera{cam(1, 1, true), cam(2, 1, true)}}, act.Actuate)
 	r.Reconcile(0)
-	eq(t, r.Status()[1], vms.Position{vms.Converged, 0})
-	eq(t, r.Status()[2], vms.Position{vms.Lagging, 1})
+	eq(t, r.Status()["1"], vms.Position{vms.Converged, 0})
+	eq(t, r.Status()["2"], vms.Position{vms.Lagging, 1})
 	now := 0.0
 	for i := 0; i < 3; i++ {
-		now = r.Failures[2].RetryAt + 0.01
+		now = r.Failures["2"].RetryAt + 0.01
 		r.Reconcile(now)
 	}
-	eq(t, r.Status()[2], vms.Position{vms.Stalled, 1})
-	r.Lost(1, now)
-	_, running := r.Actual[1]
+	eq(t, r.Status()["2"], vms.Position{vms.Stalled, 1})
+	r.Lost("1", now)
+	_, running := r.Actual["1"]
 	eq(t, running, false)
-	eq(t, r.Status()[1].State, vms.Lagging)
+	eq(t, r.Status()["1"].State, vms.Lagging)
 }
 
 // -- the worker over an assignment ---------------------------------------------------------
@@ -158,15 +158,15 @@ func TestWorkerRunsItsAssignmentAndTakesAnEpochPerCamera(t *testing.T) {
 	eq(t, w.ReconcileOnce(), actions()) // unassigned: it invents nothing
 	ctl.Assign("w-1", []string{"1", "2"})
 	eq(t, w.ReconcileOnce(), actions("start 1", "start 2"))
-	eq(t, act.Epochs, map[int]int{1: 1, 2: 1})
+	eq(t, act.Epochs, map[string]int{"1": 1, "2": 1})
 	if !w.MayWrite("1") || !w.MayWrite("2") {
 		t.Fatal("may write")
 	}
 	ep, _, _ := box.Vars.Get("vms/epoch/1")
 	eq(t, ep, p.Items{"epoch": "1"})
-	ctl.UpdateCamera(1, map[string]any{"name": "gate"}) // an edit: revision 2
+	ctl.UpdateCamera("1", map[string]any{"name": "gate"}) // an edit: revision 2
 	eq(t, w.ReconcileOnce(), actions("restart 1"))
-	eq(t, act.Epochs[1], 1)          // a restart keeps its epoch
+	eq(t, act.Epochs["1"], 1)        // a restart keeps its epoch
 	ctl.Assign("w-1", []string{"2"}) // camera 1 reassigned away
 	eq(t, w.ReconcileOnce(), actions("stop 1"))
 	if _, held := w.Epochs["1"]; held {
@@ -191,7 +191,7 @@ func TestRestartWithTheControllerStopped(t *testing.T) {
 	w2 := worker(t, box, "w-1", act2, vms.VmsWorkerOptions{}) // kill -9, restart
 	eq(t, len(w2.Reconciler.Actual), 0)                       // a fresh process knows nothing
 	eq(t, w2.ReconcileOnce(), actions("start 1", "start 2", "start 3"))
-	eq(t, act2.Epochs, map[int]int{1: 2, 2: 2, 3: 2}) // the next epoch for each: the old instance is fenced by construction
+	eq(t, act2.Epochs, map[string]int{"1": 2, "2": 2, "3": 2}) // the next epoch for each: the old instance is fenced by construction
 }
 
 func TestTheZombieOnOneBox(t *testing.T) {
@@ -202,12 +202,12 @@ func TestTheZombieOnOneBox(t *testing.T) {
 	aAct, bAct := vms.NewFakeActuator(), vms.NewFakeActuator()
 	a := worker(t, box, "w-1", aAct, vms.VmsWorkerOptions{})
 	a.ReconcileOnce()
-	eq(t, aAct.RunningIDs(), []int{1})
-	eq(t, aAct.Epochs[1], 1)
+	eq(t, aAct.RunningIDs(), []string{"1"})
+	eq(t, aAct.Epochs["1"], 1)
 	b := worker(t, box, "w-1", bAct, vms.VmsWorkerOptions{}) // the replacement
 	b.ReconcileOnce()
-	eq(t, bAct.RunningIDs(), []int{1})
-	eq(t, bAct.Epochs[1], 2)
+	eq(t, bAct.RunningIDs(), []string{"1"})
+	eq(t, bAct.Epochs["1"], 2)
 	eq(t, a.LeasePass(), []string{"1"})                                                                     // A wakes, renews, fences
 	if a.RecordingAllowed || len(aAct.RunningIDs()) != 0 || !strings.Contains(a.FencedReason, "slot w-1") { // fenced at the slot first...
 		t.Fatal(a.FencedReason)
@@ -216,7 +216,7 @@ func TestTheZombieOnOneBox(t *testing.T) {
 	eq(t, a.Conflicts(), 1)
 	eq(t, a.ReconcileOnce(), actions("failed 1")) // it may start nothing
 	eq(t, b.LeasePass(), []string{})
-	eq(t, bAct.RunningIDs(), []int{1}) // B is fine
+	eq(t, bAct.RunningIDs(), []string{"1"}) // B is fine
 }
 
 func TestAReplacementWithoutANameInheritsTheLapsedSlot(t *testing.T) {
@@ -237,7 +237,7 @@ func TestAReplacementWithoutANameInheritsTheLapsedSlot(t *testing.T) {
 	c := worker(t, box, "", act, vms.VmsWorkerOptions{}) // the replacement alloc
 	eq(t, c.Name, "w-1")                                 // not w-3: the lapsed slot, and with it the assignment
 	eq(t, c.ReconcileOnce(), actions("start 1", "start 2"))
-	eq(t, act.Epochs, map[int]int{1: 2, 2: 2})
+	eq(t, act.Epochs, map[string]int{"1": 2, "2": 2})
 	if a.RenewSlot() { // A, wherever it is, is fenced at the slot
 		t.Fatal("A")
 	}
@@ -266,27 +266,27 @@ func TestTheWorkerObservesWhatItHoldsRecordingOrNot(t *testing.T) {
 	ctl.Assign("w-1", []string{"1"})
 	act := vms.NewFakeActuator()
 	w := worker(t, box, "w-1", act, vms.VmsWorkerOptions{ArchiveRoot: box.Archive})
-	eq(t, w.Observe(1, "motion", nil), "") // no epoch held yet: not mine to observe
+	eq(t, w.Observe("1", "motion", nil), "") // no epoch held yet: not mine to observe
 	w.ReconcileOnce()
-	pth := w.Observe(1, "motion", map[string]any{"zone": "gate"})
+	pth := w.Observe("1", "motion", map[string]any{"zone": "gate"})
 	if pth == "" || !strings.HasPrefix(pth, box.Archive+"/vms/1/e1") || p.ReadBucket(pth)[0]["zone"] != "gate" {
 		t.Fatal(pth)
 	}
-	eq(t, w.Observe(2, "motion", nil), "")               // camera 2 is not assigned to me
-	act.Post(1, "person", map[string]any{"score": 0.91}) // an element posted on the bus...
-	w.PumpOnce()                                         // ...and the worker, holding the epoch, made it a line
-	act.Dead = []int{1}                                  // the pipeline died
+	eq(t, w.Observe("2", "motion", nil), "")               // camera 2 is not assigned to me
+	act.Post("1", "person", map[string]any{"score": 0.91}) // an element posted on the bus...
+	w.PumpOnce()                                           // ...and the worker, holding the epoch, made it a line
+	act.Dead = []string{"1"}                               // the pipeline died
 	w.PumpOnce()
 	var kinds []string
 	for _, e := range p.ReadBucket(pth) {
 		kinds = append(kinds, e.Kind())
 	}
 	eq(t, kinds, []string{"motion", "person", "silent"})
-	_, running := w.Reconciler.Actual[1]
+	_, running := w.Reconciler.Actual["1"]
 	eq(t, running, false)
 	eq(t, p.ToFloat(p.ReadBucket(pth)[1]["score"]), 0.91)
 	w.Fence("test")
-	act.Post(1, "motion", nil)
+	act.Post("1", "motion", nil)
 	w.PumpOnce()
 	eq(t, len(p.ReadBucket(pth)), 3) // a fenced instance's bus still posts; Observe drops it
 	l, _ := box.Vars.List("vms/events")
@@ -300,7 +300,7 @@ func TestAReassignmentIsNotAZombie(t *testing.T) {
 	ctl.Assign("w-1", []string{"1"})
 	w1 := worker(t, box, "w-1", vms.NewFakeActuator(), vms.VmsWorkerOptions{})
 	w1.ReconcileOnce()
-	ctl.MoveTo(1, "w-2", "operator asked")
+	ctl.MoveTo("1", "w-2", "operator asked")
 	w2 := worker(t, box, "w-2", vms.NewFakeActuator(), vms.VmsWorkerOptions{})
 	w2.ReconcileOnce()
 	eq(t, w1.LeasePass(), []string{"1"})
@@ -320,8 +320,8 @@ func TestLeaseExpiryWithoutRenewalStopsStarts(t *testing.T) {
 	if w.MayWrite("1") {
 		t.Fatal("expired")
 	}
-	w.Reconciler.Lost(1, w.Now()) // the pipeline died meanwhile
-	box.Clock.Advance(5)          // past its backoff
+	w.Reconciler.Lost("1", w.Now()) // the pipeline died meanwhile
+	box.Clock.Advance(5)            // past its backoff
 	eq(t, w.ReconcileOnce(), actions("start 1"))
-	eq(t, act.Epochs[1], 2) // a start takes a fresh epoch and lease
+	eq(t, act.Epochs["1"], 2) // a start takes a fresh epoch and lease
 }

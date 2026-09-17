@@ -72,8 +72,8 @@ func TestOneSessionPerDeviceHoweverManyChannelsAreAssigned(t *testing.T) {
 			"1": {100, 400, 3}, "2": {From: 100, To: 400}, "3": {From: 100, To: 400}, "4": {From: 100, To: 400}})
 	}
 	w := holder(t, box, factory, nil)
-	for _, ch := range []int{17, 18, 19} {
-		mustCreate(t, ctl, map[string]any{"name": "nvr-" + strconv.Itoa(ch), "source": nvr + strconv.Itoa(ch)})
+	for _, ch := range []string{"17", "18", "19"} {
+		mustCreate(t, ctl, map[string]any{"name": "nvr-" + ch, "source": nvr + ch})
 	}
 	mustCreate(t, ctl, map[string]any{"name": "front", "source": card})
 	ctl.EnsurePlaced(nil)
@@ -98,14 +98,14 @@ func TestOneSessionPerDeviceHoweverManyChannelsAreAssigned(t *testing.T) {
 	}
 
 	// and the second kind of output, beside the live one
-	st := map[int]map[string]any{}
+	st := map[string]map[string]any{}
 	for _, s := range w.Status() {
-		st[s["id"].(int)] = s
+		st[p.Str(s["id"])] = s
 	}
-	if p.Str(st[1]["playback_url"]) != "http://srv-1:8083/playback/1" {
-		t.Fatal(st[1])
+	if p.Str(st["1"]["playback_url"]) != "http://srv-1:8083/playback/1" {
+		t.Fatal(st["1"])
 	}
-	eq(t, st[1]["coverage"], map[string]any{"from": 100.0, "to": 400.0, "fragments": 3})
+	eq(t, st["1"]["coverage"], map[string]any{"from": 100.0, "to": 400.0, "fragments": 3})
 }
 
 func TestAChannelKeptForItsArchiveIsHeldAndNotStreamed(t *testing.T) {
@@ -123,16 +123,16 @@ func TestAChannelKeptForItsArchiveIsHeldAndNotStreamed(t *testing.T) {
 	ctl.EnsurePlaced(nil)
 
 	eq(t, w.ReconcileOnce(), actions("start 1")) // only the watched one gets a pipeline
-	eq(t, act.RunningIDs(), []int{1})
-	st := map[int]map[string]any{}
+	eq(t, act.RunningIDs(), []string{"1"})
+	st := map[string]map[string]any{}
 	for _, s := range w.Status() {
-		st[s["id"].(int)] = s
+		st[p.Str(s["id"])] = s
 	}
-	if st[1]["phase"] != "running" || st[2]["phase"] != "held" {
-		t.Fatal(st[1]["phase"], st[2]["phase"])
+	if st["1"]["phase"] != "running" || st["2"]["phase"] != "held" {
+		t.Fatal(st["1"]["phase"], st["2"]["phase"])
 	}
-	if p.Str(st[2]["playback_url"]) == "" { // held means its archive is still served
-		t.Fatal(st[2])
+	if p.Str(st["2"]["playback_url"]) == "" { // held means its archive is still served
+		t.Fatal(st["2"])
 	}
 	if w.Headroom() != 48 { // both rows still cost capacity
 		t.Fatal(w.Headroom())
@@ -202,7 +202,7 @@ func TestTheConsoleDrawsTheDeviceOnlyWhereWeHaveNothing(t *testing.T) {
 	w.HeartbeatOnce()
 
 	ours := []map[string]any{{"start": 200.0, "end": 400.0}, {"start": 600.0, "end": 700.0}}
-	spans := vms.DeviceSpans(box.Objects, 1, ours, 0, 1000, box.Wall.Now())
+	spans := vms.DeviceSpans(box.Objects, "1", ours, 0, 1000, box.Wall.Now())
 	got := [][2]float64{}
 	for _, s := range spans {
 		got = append(got, [2]float64{p.ToFloat(s["start"]), p.ToFloat(s["end"])})
@@ -295,9 +295,9 @@ func TestBackfillClosesOurGapsAndWhatItFetchesIsOurs(t *testing.T) {
 		rel, _ := filepath.Rel(box.Archive, pth)
 		vms.NewManifest(box.Archive, "1").Append(vms.Segment{Unit: "1", Epoch: epoch, Start: span[0], End: span[1], Path: rel, Bytes: 1, Source: "live"})
 	}
-	eq(t, r.OurCoverage(1), [][2]float64{{now - 80000, now - 76400}, {now - 70000, now - 66400}})
+	eq(t, r.OurCoverage("1"), [][2]float64{{now - 80000, now - 76400}, {now - 70000, now - 66400}})
 
-	gaps := r.Gaps(1, vms.Coverage{From: 0, To: now}, now)
+	gaps := r.Gaps("1", vms.Coverage{From: 0, To: now}, now)
 	if !reflect.DeepEqual(gaps[len(gaps)-2], [2]float64{now - 76400, now - 70000}) { // the hole between the two
 		t.Fatal(gaps)
 	}

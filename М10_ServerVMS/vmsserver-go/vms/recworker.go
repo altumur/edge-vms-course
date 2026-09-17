@@ -1,6 +1,6 @@
 package vms
 
-// recworker — the fourth subsystem's worker: the only one placed on top of
+// vmsrecorder — the fourth subsystem's worker: the only one placed on top of
 // the archive. A recorder is a worker in the platform's sense (a slot claimed
 // by CAS — r-1 — an assignment read from the store, an epoch per unit, a
 // heartbeat with capacity and headroom) whose unit is one camera's RECORDING,
@@ -41,8 +41,8 @@ type RecWorker struct {
 	Archive      *ArchiveResource
 	GraceSeconds float64
 	Promoted     int
-	Waiting      map[int]bool
-	Sources      map[int]string // what each running pipeline subscribed to
+	Waiting      map[string]bool   // units with nobody holding their camera
+	Sources      map[string]string // what each running pipeline subscribed to
 	// Backfill (Lesson 16): the hours in LOCAL time it may run in, how far back
 	// it may reach, how fresh it must NOT touch, and the seam tolerance that
 	// stops 144 seams a day from looking like 144 gaps.
@@ -73,7 +73,7 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 	if err != nil {
 		return nil, err
 	}
-	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[int]bool{}, Sources: map[int]string{},
+	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[string]bool{}, Sources: map[string]string{},
 		KeepDays: 30, Settle: 900, Stitch: 2}
 	w.Enrich, w.StatusExtra, w.BeforePass, w.AfterPump, w.StatusFix = r.enrich, r.statusExtra, func() { r.Resubscribe() }, r.afterPump, r.statusFix
 	for _, pth := range archive.ClosedInSpool(r.GraceSeconds, w.Wall()) { // what the last instance closed but did not promote
@@ -91,8 +91,8 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 // with no RTSP hop, no fan-out process on the recording path — and its RTSP
 // fan-out (live_url) otherwise. A holder that has gone silent is no answer:
 // that is what the catalogue's freshness filter is for.
-func (r *RecWorker) Source(cam int) (server, source string) {
-	h, ok := p.HolderOf(r.Objects, "vms/", strconv.Itoa(cam), r.Wall(), p.HolderQuery{Phase: "running", Field: "live_url"})
+func (r *RecWorker) Source(cam string) (server, source string) {
+	h, ok := p.HolderOf(r.Objects, "vms/", cam, r.Wall(), p.HolderQuery{Phase: "running", Field: "live_url"})
 	if !ok {
 		return "", ""
 	}
@@ -113,7 +113,10 @@ func via(source string) string {
 // A recording's pipeline needs a source. No source (the camera is held by nobody yet) means "cannot start
 // now": the reconciler backs off and retries, and the status says `waiting`.
 func (r *RecWorker) enrich(cam Camera) (Camera, bool) {
-	server, src := r.Source(cam.ID)
+	// Two identities in three lines: cam.Cam is WHOSE fan-out to subscribe to, cam.ID
+	// is WHICH recording is subscribing. `id: cam` makes them equal today; nothing
+	// here would change if it stopped.
+	server, src := r.Source(cam.Cam)
 	if src == "" {
 		r.Waiting[cam.ID] = true
 		return cam, false
@@ -125,8 +128,8 @@ func (r *RecWorker) enrich(cam Camera) (Camera, bool) {
 }
 
 func (r *RecWorker) statusExtra(cam Camera) map[string]any {
-	_, src := r.Source(cam.ID)
-	out := map[string]any{"cam": strconv.Itoa(cam.ID), "source": nil, "via": nil}
+	_, src := r.Source(cam.Cam)
+	out := map[string]any{"cam": cam.Cam, "source": nil, "via": nil}
 	if src != "" {
 		out["source"], out["via"] = src, via(src)
 	}
@@ -138,7 +141,7 @@ func (r *RecWorker) statusExtra(cam Camera) map[string]any {
 
 func (r *RecWorker) statusFix(st []map[string]any) {
 	for _, s := range st {
-		id, _ := s["id"].(int)
+		id := p.Str(s["id"])
 		if s["phase"] != "running" && r.Waiting[id] && s["enabled"] == true {
 			s["phase"] = "waiting"
 		}
@@ -148,21 +151,27 @@ func (r *RecWorker) statusFix(st []map[string]any) {
 // Resubscribe: the camera's worker moved — the source is another server's fan-out now, or, if it moved
 // HERE, the shared-memory branch. The pipeline reading the old source is stopped and counted lost, so the
 // reconciler starts it again on the new one, under a new rec epoch (a start is a new writer).
-func (r *RecWorker) Resubscribe() []int {
-	moved := []int{}
-	ids := []int{}
-	for cid := range r.Reconciler.Actual {
-		ids = append(ids, cid)
+func (r *RecWorker) Resubscribe() []string {
+	// Walked over the ROWS, not over Actual, because the move is about a camera and
+	// the row is the only thing that knows which camera a recording records.
+	rows := map[string]Camera{}
+	ids := []string{}
+	for _, row := range r.Rows {
+		if _, running := r.Reconciler.Actual[row.ID]; running {
+			rows[row.ID] = row
+			ids = append(ids, row.ID)
+		}
 	}
-	sort.Ints(ids)
+	sort.Strings(ids)
+	moved := []string{}
 	for _, cid := range ids {
-		_, src := r.Source(cid)
+		_, src := r.Source(rows[cid].Cam)
 		if src != "" && r.Sources[cid] != "" && r.Sources[cid] != src {
 			r.Act.Actuate("stop", Camera{ID: cid})
 			r.Reconciler.Lost(cid, r.Now())
 			delete(r.Sources, cid)
 			moved = append(moved, cid)
-			log.Printf("%s: camera %d is held elsewhere now (%s): re-subscribing", r.Name, cid, src)
+			log.Printf("%s: camera %s is held elsewhere now (%s): re-subscribing", r.Name, rows[cid].Cam, src)
 		}
 	}
 	return moved

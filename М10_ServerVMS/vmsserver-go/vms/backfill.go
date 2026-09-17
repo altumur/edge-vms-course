@@ -26,8 +26,8 @@ type RangeRecorder interface {
 
 // OurCoverage: what this archive already holds for the camera, seams under
 // Stitch closed over.
-func (r *RecWorker) OurCoverage(cam int) [][2]float64 {
-	return r.Archive.Coverage(strconv.Itoa(cam), r.Stitch)
+func (r *RecWorker) OurCoverage(unit string) [][2]float64 {
+	return r.Archive.Coverage(unit, r.Stitch)
 }
 
 // Gaps: what the device has and we do not, bounded at BOTH ends. Not older than
@@ -35,7 +35,7 @@ func (r *RecWorker) OurCoverage(cam int) [][2]float64 {
 // the clock, for ever. Not fresher than Settle — the last minutes are being
 // written right now, are in no manifest yet, and we would be fetching what we
 // are recording.
-func (r *RecWorker) Gaps(cam int, cov Coverage, now float64) [][2]float64 {
+func (r *RecWorker) Gaps(unit string, cov Coverage, now float64) [][2]float64 {
 	from, to := cov.From, cov.To
 	if lower := now - r.KeepDays*86400; from < lower {
 		from = lower
@@ -46,7 +46,7 @@ func (r *RecWorker) Gaps(cam int, cov Coverage, now float64) [][2]float64 {
 	if to <= from {
 		return [][2]float64{}
 	}
-	return Subtract([2]float64{from, to}, r.OurCoverage(cam))
+	return Subtract([2]float64{from, to}, r.OurCoverage(unit))
 }
 
 // InWindow: local time, and the one place in the course where that is right —
@@ -68,8 +68,8 @@ func (r *RecWorker) InWindow(now float64) bool {
 // is held by a worker that serves the device's own archive — found the way
 // everything is found here, in the holder's heartbeat. No phase is asked for: a
 // channel held only for its archive (`held`) answers too.
-func (r *RecWorker) DeviceSource(cam int) (url string, cov Coverage, ok bool) {
-	h, found := p.HolderOf(r.Objects, "vms/", strconv.Itoa(cam), r.Wall(), p.HolderQuery{Field: "playback_url"})
+func (r *RecWorker) DeviceSource(cam string) (url string, cov Coverage, ok bool) {
+	h, found := p.HolderOf(r.Objects, "vms/", cam, r.Wall(), p.HolderQuery{Field: "playback_url"})
 	if !found {
 		return "", Coverage{}, false
 	}
@@ -84,7 +84,8 @@ func (r *RecWorker) DeviceSource(cam int) (url string, cov Coverage, ok bool) {
 
 // Filled is what one fetched range came to.
 type Filled struct {
-	Cam      int     `json:"cam"`
+	Unit     string  `json:"unit"`
+	Cam      string  `json:"cam"`
 	From     float64 `json:"from"`
 	To       float64 `json:"to"`
 	Segments int     `json:"segments"`
@@ -109,15 +110,15 @@ func (r *RecWorker) Backfill(budget int, now float64, force bool) []Filled {
 		if len(done) >= budget {
 			break
 		}
-		url, cov, ok := r.DeviceSource(row.ID)
+		url, cov, ok := r.DeviceSource(row.Cam) // the DEVICE is the camera's
 		if !ok {
 			continue
 		}
-		for _, g := range r.Gaps(row.ID, cov, now) {
+		for _, g := range r.Gaps(row.ID, cov, now) { // the GAPS are this recording's
 			if len(done) >= budget {
 				break
 			}
-			done = append(done, r.Fetch(row.ID, url, g[0], g[1]))
+			done = append(done, r.Fetch(row.ID, row.Cam, url, g[0], g[1]))
 		}
 	}
 	return done
@@ -128,17 +129,16 @@ func (r *RecWorker) Backfill(budget int, now float64, force bool) []Filled {
 // SECOND time here because live recording may have reached the same minutes
 // while we were fetching; a segment that would land on top of one we already
 // have is dropped rather than written.
-func (r *RecWorker) Fetch(cam int, url string, t0, t1 float64) Filled {
-	unit := strconv.Itoa(cam)
+func (r *RecWorker) Fetch(unit, cam, url string, t0, t1 float64) Filled {
 	if !r.MayWrite(unit) {
-		return Filled{Cam: cam, From: t0, To: t1, Skipped: "no lease"}
+		return Filled{Unit: unit, Cam: cam, From: t0, To: t1, Skipped: "no lease"}
 	}
 	rec, ok := r.Act.(RangeRecorder)
 	if !ok {
-		return Filled{Cam: cam, From: t0, To: t1, Skipped: "this actuator cannot fetch ranges"}
+		return Filled{Unit: unit, Cam: cam, From: t0, To: t1, Skipped: "this actuator cannot fetch ranges"}
 	}
 	paths := rec.RecordRange(unit, url+"?from="+ftoa(t0)+"&to="+ftoa(t1), r.Epochs[unit], t0, t1, r.Archive.Spool)
-	have, kept := r.OurCoverage(cam), 0
+	have, kept := r.OurCoverage(unit), 0
 	for _, pth := range paths {
 		span := [2]float64{t0, t1}
 		if _, _, start, parsed := Parse(pth, r.Archive.Spool); parsed {
@@ -156,7 +156,7 @@ func (r *RecWorker) Fetch(cam int, url string, t0, t1 float64) Filled {
 		kept++
 	}
 	r.Backfilled += kept
-	return Filled{Cam: cam, From: t0, To: t1, Segments: kept}
+	return Filled{Unit: unit, Cam: cam, From: t0, To: t1, Segments: kept}
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }

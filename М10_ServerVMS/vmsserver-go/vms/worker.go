@@ -53,7 +53,7 @@ func LabelsFromEnvironment(env Env) []string { return p.LabelsOf(env, "") }
 
 // Posted is what an element posted on the bus about a camera.
 type Posted struct {
-	Cam    int
+	Cam    string
 	Kind   string
 	Fields map[string]any
 }
@@ -61,7 +61,7 @@ type Posted struct {
 // Actuator builds and tears down pipelines and drains their bus.
 type Actuator interface {
 	Actuate(verb string, cam Camera) bool
-	Pump() (dead []int, posted []Posted)
+	Pump() (dead []string, posted []Posted)
 	StopAll()
 }
 
@@ -69,12 +69,12 @@ type Actuator interface {
 // start fails. Tests push into Dead and Posted directly.
 type FakeActuator struct {
 	mu      sync.Mutex
-	Failing func(cid int) bool
+	Failing func(cid string) bool
 	Calls   []Action
-	Running map[int]bool
-	Epochs  map[int]int
-	Started map[int]Camera // what each start was given: the enriched row (the fan-out, the recorder's source)
-	Dead    []int
+	Running map[string]bool
+	Epochs  map[string]int
+	Started map[string]Camera // what each start was given: the enriched row (the fan-out, the recorder's source)
+	Dead    []string
 	Posted  []Posted
 	Fetched []Fetched // what RecordRange was asked for
 }
@@ -87,15 +87,15 @@ type Fetched struct {
 }
 
 func NewFakeActuator() *FakeActuator {
-	return &FakeActuator{Running: map[int]bool{}, Epochs: map[int]int{}, Started: map[int]Camera{}}
+	return &FakeActuator{Running: map[string]bool{}, Epochs: map[string]int{}, Started: map[string]Camera{}}
 }
 
-func FailingSet(ids ...int) func(int) bool {
-	set := map[int]bool{}
+func FailingSet(ids ...string) func(string) bool {
+	set := map[string]bool{}
 	for _, i := range ids {
 		set[i] = true
 	}
-	return func(cid int) bool { return set[cid] }
+	return func(cid string) bool { return set[cid] }
 }
 
 func (f *FakeActuator) Actuate(verb string, cam Camera) bool {
@@ -116,7 +116,7 @@ func (f *FakeActuator) Actuate(verb string, cam Camera) bool {
 	return true
 }
 
-func (f *FakeActuator) Pump() ([]int, []Posted) {
+func (f *FakeActuator) Pump() ([]string, []Posted) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	dead, posted := f.Dead, f.Posted
@@ -128,7 +128,7 @@ func (f *FakeActuator) Pump() ([]int, []Posted) {
 }
 
 // Post is what an element would post on the bus.
-func (f *FakeActuator) Post(cid int, kind string, fields map[string]any) {
+func (f *FakeActuator) Post(cid string, kind string, fields map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Posted = append(f.Posted, Posted{cid, kind, fields})
@@ -165,23 +165,23 @@ func (f *FakeActuator) RecordRange(unit, url string, epoch int, t0, t1 float64, 
 func (f *FakeActuator) StopAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Running = map[int]bool{}
+	f.Running = map[string]bool{}
 }
 
 // RunningIDs is the sorted set of running cameras — the test's view.
-func (f *FakeActuator) RunningIDs() []int {
+func (f *FakeActuator) RunningIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []int{}
+	out := []string{}
 	for cid := range f.Running {
 		out = append(out, cid)
 	}
-	sort.Ints(out)
+	sort.Strings(out)
 	return out
 }
 
 type Observed struct {
-	Cam  int
+	Cam  string
 	T    float64
 	Kind string
 }
@@ -383,7 +383,7 @@ func (w *VmsWorker) DeviceStatus() []map[string]any {
 		key := DeviceOf(r.Source)
 		ch := ChannelOf(r.Source)
 		if ch == "" {
-			ch = strconv.Itoa(r.ID)
+			ch = r.ID
 		}
 		if known[key] == nil {
 			known[key] = map[string]bool{}
@@ -415,7 +415,7 @@ func (w *VmsWorker) Playback(cam string, t0, t1 float64) ([]byte, error) {
 	var row Camera
 	found := false
 	for _, r := range w.Rows {
-		if strconv.Itoa(r.ID) == cam {
+		if r.ID == cam {
 			row, found = r, true
 			break
 		}
@@ -454,7 +454,7 @@ func (w *VmsWorker) enrichWorker(cam Camera) (Camera, bool) {
 func (w *VmsWorker) statusExtraWorker(cam Camera) map[string]any {
 	out := map[string]any{"live_url": LiveURL(w.Server, cam.ID), "live_shm": LiveShm(cam.ID, w.ShmDir)}
 	if dev := w.DeviceOfRow(cam); dev != nil {
-		if cov, ok := dev.Coverage(strconv.Itoa(cam.ID)); ok {
+		if cov, ok := dev.Coverage(cam.ID); ok {
 			out["playback_url"] = PlaybackURL(w.Server, cam.ID)
 			out["coverage"] = cov.ToMap() // the SUMMARY: from, to, fragments — never the index
 		}
@@ -464,7 +464,7 @@ func (w *VmsWorker) statusExtraWorker(cam Camera) map[string]any {
 
 // the gate
 func (w *VmsWorker) actuate(verb string, cam Camera) bool {
-	unit := strconv.Itoa(cam.ID)
+	unit := cam.ID
 	if verb == "start" || verb == "restart" {
 		if !w.RecordingAllowed {
 			return false
@@ -529,9 +529,8 @@ func (w *VmsWorker) LeasePass() []string {
 	assigned := w.Assignment()
 	for _, unit := range lost {
 		if !assigned.Has(unit) {
-			cid, _ := strconv.Atoi(unit)
-			w.Act.Actuate("stop", Camera{ID: cid})
-			delete(w.Reconciler.Actual, cid)
+			w.Act.Actuate("stop", Camera{ID: unit})
+			delete(w.Reconciler.Actual, unit)
 			w.Release(unit)
 		} else {
 			w.Fence("camera " + unit + ": a newer epoch was issued to another instance of " + w.Name)
@@ -555,8 +554,8 @@ func (w *VmsWorker) Fence(why string) {
 // on this server's resource, under the epoch this worker holds for it —
 // recording or not. A camera it holds no epoch for is not its to observe.
 // Returns "" when it was not.
-func (w *VmsWorker) Observe(cid int, kind string, fields map[string]any) string {
-	epoch, ok := w.Epochs[strconv.Itoa(cid)]
+func (w *VmsWorker) Observe(cid string, kind string, fields map[string]any) string {
+	epoch, ok := w.Epochs[cid]
 	if !ok || !w.RecordingAllowed {
 		return ""
 	}
@@ -605,7 +604,7 @@ func (w *VmsWorker) Status() []map[string]any {
 		}
 		st := map[string]any{"id": cam.ID, "ref": cam.Ref, "name": cam.Name, "enabled": cam.Enabled, "phase": phase,
 			"position": pos.State, "revision": cam.Revision, "observed_revision": w.Reconciler.Actual[cam.ID],
-			"epoch": w.Epochs[strconv.Itoa(cam.ID)]}
+			"epoch": w.Epochs[cam.ID]}
 		if w.StatusExtra != nil {
 			for k, v := range w.StatusExtra(cam) {
 				st[k] = v
