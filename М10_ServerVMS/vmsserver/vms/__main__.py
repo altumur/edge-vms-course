@@ -289,7 +289,7 @@ def console() -> None:
 #   reads rows (the camera rows for media retention, `<sub>/retention/*` for buckets, `platform/mirror`).
 # - `vms_resource(archive, hostname, $RESOURCE_URL, vars_, objects)` — the platform's `Resource` with
 #   `ArchivePolicy` registered as the `vms` hook and an `EventDatabase($EVENTDB)` over the tree.
-# - `serve(res, $RESOURCE_HOST, $RESOURCE_PORT, extra=vms_routes(archive))` — `/buckets`, `/events`,
+# - `serve(res, $RESOURCE_HOST, $RESOURCE_PORT, extra=vms_routes(archive), extra_put=vms_writes(archive))` — `/buckets`, `/events`,
 #   `/mirrored`, `PUT /mirror`, plus the VMS's `/manifest/<cam>` and `/segment/<path>`.
 # - one heartbeat (`platform/resources/<server>/heartbeat` — how the console finds this process), then
 #   `restore()` (nothing to pull on one box: no peers), then `database.start()` — rebuilt from the tree,
@@ -302,14 +302,14 @@ def resource() -> None:
     import socket
     import time
     from w2cplatform.resource import serve
-    from .resource import vms_resource, vms_routes
+    from .resource import vms_resource, vms_routes, vms_writes
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     vars_ = open_vars(CONFIG_URL)
     objects = FsObjectStore(os.path.join(root, "objects"))
     host, port = os.environ.get("RESOURCE_HOST", "127.0.0.1"), int(os.environ.get("RESOURCE_PORT", "8090"))
     res = vms_resource(archive, socket.gethostname(), os.environ.get("RESOURCE_URL", f"http://{host}:{port}"), vars_, objects,
                        database=os.environ.get("EVENTDB", ":memory:"))
-    srv = serve(res, host, port, extra=vms_routes(archive))
+    srv = serve(res, host, port, extra=vms_routes(archive, objects, res.server), extra_put=vms_writes(archive))
     res.heartbeat(); logging.info("restore: %s", res.restore())
     res.database.start()                                                  # a cache over THIS tree: rebuilt after restore, tailed every 3 s
     logging.info("resource %s on %s", res.server, srv.server_address)

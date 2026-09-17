@@ -6,8 +6,9 @@ a server's disks and nothing about what it means:
                                                     keeps beside them (the VMS: media and a manifest — its own)
     <root>/.mirror/<server>/<subsystem>/<unit>/...  copies of another server's closed buckets (the knob)
 
-    platform/resources/<server>/heartbeat   {server, ts, url, usage, units: {sub: [unit]}, mirrors: {server: n}}
+    platform/resources/<server>/heartbeat   {server, ts, url, usage, space: {total, free}, units: {sub: [unit]}, mirrors: {server: n}}
     platform/mirror                         the knob: {enabled, copies}
+    platform/space                          the knob: {enabled, high, low, min_days} — the disk's watermark
     <sub>/retention, <sub>/retention/<unit> {days}: each subsystem's policy for its buckets, written by ITS controller
 
     GET  <url>/buckets/<sub>/<unit>    closed buckets, from the files
@@ -17,7 +18,9 @@ a server's disks and nothing about what it means:
     PUT  <url>/mirror/<server>/<path>  another resource leaves a copy of one of ITS closed buckets here
 
 The policy pass runs on a timer: retain each subsystem's buckets by its
-policy; mirror closed buckets to the next live resource(s) after this one
+policy; relieve the disk if it is over the high mark — the resource measures
+and says how many bytes to free, each subsystem decides what to give up;
+mirror closed buckets to the next live resource(s) after this one
 in sorted order — nobody assigns peers, the rule is the assignment; and any
 subsystem-specific pass a subsystem registered (the VMS registers its
 media repair and retention). `restore` is the reverse of mirror, run by
@@ -78,13 +81,36 @@ from .events import Bucket, buckets_under, parse_bucket, subsystems_under
 
 MIRROR_DIR = ".mirror"
 MIRROR_KEY = "platform/mirror"
+SPACE_KEY = "platform/space"
 RESOURCES = "platform/resources"
+
+
+# The disk under `root`, not the tree on it: `f_bavail` and not `f_bfree`, because reserved blocks are not
+# ours to spend. A test cannot fill a disk, so the probe is a seam — `Resource(space_probe=...)`.
+def disk_space(root: str) -> tuple[int, int]:
+    """(total, free) bytes of the filesystem `root` is on."""
+    st = os.statvfs(root)
+    return st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
 
 
 # Parses the JSON line `Bucket.line()` produced (types coerced back). Used by `PeerClient`.
 def bucket_from_line(line: str) -> Bucket:
     d = json.loads(line)
     return Bucket(d["subsystem"], str(d["unit"]), int(d["epoch"]), float(d["start"]), float(d["end"]), d["path"], int(d["events"]))
+
+
+# Reads the watermark. `high` and `low` are USED fractions of the disk: over `high` the resource starts
+# freeing and stops at `low`, and the gap between them is the whole point — one mark alone gives a saw, a
+# file freed and a file written, for ever. Choose the gap in HOURS OF INGEST, not in percent: fifty cameras
+# at four megabit write about 2.2 TB a day, and ten percent of a 20 TB disk is less than one of them.
+# `min_days` is the floor no unit is cut below; when everything is on the floor the answer is a shortfall,
+# said out loud, and not a quiet cut into yesterday.
+def space_settings(vars_) -> dict:
+    items, _ = vars_.get(SPACE_KEY)
+    d = items or {}
+    return {"enabled": bool(items) and d.get("enabled") == "true",
+            "high": float(d.get("high", 0.85)), "low": float(d.get("low", 0.75)),
+            "min_days": float(d.get("min_days", 3))}
 
 
 # Reads the knob: `enabled` is true only if the row exists and says `"true"`; `copies` defaults to 1.
@@ -175,6 +201,20 @@ class PeerClient:
             if r.status not in (200, 201, 204):
                 raise IOError(f"PUT mirror {path}: {r.status}")
 
+    # `PUT <url>/<path>` with arbitrary bytes and headers — the door a subsystem's own PUT route goes
+    # through. The platform does not know what is being sent; it knows how to send it.
+    def put_raw(self, url: str, path: str, data: bytes, headers: dict | None = None) -> int:
+        req = urllib.request.Request(f"{url}/{path.lstrip('/')}", data=data, method="PUT", headers=headers or {})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            if r.status not in (200, 201, 204):
+                raise IOError(f"PUT {path}: {r.status}")
+            return r.status
+
+    # `GET <url>/<path>` with arbitrary bytes back — the reading half of the same door.
+    def get_raw(self, url: str, path: str) -> bytes:
+        with urllib.request.urlopen(f"{url}/{path.lstrip('/')}", timeout=self.timeout) as r:
+            return r.read()
+
     # `GET <url>/events/.mirror/<server>/<path>` — pull a copy back (restore).
     def get(self, url: str, server: str, path: str) -> bytes:
         with urllib.request.urlopen(f"{url}/events/{MIRROR_DIR}/{server}/{path}", timeout=self.timeout) as r:
@@ -186,9 +226,10 @@ class Resource:
     """One server's resource: its tree, its heartbeat, its policy pass."""
 
     def __init__(self, root: str, server: str, url: str, vars_, objects, bucket_seconds: int = 600,
-                 wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0):
+                 wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0, space_probe=None):
         self.root, self.server, self.url, self.vars, self.objects = root, server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
+        self.space_probe = space_probe or disk_space         # a test cannot fill a disk
         self.hooks: dict[str, object] = {}         # subsystem -> object with .pass_(now) -> dict: its own policy on ITS part of the tree
         self.database = None                       # an eventdatabase.EventDatabase over this tree, if the job runs one: served as GET /events
         os.makedirs(root, exist_ok=True)
@@ -219,11 +260,19 @@ class Resource:
                 total += os.path.getsize(os.path.join(d, f))
         return total
 
-    # Writes `{server, ts, url, usage, units, mirrors: {server: n copies}}` to
+    # (total, free) of the disk, and how full it is. `free` is what a peer reads before sending anything
+    # here: an evacuation onto a disk that is itself tight only moves the problem.
+    def space(self) -> dict:
+        total, free = self.space_probe(self.root)
+        return {"total": total, "free": free, "used": total - free,
+                "full": (total - free) / total if total else 0.0}
+
+    # Writes `{server, ts, url, usage, space, units, mirrors: {server: n copies}}` to
     # `platform/resources/<server>/heartbeat` and returns it. `units` is how the index discovers subsystems;
     # `mirrors` is how `restore` and the index find who holds copies.
     def heartbeat(self) -> dict:
-        hb = {"server": self.server, "ts": self.wall(), "url": self.url, "usage": self.usage(), "units": self.units(),
+        hb = {"server": self.server, "ts": self.wall(), "url": self.url, "usage": self.usage(),
+              "space": self.space(), "units": self.units(),
               "mirrors": {s: len(mirrored_buckets(self.root, s, self.bucket_seconds)) for s in mirrored_servers(self.root)}}
         self.objects.put(f"{RESOURCES}/{self.server}/heartbeat", json.dumps(hb).encode())
         return hb
@@ -298,13 +347,45 @@ class Resource:
         hooks = {sub: h.pass_(self.wall()) for sub, h in self.hooks.items()} if pulled else {}
         return {"pulled": pulled, **{f"{s}.{k}": v for s, r in hooks.items() for k, v in r.items()}}
 
+    # -- the watermark -------------------------------------------------------------------
+    # Retention by days is a PROMISE to the operator; this is what happens when the promise cannot be kept.
+    # The resource measures — the disk, not the tree — and says how many bytes to free; each subsystem
+    # decides what to give up, because only it knows what its files mean. Nothing here knows what a camera
+    # is, and nothing here deletes a subsystem's file.
+    #
+    # Over `high`, free down to `low`. Slowness resolves itself: a hook that can only start something
+    # (evacuating footage to the server that now writes it, say) returns what it managed and is asked again
+    # on the next pass — which is why there is no third, "critical" mark and no separate schedule.
+    def relieve(self) -> dict:
+        """Over the high mark, ask each subsystem to free bytes down to the low one."""
+        knob = space_settings(self.vars)
+        if not knob["enabled"]:
+            return {"space": "off"}
+        sp = self.space()
+        if not sp["total"] or sp["used"] <= sp["total"] * knob["high"]:
+            return {"space": "ok", "full": round(sp["full"], 3)}
+        need, freed, out = int(sp["used"] - sp["total"] * knob["low"]), 0, {}
+        for sub, h in self.hooks.items():
+            free = getattr(h, "free", None)
+            if free is None:
+                continue                                     # a subsystem that keeps only buckets: `retain` is its whole policy
+            rep = free(need - freed, self.wall(), knob["min_days"])
+            freed += int(rep.get("freed", 0))
+            out.update({f"{sub}.{k}": v for k, v in rep.items()})
+            if freed >= need:
+                break
+        return {"space": "over", "full": round(sp["full"], 3), "need": need, "freed": freed,
+                "short": max(0, need - freed), **out}
+
     # The timer's body, in order: each subsystem's hook (it may index or drop lines), then `retain`, then
-    # `mirror`; results flattened into one dict (`<sub>.<key>`, `removed`, `enabled`, `mirrored`, `peers`).
+    # `relieve` — the promise first, the watermark only for what the promise left behind — then `mirror`;
+    # results flattened into one dict (`<sub>.<key>`, `removed`, `space`, `enabled`, `mirrored`, `peers`).
     def pass_(self) -> dict:
         out = {}
         for sub, h in self.hooks.items():                    # a subsystem's own pass first: it may index or drop lines
             out.update({f"{sub}.{k}": v for k, v in h.pass_(self.wall()).items()})
         out["removed"] = self.retain()
+        out.update(self.relieve())
         out.update(self.mirror())
         return out
 
@@ -327,9 +408,11 @@ class Resource:
 #         - `PUT /mirror/<server>/<path>` — another resource leaves a copy of one of its closed buckets. 400
 #       if `..`, empty server, or not `.events.jsonl`; writes to `.mirror/<server>/<path>` via tmp + rename
 #       (a copy appears whole or not at all); 204. Any other PUT is 404.
-def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=None) -> ThreadingHTTPServer:
+def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=None, extra_put=None) -> ThreadingHTTPServer:
     """The resource over HTTP. `extra(path) -> (status, bytes) | None` lets a
-    subsystem add its own reads (the VMS: manifests and footage)."""
+    subsystem add its own reads (the VMS: manifests and footage), and
+    `extra_put(path, headers, rfile)` its own writes (the VMS: a segment
+    arriving from the resource that is giving it up)."""
     root = resource.root
 
     class H(BaseHTTPRequestHandler):
@@ -367,6 +450,10 @@ def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=Non
 
         def do_PUT(self):
             if not self.path.startswith("/mirror/"):
+                if extra_put is not None:
+                    r = extra_put(self.path, self.headers, self.rfile)
+                    if r is not None:
+                        return self._raw(*r)
                 return self._raw(404, b"")
             rel = self.path[len("/mirror/"):]
             server, _, path = rel.partition("/")

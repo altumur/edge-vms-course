@@ -35,6 +35,7 @@ import time
 from w2cplatform.console import holder_of
 from w2cplatform.contract import Subsystem
 from w2cplatform.objects import ObjectStore
+from w2cplatform.resource import disk_space, space_settings
 from w2cplatform.variables import Variables
 
 from .archive import ArchiveResource, overlaps, parse, subtract
@@ -69,6 +70,7 @@ class RecWorker(VmsWorker):
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
         # looking like 144 gaps.
         self.window, self.keep_days, self.settle, self.stitch = window, keep_days, settle, stitch
+        self.space_probe = disk_space                # the disk under the archive; a test cannot fill one
         self.backfill_budget = 0                    # ranges per pass; 0 = only what an operator asks for
         self.backfilled = 0
         self.promoted = 0
@@ -173,6 +175,17 @@ class RecWorker(VmsWorker):
                 min(float(coverage["to"]), now - self.settle))
         return [] if want[1] <= want[0] else subtract(want, self.our_coverage(unit))
 
+    # The disk is over its high mark: the resource is freeing space this minute, and backfill exists to
+    # bring more in. Without this line they chase each other for ever on a full disk — the same trap
+    # `keep_days` closes in time, closed here in space. Not a `force` override either: an operator asking
+    # for a range cannot be given one the resource is about to delete.
+    def under_pressure(self) -> bool:
+        knob = space_settings(self.vars)
+        if not knob["enabled"]:
+            return False
+        total, free = self.space_probe(self.archive.root)
+        return bool(total) and (total - free) > total * knob["high"]
+
     # Local time, and the one place in the course where that is right: "at night" is night where the camera
     # is, not where the server is. `(22, 6)` wraps midnight — without that branch it would never arrive.
     def in_window(self, now: float) -> bool:
@@ -195,6 +208,8 @@ class RecWorker(VmsWorker):
     def backfill(self, budget: int = 1, now: float | None = None, force: bool = False) -> list[dict]:
         now = self.wall() if now is None else now
         if not (force or self.in_window(now)):
+            return []
+        if self.under_pressure():
             return []
         done: list[dict] = []
         for row in self.rows:

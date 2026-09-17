@@ -75,7 +75,8 @@ def test_the_resource_policy_needs_neither_worker_nor_controller():
     _segment(srv, 1, 1, t - 3 * 86400); _segment(srv, 1, 1, t - 3600)
     os.remove(os.path.join(srv.archive, Manifest(srv.archive, 1).read()[1].path))   # a file gone behind the manifest's back
     rep = cluster_resource(srv.resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall).pass_()
-    assert rep == {"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0, "enabled": False, "mirrored": 0, "peers": []}
+    assert rep == {"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0,
+                   "space": "off", "enabled": False, "mirrored": 0, "peers": []}   # the watermark is a knob, and it is off
     assert Manifest(srv.archive, 1).read() == []
 
 
@@ -106,3 +107,155 @@ def test_the_timeline_route_asks_for_a_unit_and_a_unit_is_named():
     assert status == 200 and [s["server"] for s in body["segments"]] == ["srv-b"]
     status, body = routes(None, "GET", "/timeline/7-main", {"from": t - 2000, "to": t})
     assert status == 200 and [s["server"] for s in body["segments"]] == ["srv-a"]
+
+
+# -- the watermark, and why evacuation has no button ------------------------------------------------
+
+import io  # noqa: E402
+from cluster.resource import PeerClient  # noqa: E402,F401
+from vms.resource import vms_routes as vms_reads, vms_writes  # noqa: E402
+from vms.space import cut, depth_days, foreign  # noqa: E402
+from w2cplatform.resource import SPACE_KEY  # noqa: E402
+
+
+class DirPeers:
+    """A PeerClient over the servers' OWN routes: no sockets, the same handlers."""
+    def __init__(self, c: Cluster): self.c = c
+
+    def _archive(self, url):
+        return self.c.servers[url.rsplit("/", 1)[1]].resource
+
+    def put_raw(self, url, path, data, headers=None):
+        h = dict(headers or {}); h["Content-Length"] = str(len(data))
+        r = vms_writes(self._archive(url))("/" + path.lstrip("/"), h, io.BytesIO(data))
+        if r is None or r[0] not in (200, 201, 204):
+            raise IOError(f"PUT {path}: {r}")
+        return r[0]
+
+    def get_raw(self, url, path):
+        r = vms_reads(self._archive(url))("/" + path.lstrip("/"), {})
+        if r is None or r[0] != 200:
+            raise IOError(f"GET {path}: {r}")
+        return r[1]
+
+
+def _writer(c: Cluster, server: str, unit: str, now: float):
+    """A recorder on `server` saying in its heartbeat that it holds `unit` — the only fact
+    `foreign` needs, and the same one the console reads to find a camera's holder."""
+    c.objects.put(f"rec/r-{server}/heartbeat", json.dumps(
+        {"worker": f"r-{server}", "ts": now, "status": [{"id": unit, "phase": "running"}], "server": server}).encode())
+
+
+def _hb(c: Cluster, server: str, free: int, total: int = 1_000_000):
+    """That server's resource heartbeat, with a disk of our choosing — a test cannot fill one."""
+    res = cluster_resource(c.servers[server].resource, server, f"http://{server}", c.vars, c.objects,
+                           wall=c.wall, peers=DirPeers(c))
+    res.space_probe = lambda root, t=total, f=free: (t, f)
+    res.heartbeat()
+    return res
+
+
+def test_a_server_that_needs_room_sends_back_what_it_wrote_for_a_neighbour():
+    """The whole point of having no evacuation button.
+
+    srv-b wrote camera 1 while srv-a was away (Lesson 4 has the failover itself; here the
+    recording is already back on srv-a). Nothing happens while srv-b has room — the console
+    merges timelines across resources, so the footage is neither lost nor in the way. It
+    becomes work only when srv-b's own disk goes over the high mark, and then srv-b, the
+    server that needs the space, is the one that acts."""
+    c = Cluster()
+    c.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75", "min_days": "3"}, cas=0)
+    t = c.wall()
+    for i in range(4):                                  # what srv-b wrote for srv-a: four segments of 50 kB
+        _segment(c.servers["srv-b"], "1", 5, t - 4000 + i * 600, size=50_000)
+    first = sorted(Manifest(c.servers["srv-b"].archive, "1").read(), key=lambda s: s.start)[0].path
+    _writer(c, "srv-a", "1", t)                         # the recorder writing camera 1 is on srv-a now
+
+    assert foreign(c.servers["srv-b"].resource, c.objects, "srv-b", t) == {"1": "srv-a"}
+    assert foreign(c.servers["srv-b"].resource, c.objects, "srv-a", t) == {}   # from srv-a it is nobody's business
+
+    _hb(c, "srv-a", free=500_000)
+    b = _hb(c, "srv-b", free=500_000)                   # both have room: nothing to do, and that is the answer
+    assert b.relieve()["space"] == "ok"
+    assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 4
+    assert not os.path.isdir(os.path.join(c.servers["srv-a"].archive, "rec", "1"))
+
+    b.space_probe = lambda root: (1_000_000, 100_000)   # 90 % full: over the high mark
+    rep = b.relieve()
+    assert rep["space"] == "over" and rep["need"] == 150_000
+    assert rep["rec.evacuated"] == 3 and rep["freed"] == 150_000 and rep["short"] == 0
+    assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 1          # gone from here, file and line
+    assert not os.path.exists(os.path.join(c.servers["srv-b"].archive, first))
+    there = Manifest(c.servers["srv-a"].archive, "1").read()
+    assert [s.epoch for s in there] == [5, 5, 5]        # arrived with the epoch srv-b wrote them under
+    assert all(os.path.isfile(os.path.join(c.servers["srv-a"].archive, s.path)) for s in there)
+
+
+def test_a_destination_with_no_room_is_not_where_the_problem_goes():
+    """Two tight servers must not trade gigabytes. The destination's free space comes from
+    its own heartbeat and is read BEFORE anything is sent; a destination that cannot take
+    the batch is skipped, and the floor below answers instead."""
+    c = Cluster()
+    c.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75", "min_days": "3"}, cas=0)
+    t = c.wall()
+    for i in range(4):
+        _segment(c.servers["srv-b"], "1", 5, t - 4000 + i * 600, size=50_000)
+    _writer(c, "srv-a", "1", t)
+    _hb(c, "srv-a", free=1_000)                                   # srv-a is tight too
+    b = _hb(c, "srv-b", free=500_000)
+    b.space_probe = lambda root: (1_000_000, 100_000)
+
+    rep = b.relieve()
+    assert rep["rec.skipped"] == {"1": "srv-a has no room"} and rep["rec.evacuated"] == 0
+    assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 4          # nothing sent, nothing deleted
+    # and nothing cut either: an hour of footage is under the three-day floor, so the honest
+    # answer is a shortfall said out loud rather than a quiet cut into yesterday
+    assert rep["rec.cut"] == 0 and rep["rec.shortfall"] == 150_000 and rep["short"] == 150_000
+
+
+def test_over_the_floor_the_deepest_unit_gives_up_its_oldest():
+    """Nothing foreign, nothing to evacuate: the cut. Not the oldest segments on the disk —
+    that empties the camera with the longest retention, which is the one that was paid for."""
+    c = Cluster()
+    srv = c.servers["srv-b"]; t = c.wall()
+    for i in range(10):                                           # camera 1: ten days deep
+        _segment(srv, "1", 1, t - (10 - i) * 86400, size=50_000)
+    for i in range(4):                                            # camera 2: four days
+        _segment(srv, "2", 1, t - (4 - i) * 86400, size=50_000)
+    assert round(depth_days(srv.resource, "1", t)) == 10 and round(depth_days(srv.resource, "2", t)) == 4
+
+    rep = cut(srv.resource, 150_000, t, min_days=3)
+    assert rep["removed"] == 3 and rep["freed"] == 150_000
+    assert len(Manifest(srv.archive, "1").read()) == 7 and len(Manifest(srv.archive, "2").read()) == 4
+    assert round(depth_days(srv.resource, "1", t)) == 7           # the deepest gave up its oldest, three times
+
+    rep = cut(srv.resource, 10_000_000, t, min_days=3)            # ask for more than there is above the floor
+    assert rep["freed"] < 10_000_000
+    assert depth_days(srv.resource, "1", t) <= 4 and depth_days(srv.resource, "2", t) <= 4   # both at the floor, neither below
+
+
+def test_nothing_is_deleted_on_a_204_alone():
+    """The deletion follows an observed fact, not an answer. If the destination cannot be
+    asked what it holds, the segments stay here — a copy that may not have arrived is a
+    copy we still have. The next pass asks again."""
+    c = Cluster()
+    c.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75", "min_days": "3"}, cas=0)
+    t = c.wall()
+    for i in range(4):
+        _segment(c.servers["srv-b"], "1", 5, t - 4000 + i * 600, size=50_000)
+    _writer(c, "srv-a", "1", t)
+    _hb(c, "srv-a", free=500_000)
+
+    class Mute(DirPeers):
+        """Takes the bytes, says 204, and then goes quiet when asked what it has."""
+        def get_raw(self, url, path):
+            raise IOError("srv-a stopped answering")
+
+    b = cluster_resource(c.servers["srv-b"].resource, "srv-b", "http://srv-b", c.vars, c.objects,
+                         wall=c.wall, peers=Mute(c))
+    b.space_probe = lambda root: (1_000_000, 100_000)
+    rep = b.relieve()
+    assert rep["rec.evacuated"] == 0 and rep["freed"] == 0
+    assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 4     # still here, file and line
+    assert all(os.path.isfile(os.path.join(c.servers["srv-b"].archive, s.path))
+               for s in Manifest(c.servers["srv-b"].archive, "1").read())

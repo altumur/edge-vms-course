@@ -333,12 +333,35 @@ def overlaps(have: list[tuple[float, float]], span: tuple[float, float]) -> bool
 
 class ArchivePolicy:
     """What the recorder registers with the platform's resource job: repair the
-    manifests, retain media per camera from the recording rows
-    (`rec/recordings/<cam>`, `retention_days`; 30 for a camera with no row).
-    Runs on the resource's timer beside the platform's own pass."""
+    manifests, retain media per unit from the recording rows
+    (`rec/recordings/<unit>`, `retention_days`; 30 for one with no row), and,
+    when the disk is over its watermark, free bytes — `vms/space.py` decides
+    which, and the platform only says how many."""
 
-    def __init__(self, resource: ArchiveResource, vars_):
+    def __init__(self, resource: ArchiveResource, vars_, objects=None, peers=None, server: str = ""):
         self.res, self.vars = resource, vars_
+        # Only `free` needs these: the peers' heartbeats say who writes what and who has room, and the
+        # client carries the bytes. Absent, the policy still repairs and retains — an archive on a box
+        # with no neighbours has nowhere to evacuate to and does not pretend otherwise.
+        self.objects, self.peers, self.server = objects, peers, server
+
+    # The resource's watermark, answered in the recorder's own terms. Evacuate what is not ours, then cut
+    # above the floor, then report the shortfall — the order is in `vms/space.py`, and so is why.
+    def free(self, need: int, now: float, min_days: float = 3.0) -> dict:
+        from .space import cut, evacuate
+        freed, out = 0, {}
+        if self.objects is not None and self.peers is not None and self.server:
+            rep = evacuate(self.res, self.objects, self.peers, self.server, need, now)
+            freed += rep["freed"]
+            out.update({"evacuated": rep["moved"], **({"skipped": rep["skipped"]} if "skipped" in rep else {})})
+        if freed < need:
+            rep = cut(self.res, need - freed, now, min_days)
+            freed += rep["freed"]
+            out["cut"] = rep["removed"]
+        short = max(0, need - freed)
+        if short:                                   # everything on the floor: said out loud, not cut into
+            out["shortfall"] = short
+        return {"freed": freed, **out}
 
     def pass_(self, now: float) -> dict:
         rep = self.res.repair()

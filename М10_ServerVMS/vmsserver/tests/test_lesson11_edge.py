@@ -435,3 +435,87 @@ def test_a_named_unit_reaches_the_places_that_still_assumed_a_number():
     _NamedRec("r-2", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-2").reconcile_once()
     assert r1.lease_pass() == [held[0]] and r1.recording_allowed        # released, not fenced — and no ValueError
     assert held[0] not in r1.reconciler.actual
+
+
+# -- the watermark: what the archive does when the disk is full ---------------------------------------
+
+def _space_box(days: float = 10.0, size: int = 50_000, n: int = 10):
+    """An archive with one unit `days` deep, and the knob on."""
+    from w2cplatform.resource import SPACE_KEY
+    box = Box()
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75", "min_days": "3"}, cas=0)
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    t = box.wall()
+    for i in range(n):
+        start = t - (days - i * days / n) * 86400
+        p = segment_path(box.archive, "1", 1, datetime.fromtimestamp(start, timezone.utc))
+        os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"x" * size)
+        Manifest(box.archive, "1").append(Segment("1", 1, start, start + 600, os.path.relpath(p, box.archive), size))
+    return box, arch
+
+
+def test_the_watermark_is_a_floor_and_a_shortfall_not_a_quiet_cut():
+    """Retention by days is a promise; the watermark is what happens when it cannot be kept.
+
+    Freeing stops at the floor, and what could not be freed is a number in the report —
+    not a cut into yesterday that nobody asked for and nobody is told about."""
+    from vms.archive import ArchivePolicy
+    from vms.space import depth_days
+    box, arch = _space_box(days=10.0)
+    policy = ArchivePolicy(arch, box.vars)                      # no peers on this box: nowhere to evacuate to
+    assert round(depth_days(arch, "1", box.wall())) == 10
+
+    rep = policy.free(150_000, box.wall(), min_days=3)          # three segments' worth
+    assert rep == {"freed": 150_000, "cut": 3}
+    assert round(depth_days(arch, "1", box.wall())) == 7
+    assert len(Manifest(box.archive, "1").read()) == 7 and len(arch.coverage("1")) >= 1
+
+    rep = policy.free(10_000_000, box.wall(), min_days=3)       # more than there is above the floor
+    assert rep["shortfall"] > 0 and rep["freed"] < 10_000_000
+    left = Manifest(box.archive, "1").read()
+    assert left and 3 <= depth_days(arch, "1", box.wall()) <= 4   # AT the floor — not emptied, not below it
+
+
+def test_a_resource_over_the_mark_says_so_and_one_under_it_does_nothing():
+    """The two marks and the gap between them: a saw is what one mark alone gives."""
+    from w2cplatform.resource import Resource
+    box, arch = _space_box(days=10.0)
+    res = Resource(box.archive, "srv-1", "http://srv-1", box.vars, box.objects, wall=box.wall,
+                   space_probe=lambda root: (1_000_000, 500_000))
+    from vms.archive import ArchivePolicy
+    res.register("rec", ArchivePolicy(arch, box.vars))
+    assert res.relieve() == {"space": "ok", "full": 0.5}
+    assert res.heartbeat()["space"]["free"] == 500_000          # what a peer reads before sending anything here
+
+    res.space_probe = lambda root: (1_000_000, 100_000)         # 90 % full
+    rep = res.relieve()
+    assert rep["space"] == "over" and rep["need"] == 150_000    # down to the LOW mark, not to the high one
+    assert rep["freed"] == 150_000 and rep["short"] == 0 and rep["rec.cut"] == 3
+
+
+def test_backfill_stops_while_the_disk_is_over_the_mark():
+    """Otherwise the two chase each other for ever: the resource frees space, the recorder
+    fetches more of the same hours back. `keep_days` closes that trap in time; this closes
+    it in space, and not even an operator's `force` opens it."""
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+
+    from w2cplatform.resource import SPACE_KEY
+    now = 1_000_000.0
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+    r.space_probe = lambda root: (1_000_000, 100_000)                    # 90 % full
+    assert r.under_pressure()
+    assert r.backfill(budget=1, now=now, force=True) == []               # force does not open it either
+
+    r.space_probe = lambda root: (1_000_000, 500_000)                    # room again, and the same call fetches
+    assert not r.under_pressure()
+    assert r.backfill(budget=1, now=now, force=True)

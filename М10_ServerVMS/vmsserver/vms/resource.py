@@ -5,8 +5,11 @@ the server exists; on a box it is `python3 -m vms resource`
 no controller: it has a policy pass on a timer, a heartbeat, its HTTP, and
 the event database over its own tree. What the VMS adds is its part:
 
-    ArchivePolicy   registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<unit>
-    vms_routes      GET /manifest/<unit>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
+    ArchivePolicy   registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<unit>,
+                    and free bytes when the disk is over its watermark (vms/space.py)
+    vms_routes      GET /manifest/<unit>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured;
+                    GET /space  what is here, how deep it goes, and what of it another server writes now
+    vms_writes      PUT /segment/<path>   a segment arriving from the resource that is giving it up
 
     platform/resources/<server>/heartbeat   {server, ts, url, usage, units, mirrors} — how the console finds it
     GET <url>/events?from&to&cam&kind&subsystem&unit   the platform's: this resource's EventDatabase
@@ -52,19 +55,32 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 # ================================================================================================
 from __future__ import annotations
 
+import json
 import os
 
 from w2cplatform.eventdatabase import EventDatabase
 from w2cplatform.resource import Resource
 
-from .archive import ArchivePolicy, ArchiveResource, Manifest
+from .archive import SUB, ArchivePolicy, ArchiveResource, Manifest, Segment
 
 
-def vms_routes(archive: ArchiveResource):
+def vms_routes(archive: ArchiveResource, objects=None, server: str = ""):
     """The VMS's reads on the resource, plugged into the platform's server."""
     root = archive.root
 
     def extra(path: str, headers):
+        if path == "/space" or path.startswith("/space?"):
+            # What the archive holds and what of it is not ours — the state the watermark acts on, readable
+            # whether or not it is acting. The operator asks "where is camera 7's footage" and "how many
+            # days do I actually have"; `retention_days` only ever promised, and a unit written here for a
+            # neighbour is invisible until somebody says so.
+            from .space import depth_days, foreign, unit_bytes
+            now = archive.wall()
+            away = foreign(archive, objects, server, now) if objects is not None and server else {}
+            units = {u: {"bytes": unit_bytes(archive, u), "days": round(depth_days(archive, u, now), 2),
+                         **({"written_on": away[u]} if u in away else {})}
+                     for u in archive.units()}
+            return 200, json.dumps({"server": server, "units": units, "foreign": away}).encode(), (("Content-Type", "application/json"),)
         if path.startswith("/manifest/"):
             unit = path.rsplit("/", 1)[1]                 # a UNIT, verbatim: "7" today, "7-backup" the day the spec says so
             return 200, "".join(l for l in Manifest(root, unit)._lines()).encode()
@@ -84,12 +100,54 @@ def vms_routes(archive: ArchiveResource):
     return extra
 
 
+def vms_writes(archive: ArchiveResource):
+    """The VMS's one write on the resource: a segment another resource is giving up.
+
+    It arrives as bytes plus its manifest line in `X-Segment`, and lands at the SAME
+    relative path — `rec/<unit>/e<epoch>/<stamp>.mp4` says nothing about a server, which
+    is why footage can change hands at all. The epoch travels with it: it says who
+    WROTE the segment, never where it lies, and a timeline marks it fenced by comparing
+    with the current one exactly as before.
+
+    Idempotent on purpose: a path already in our manifest is accepted again and the line
+    is not doubled, so the sender may retry a batch it is unsure of. Written tmp + rename,
+    the file first and the line after — the order `promote` uses, for the same reason."""
+    root = archive.root
+
+    def extra_put(path: str, headers, rfile):
+        if not path.startswith("/segment/"):
+            return None
+        rel = path[len("/segment/"):]
+        if ".." in rel or not rel.startswith(SUB + "/") or not rel.endswith(".mp4"):
+            return 400, b""
+        line = headers.get("X-Segment")
+        if not line:
+            return 400, b'{"error": "a segment arrives with its manifest line"}'
+        try:
+            seg = Segment.from_line(line)
+        except (ValueError, KeyError):
+            return 400, b'{"error": "a segment arrives with its manifest line"}'
+        if seg.path != rel:
+            return 400, b'{"error": "the line does not describe this path"}'
+        dest = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        n = int(headers.get("Content-Length", 0))
+        with open(dest + ".tmp", "wb") as f:
+            f.write(rfile.read(n))
+        os.replace(dest + ".tmp", dest)                     # whole or not at all
+        man = Manifest(root, seg.unit)
+        if all(s.path != rel for s in man.read()):          # a retried segment does not get a second line
+            man.append(seg)
+        return 204, b""
+    return extra_put
+
+
 def vms_resource(archive: ArchiveResource, server: str, url: str, vars_, objects, wall=None, peers=None,
                  database: str = ":memory:") -> Resource:
     """The platform's resource for this server with the VMS registered on it, and the
     event database over its tree (created; the process starts it after `restore()`)."""
     wall = wall or archive.wall
     r = Resource(archive.root, server, url, vars_, objects, archive.bucket_seconds, wall, peers)
-    r.register("rec", ArchivePolicy(archive, vars_))                    # footage is the recorder's: rec/<cam>/…, rec/recordings/<cam>
+    r.register("rec", ArchivePolicy(archive, vars_, objects, r.peers, server))   # footage is the recorder's: rec/<unit>/…, rec/recordings/<unit>
     r.database = EventDatabase(archive.root, server, database, wall, archive.bucket_seconds)
     return r
