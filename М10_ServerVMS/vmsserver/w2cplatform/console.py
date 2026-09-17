@@ -48,7 +48,7 @@ rule in this file.
 # query)` gets every request the built-in routes do not claim (the VMS: `/timeline` and `/segment`). The
 # console holds the subsystem's `SpecController` with the *console's* token (the operator's rows, never
 # placement), so a write it should not make is a 403 from the store, not a rule in this file.
-# `vms/console.py` builds it via `make_console`; the deploy unit `vmsconsole.container` runs it as its own
+# `vms/console.py` builds it via `make_console`; the deploy unit `console.container` runs it as its own
 # process.
 #
 # ## Module-level names

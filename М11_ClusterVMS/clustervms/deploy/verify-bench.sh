@@ -32,7 +32,7 @@ done
 [ "$archives" -ge 1 ] && ok "$archives server(s) declare meta.archive (the resource has somewhere to be)" || bad "no server declares meta.archive"
 
 # 3
-for j in vmsworker vmscontroller recworker vmsreccontroller console resource autoscaler; do
+for j in vmsworker vmscontroller recworker reccontroller console resource autoscaler; do
   nomad job validate "$HERE/$j.nomad.hcl" >/dev/null 2>&1 && ok "$j.nomad.hcl validates" || bad "$j.nomad.hcl: $(nomad job validate "$HERE/$j.nomad.hcl" 2>&1 | tail -1)"
 done
 
@@ -40,7 +40,7 @@ done
 nomad acl policy apply -description vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description recworker recworker "$HERE/recworker-policy.hcl" >/dev/null 2>&1
-nomad acl policy apply -description vmsreccontroller vmsreccontroller "$HERE/vmsreccontroller-policy.hcl" >/dev/null 2>&1
+nomad acl policy apply -description reccontroller reccontroller "$HERE/reccontroller-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description resource resource "$HERE/resource-policy.hcl" >/dev/null 2>&1
 nomad acl policy apply -description console console "$HERE/console-policy.hcl" >/dev/null 2>&1
 tok="$(nomad acl token create -type client -policy vmsworker -ttl 10m -json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["SecretID"])')"
@@ -68,7 +68,7 @@ fi
 nomad acl policy apply -namespace default -job vmsworker vmsworker "$HERE/vmsworker-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsworker" || bad "policy binding to job failed"
 nomad acl policy apply -namespace default -job vmscontroller vmscontroller "$HERE/vmscontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmscontroller" || bad "policy binding to vmscontroller failed"
 nomad acl policy apply -namespace default -job recworker recworker "$HERE/recworker-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job recworker" || bad "policy binding to recworker failed"
-nomad acl policy apply -namespace default -job vmsreccontroller vmsreccontroller "$HERE/vmsreccontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job vmsreccontroller" || bad "policy binding to vmsreccontroller failed"
+nomad acl policy apply -namespace default -job reccontroller reccontroller "$HERE/reccontroller-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job reccontroller" || bad "policy binding to reccontroller failed"
 nomad acl policy apply -namespace default -job console console "$HERE/console-policy.hcl" >/dev/null 2>&1 && ok "policy bound to job console" || bad "policy binding to console failed"
 alloc="$(nomad job allocs -json vmsworker 2>/dev/null | python3 -c 'import sys,json;a=[x for x in json.load(sys.stdin) if x["ClientStatus"]=="running"];print(a[0]["ID"] if a else "")')"
 if [ -n "$alloc" ]; then

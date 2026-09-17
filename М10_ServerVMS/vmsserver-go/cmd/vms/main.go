@@ -78,7 +78,7 @@ func main() {
 		log.Printf("recorder %s (instance %s) claimed its slot", r.Name, r.Instance)
 		r.Run(2*time.Second, stop)
 	case "reccontroller": // count = 1, the only writer of rec placement: recordings onto recorders whose resource answers, beside the camera's worker when there is room
-		vars := openVars(root, "vmsreccontroller", vms.RecSpec.ACLController()...)
+		vars := openVars(root, "reccontroller", vms.RecSpec.ACLController()...)
 		ctl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")
 		for {
 			if _, err := ctl.EnsurePlaced(nil); err != nil {
@@ -107,7 +107,7 @@ func main() {
 			}
 		}
 	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
-		vars := openVars(root, "vmsconsole", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
+		vars := openVars(root, "console", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
 		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil,

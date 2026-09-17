@@ -148,7 +148,7 @@ There is no controller for the archive, and there should not be: the only decisi
 three segments on 1, 10 and 19 October; retain(days=8, now=20 October) -> 2 removed; usage 1000 bytes
 ```
 
-The resource process (`python3 -m vms resource`, Lesson 10; `deploy/vmsresource.container`) runs `repair()` and then `retain()` per camera every ten minutes in its policy pass, reading each recording's `retention_days` from `rec/recordings/<cam>` in the config store — the policy is the operator's, the enforcement is the resource's own, and neither the worker nor the recorder is involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
+The resource process (`python3 -m vms resource`, Lesson 10; `deploy/resource.container`) runs `repair()` and then `retain()` per camera every ten minutes in its policy pass, reading each recording's `retention_days` from `rec/recordings/<cam>` in the config store — the policy is the operator's, the enforcement is the resource's own, and neither the worker nor the recorder is involved. The disk-full policies from М9 Lesson 8 (`stop_recording`, `degrade_retention`, `by_priority`) become the same policy with a high-water input — and in М11, a bucket quota.
 
 **Deliverable:** record a file-camera for ten minutes with `archivesink` (the recorder's element, Lesson 5); kill the recorder at minute seven; show six promoted, one closed-but-unpromoted picked up on restart, the open one lost; delete the manifest and rebuild it from the archive alone; then show a timeline with a fenced epoch on it.
 

@@ -1,4 +1,4 @@
-# /etc/containers/systemd/vmsreccontroller.container — the rec subsystem's
+# /etc/containers/systemd/reccontroller.container — the rec subsystem's
 # controller: the platform's SpecController run from rec.subsystem.yaml, one
 # per box (one per cluster in М11), no code of its own. Places recordings on
 # the recorder with the most headroom — where an archive is, one recorder per

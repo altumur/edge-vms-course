@@ -23,7 +23,7 @@ cameras, next_id, retention — and never placement.
 # are. What the VMS adds is the bytes: `GET /timeline/<id>?from&to` (segments and event buckets from this
 # box's archive manifest, fenced ones marked) and `GET /segment/<path>` (one promoted segment, `Range`
 # honoured, for the page's `<video>`). They are *registered* as the console's `extra` route function, not
-# subclassed. The console is its own process (`python3 -m vms console`, `deploy/vmsconsole.container`) with
+# subclassed. The console is its own process (`python3 -m vms console`, `deploy/console.container`) with
 # its own token — `vms/cameras/*`, `vms/next_id`, `vms/retention/*`, `vms/idem/*` — and never placement.
 # Depends on `archive.py` (`ArchiveResource`, `Manifest`) and `controller.py`.
 #
@@ -40,7 +40,7 @@ cameras, next_id, retention — and never placement.
 #   bucket has one writer; the page never says "camera" outside its HTML comment; then `/timeline/1`, a
 #   ranged `/segment/`, a 404, a PUT that bumps `revision` to 2, and a DELETE whose placement waits for
 #   `unplace_deleted`.
-# - The archive mount in `vmsconsole.container` is what lets `/segment/` serve bytes; `/data/spool` is
+# - The archive mount in `console.container` is what lets `/segment/` serve bytes; `/data/spool` is
 #   mounted read-only there because the console reads and never records.
 # ================================================================================================
 from __future__ import annotations

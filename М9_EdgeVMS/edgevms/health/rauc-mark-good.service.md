@@ -5,7 +5,7 @@
 ## Stanza by stanza
 ### `[Unit]`
 - `Description=Confirm this slot works, or leave it unconfirmed`.
-- `After=network-online.target worker.service vms-agent.service vmsworker@w-1.service vmsconsole.service` — order after the things the check will interrogate: the М9 recorder (`quadlet/worker.container` → `worker.service`), the М8 agent (`vms-agent.container`), and М10's worker and console units. `After=` without `Requires=` means a missing unit is not an error, which is what lets one service file serve every variant of the box.
+- `After=network-online.target worker.service vms-agent.service vmsworker@w-1.service console.service` — order after the things the check will interrogate: the М9 recorder (`quadlet/worker.container` → `worker.service`), the М8 agent (`vms-agent.container`), and М10's worker and console units. `After=` without `Requires=` means a missing unit is not an error, which is what lets one service file serve every variant of the box.
 - `Wants=network-online.target` — pull in network readiness, though the check itself never leaves the box.
 
 ### `[Service]`

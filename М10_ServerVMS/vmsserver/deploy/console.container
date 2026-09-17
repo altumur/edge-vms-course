@@ -1,4 +1,4 @@
-# /etc/containers/systemd/vmsconsole.container — the console: the page and
+# /etc/containers/systemd/console.container — the console: the page and
 # the API, its own process on this box (a system job on every server in М11,
 # nothing in front). Its token writes the operator's rows only — vms/cameras/*,
 # vms/next_id, vms/retention/*, vms/idem/* — and never placement; a camera
@@ -8,11 +8,11 @@
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # vmsconsole.container — the console: the page and the API as its own process, with the operator's token
+# # console.container — the console: the page and the API as its own process, with the operator's token
 # and
 # never placement
 #
-# **Role.** The Quadlet unit for `vmsconsole` at `/etc/containers/systemd/vmsconsole.container`. It runs
+# **Role.** The Quadlet unit for `console` at `/etc/containers/systemd/console.container`. It runs
 # `python3 -m vms console`: `SpecConsole` over the VMS spec with the VMS's two media routes, on
 # `0.0.0.0:8080`. Its own process (a system job on every server in М11, nothing in front) with its own token
 # — `vms/cameras/*`, `vms/next_id`, `vms/retention/*`, `vms/idem/*` (`SPEC.acl_console()`) — and never
@@ -43,7 +43,7 @@ After=network.target
 
 [Container]
 Image=localhost/vmsserver:latest
-# the `console` verb: a `VmsController` opened as writer `vmsconsole` with the console ACL, an
+# the `console` verb: a `VmsController` opened as writer `console` with the console ACL, an
 # `ArchiveResource($SPOOL, $ARCHIVE)`, and `vms.console.serve(...)`.
 Exec=python3 -m vms console
 # listen on every interface (the code's default is `127.0.0.1`); with `Network=host` this is the box's

@@ -1,7 +1,7 @@
 """The resource process — the platform's resource job (w2cplatform.resource)
 with the VMS registered on it. One per server, pinned there for as long as
 the server exists; on a box it is `python3 -m vms resource`
-(`deploy/vmsresource.container`), in М11 the `resource` system job. It has
+(`deploy/resource.container`), in М11 the `resource` system job. It has
 no controller: it has a policy pass on a timer, a heartbeat, its HTTP, and
 the event database over its own tree. What the VMS adds is its part:
 

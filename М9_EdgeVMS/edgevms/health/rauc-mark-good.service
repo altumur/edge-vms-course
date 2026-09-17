@@ -4,7 +4,7 @@
 # The rollback needs no code.
 [Unit]
 Description=Confirm this slot works, or leave it unconfirmed
-After=network-online.target worker.service vms-agent.service vmsworker@w-1.service vmsconsole.service
+After=network-online.target worker.service vms-agent.service vmsworker@w-1.service console.service
 Wants=network-online.target
 
 [Service]

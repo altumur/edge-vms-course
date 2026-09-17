@@ -1,15 +1,15 @@
-# deploy/vmsreccontroller.nomad.hcl — the recorder's controller: one, and
+# deploy/reccontroller.nomad.hcl — the recorder's controller: one, and
 # safe at two, exactly as vmscontroller. The same class over rec.subsystem.yaml
 # (`SpecController(REC_SPEC)`): it places recordings on recorders whose server's
 # resource answers, one recorder per server by default (rec/policy), and moves
 # a dead server's recordings when its slot lapsed AND its resource is silent.
-job "vmsreccontroller" {
+job "reccontroller" {
   datacenters = ["room-a"]
   type        = "service"
 
-  group "vmsreccontroller" {
+  group "reccontroller" {
     count = 1
-    task "vmsreccontroller" {
+    task "reccontroller" {
       driver = "podman"
       identity { env = true }
       config {

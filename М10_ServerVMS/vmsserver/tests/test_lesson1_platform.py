@@ -187,7 +187,7 @@ def test_a_worker_that_released_its_slot_stops_receiving_units():
 
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
     w1 = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
     w2 = VmsWorker("w-2", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-2", archive_root=box.archive)
     w1.heartbeat_once(); w2.heartbeat_once()
@@ -213,7 +213,7 @@ def test_a_subscriber_is_not_handed_a_holder_that_has_gone_silent():
 
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
     w.heartbeat_once(); con.create_camera({"source": "driverpack://file/a.mp4"}); ctl.ensure_placed()
     w.reconcile_once(); w.heartbeat_once()

@@ -1,4 +1,4 @@
-# /etc/containers/systemd/vmsresource.container — the resource process: the
+# /etc/containers/systemd/resource.container — the resource process: the
 # archive has no controller; it has a policy pass, a heartbeat, its HTTP and
 # the event database over its own tree. The same process М11 runs as the
 # `resource` system job on every server, so the box and the cluster have one
@@ -7,11 +7,11 @@
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # vmsresource.container — the resource process: the policy pass, the heartbeat, /events from the event
+# # resource.container — the resource process: the policy pass, the heartbeat, /events from the event
 # database
 #
-# **Role.** The Quadlet unit at `/etc/containers/systemd/vmsresource.container`, from which Quadlet
-# generates `vmsresource.service`. `python3 -m vms resource` builds the platform's `Resource` over
+# **Role.** The Quadlet unit at `/etc/containers/systemd/resource.container`, from which Quadlet
+# generates `resource.service`. `python3 -m vms resource` builds the platform's `Resource` over
 # `/data/archive` with the VMS's `ArchivePolicy` registered (repair, close buckets, media retention per
 # camera row), serves the platform's HTTP on `127.0.0.1:8090` (`/buckets`, `/events`, `/mirrored`, `PUT
 # /mirror`; the VMS's `/manifest`, `/segment`), heartbeats `platform/resources/<server>/heartbeat` every

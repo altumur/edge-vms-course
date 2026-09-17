@@ -260,7 +260,7 @@ server, and it is the hostname.
 
 > *Which of them a given process may actually complete is decided by the token its `vars_` carries, not by this class.*
 
-**Один класс, два процесса, разные права.** `vmscontroller` держит токен контроллера и может размещать; `vmsconsole` держит токен консоли и на `place` получает `Forbidden`. Разграничение не в классе и не в наследовании — в хранилище (урок 3 М10A).
+**Один класс, два процесса, разные права.** `vmscontroller` держит токен контроллера и может размещать; `console` держит токен консоли и на `place` получает `Forbidden`. Разграничение не в классе и не в наследовании — в хранилище (урок 3 М10A).
 
 ## Результат
 

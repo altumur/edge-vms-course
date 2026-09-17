@@ -1,3 +1,0 @@
-# vmsreccontroller.nomad.hcl — the recorder's controller: one, safe at two
-
-**Role.** Lesson 2. `vmscontroller.nomad.hcl` with a different entrypoint: `python3 -m cluster reccontroller` is `SpecController(REC_SPEC)` on a five-second pass — `ensure_placed`, `redistribute`, `unplace_deleted`. It places recordings on recorders whose server's resource answers (`requires: resource`), one recorder per server carrying recordings by default (`rec/policy`), and moves a dead server's recordings when its slot lapsed and stayed lapsed AND its resource is silent (`gone_servers`). Its policy, `vmsreccontroller-policy.hcl`, writes `rec/workers/*`, `rec/placement/*`, `rec/slots/*` and nothing else.

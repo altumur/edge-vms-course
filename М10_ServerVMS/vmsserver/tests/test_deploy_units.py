@@ -29,10 +29,10 @@ def test_the_units_run_the_entrypoints_the_package_has():
     entrypoints = set(re.findall(r'"(\w+)": \w+', open(os.path.join(HERE, "vms", "__main__.py")).read().split("__main__")[-1]))
     assert entrypoints == {"worker", "controller", "recorder", "reccontroller", "console", "resource", "gateway", "livecontroller", "detworker", "detcontroller"}
     for name, entry in [("vmsworker@.container", "worker"), ("vmscontroller.container", "controller"),
-                        ("vmsconsole.container", "console"), ("vmsresource.container", "resource"),
-                        ("recworker@.container", "recorder"), ("vmsreccontroller.container", "reccontroller"),
-                        ("vmsgateway@.container", "gateway"), ("vmslivecontroller.container", "livecontroller"),
-                        ("vmsdetworker@.container", "detworker"), ("vmsdetcontroller.container", "detcontroller")]:
+                        ("console.container", "console"), ("resource.container", "resource"),
+                        ("recworker@.container", "recorder"), ("reccontroller.container", "reccontroller"),
+                        ("liveworker@.container", "gateway"), ("livecontroller.container", "livecontroller"),
+                        ("detworker@.container", "detworker"), ("detcontroller.container", "detcontroller")]:
         u = unit(name)
         assert u["Container"]["Image"] == "localhost/vmsserver:latest"                 # one image, one thing to publish
         assert u["Container"]["Exec"] == f"python3 -m vms {entry}"
@@ -46,7 +46,7 @@ def test_who_may_write_where_is_in_the_mounts_too():
     The controller has no archive at all; the console cannot write the spool."""
     vols = lambda n: dict(v.split(":", 1) for v in (lambda x: x if isinstance(x, list) else [x])(unit(n)["Container"]["Volume"]))
     assert "/data/archive" not in vols("vmscontroller.container") and "/data/spool" not in vols("vmscontroller.container")
-    assert vols("vmsconsole.container")["/data/spool"].endswith(":ro,z")                # reads, never records
+    assert vols("console.container")["/data/spool"].endswith(":ro,z")                # reads, never records
     assert "/data/spool" not in vols("vmsworker@.container")                            # the worker records nothing: no spool
     assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # its events, vms/<cam>/, on this box's resource
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
@@ -54,11 +54,11 @@ def test_who_may_write_where_is_in_the_mounts_too():
     assert vols("recworker@.container")["/data/archive"] == "/data/archive:z"
     assert "/data/media" not in vols("recworker@.container")                          # it never reads a camera: it subscribes to the fan-out
     assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("recworker@.container")["/run/vms"]   # the tee's shared memory: written by the worker, read by the recorder beside it
-    assert "/data/archive" not in vols("vmsreccontroller.container")
-    assert vols("vmsresource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
-    assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
+    assert "/data/archive" not in vols("reccontroller.container")
+    assert vols("resource.container")["/data/platform"] == "/data/platform:z"       # the heartbeat is written; rows are only read
+    assert vols("resource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
     assert unit("recworker@.container")["Container"]["StopTimeout"] == "20"          # SIGTERM finalizes the open segment
-    assert unit("vmsresource.container")["Service"]["Restart"] == "always"             # a process, not a timer: the database lives in it
+    assert unit("resource.container")["Service"]["Restart"] == "always"             # a process, not a timer: the database lives in it
 
 
 def test_the_image_carries_the_three_packages_and_nothing_else():

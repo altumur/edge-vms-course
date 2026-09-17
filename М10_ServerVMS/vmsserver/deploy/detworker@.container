@@ -1,5 +1,5 @@
-# /etc/containers/systemd/vmsdetworker@.container — a detector worker: the
-# third subsystem's worker. `systemctl start vmsdetworker@d-1` — the instance
+# /etc/containers/systemd/detworker@.container — a detector worker: the
+# third subsystem's worker. `systemctl start detworker@d-1` — the instance
 # name is the slot. Its unit is one model on one camera; its capacity is streams
 # a GPU can decode and infer on; it runs where its labels say (NOMAD_META_labels
 # or DET_LABELS=gpu in vms.env). Its events go into det/<unit>/e<epoch>/ on this

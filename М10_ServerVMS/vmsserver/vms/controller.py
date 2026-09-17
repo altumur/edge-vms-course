@@ -74,7 +74,7 @@ VMS = SPEC.sub
 # `snapshot`, `publish_snapshot`, `headroom`, `capacity_of`, `failover_seconds`, … — is the platform's and
 # is documented in `w2cplatform/spec.py`. Which of them a given process may actually complete is decided by
 # the token its `vars_` carries, not by this class: the same class holds the controller's token in
-# `vmscontroller` and the console's token in `vmsconsole`.
+# `vmscontroller` and the console's token in `console`.
 class VmsController(SpecController):
     # `super().__init__(SPEC, vars_, objects, capacity, wall, cluster)`. `capacity` is only the fallback for
     # a worker whose heartbeat has not said its own number (the spec's `placement.capacity.fallback` is also

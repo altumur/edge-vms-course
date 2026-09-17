@@ -1,4 +1,4 @@
-# /etc/containers/systemd/vmslivecontroller.container — the live subsystem's
+# /etc/containers/systemd/livecontroller.container — the live subsystem's
 # controller: the platform's SpecController run from live.subsystem.yaml, one
 # per box (one per cluster in М11), no code of its own. Places fan-outs on the
 # gateway with the most viewer headroom; takes them back when a gateway deletes

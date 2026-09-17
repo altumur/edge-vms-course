@@ -35,7 +35,7 @@ func resourceProcess(t *testing.T, box *testbox.Box) (*p.Resource, func()) {
 func TestEventsReachTheTimelineThroughTheResourceProcessAndTheConsole(t *testing.T) {
 	box := testbox.NewBox()
 	ctl := vms.NewVmsController(box.Vars.AsWriter("vmscontroller", vms.Spec.ACLController()...), box.Objects, 0, box.Wall.Now)
-	con := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
+	con := vms.NewVmsController(box.Vars.AsWriter("console", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
 	act := vms.NewFakeActuator()
 	w := worker(t, box, "w-1", act, vms.VmsWorkerOptions{Server: "srv-1", ArchiveRoot: box.Archive})
 	w.HeartbeatOnce()

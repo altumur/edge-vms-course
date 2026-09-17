@@ -169,7 +169,7 @@ set()
 Соберём итог урока в четыре строки, которые в М10B будут стоять в точках входа:
 
 ```python
-con_vars = vars_.as_writer("vmsconsole",    SPEC.acl_console())
+con_vars = vars_.as_writer("console",    SPEC.acl_console())
 ctl_vars = vars_.as_writer("vmscontroller", SPEC.acl_controller())
 wrk_vars = vars_.as_writer("vmsworker",     SPEC.sub.acl_worker())
 ```

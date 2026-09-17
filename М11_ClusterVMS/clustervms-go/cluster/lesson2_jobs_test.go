@@ -107,7 +107,7 @@ func TestTheACLFromInsideAnAllocation(t *testing.T) {
 		t.Fatal(ep)
 	}
 	// and the console's token: the operator's rows, never placement — two tokens, two prefixes, one class
-	con := cluster.NewClusterController(c.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), c.Objects, 0, c.Wall.Now, "")
+	con := cluster.NewClusterController(c.Vars.AsWriter("console", vms.Spec.ACLConsole()...), c.Objects, 0, c.Wall.Now, "")
 	if r, err := con.CreateCamera(src(2)); err != nil || r.ID != 2 {
 		t.Fatal(r, err)
 	}

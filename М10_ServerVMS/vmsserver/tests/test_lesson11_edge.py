@@ -34,7 +34,7 @@ CARD = "driverpack://acme/10.0.0.7"
 def _box():
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_vars = box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console() + REC_SPEC.acl_console() + DET_SPEC.acl_console())
+    con_vars = box.vars.as_writer("console", SPEC.acl_console() + LIVE_SPEC.acl_console() + REC_SPEC.acl_console() + DET_SPEC.acl_console())
     con = VmsController(con_vars, box.objects, wall=box.wall)
     return box, ctl, con, con_vars
 

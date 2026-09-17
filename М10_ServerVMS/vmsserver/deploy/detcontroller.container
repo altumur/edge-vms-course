@@ -1,4 +1,4 @@
-# /etc/containers/systemd/vmsdetcontroller.container — the det subsystem's
+# /etc/containers/systemd/detcontroller.container — the det subsystem's
 # controller: the platform's SpecController run from det.subsystem.yaml, one
 # per box (one per cluster in М11), no code of its own. Places models on the
 # GPU-labelled detector worker with the most stream headroom; takes them back when the console deletes

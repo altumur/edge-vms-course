@@ -18,7 +18,7 @@ Parses `nomad version`, compares with `sort -V`. The `disconnect` block that `vm
 `nomad server members`: at least three rows, exactly one with `Leader = true`. For every node id from `nomad node status -quiet`, the verbose status must show the `podman` driver healthy (`^podman +true`), and a node whose verbose output has an `archive` meta row is counted; at least one must declare `meta.archive` or the `resource` job has nowhere to be.
 
 ### 3 — the jobspecs validate
-`nomad job validate` on `vmsworker`, `vmscontroller`, `recworker`, `vmsreccontroller`, `console`, `resource`, `autoscaler`; a failure prints the validator's last line.
+`nomad job validate` on `vmsworker`, `vmscontroller`, `recworker`, `reccontroller`, `console`, `resource`, `autoscaler`; a failure prints the validator's last line.
 
 ### 4 — policy semantics with a token carrying ONLY `vmsworker`
 Creates the six policies (unbound), then a 10-minute client token with policy `vmsworker`. With it: `nomad var put -force vms/epoch/verify` must succeed, `vms/slots/w-verify` must succeed, `objects/vms/w-verify/heartbeat data='{}'` must succeed (the heartbeat as an object-as-Variable), and `vms/cameras/verify` must be **refused** — "one writer per key is enforced rather than promised". Probes are purged afterwards. If no token could be created, the likely causes are printed (ACLs not bootstrapped, `NOMAD_TOKEN` unset).
@@ -27,7 +27,7 @@ Creates the six policies (unbound), then a 10-minute client token with policy `v
 A token with policy `console`: writes `vms/cameras/verify` and `vms/idem/verify` (a retry answered by any instance), is refused on `vms/placement/verify` ("a console that can place is a second controller") and on `vms/workers/w-verify`.
 
 ### 5 — the binding to the job's workload identity
-`nomad acl policy apply -namespace default -job <job> …` binds `vmsworker`, `vmscontroller`, `recworker`, `vmsreccontroller` and `console` policies to their jobs — what the product relies on, since no job ever holds a static token. Then finds a running `vmsworker` allocation and, with `nomad alloc exec -task vmsworker`, runs a shell **inside** it that `curl`s `PUT /v1/var/vms/epoch/verify` (own prefix) and `PUT /v1/var/vms/cameras/verify` (another's) with the allocation's own `NOMAD_TOKEN`; expects `own=200 other=403`. No running allocation → FAIL with "run the job first".
+`nomad acl policy apply -namespace default -job <job> …` binds `vmsworker`, `vmscontroller`, `recworker`, `reccontroller` and `console` policies to their jobs — what the product relies on, since no job ever holds a static token. Then finds a running `vmsworker` allocation and, with `nomad alloc exec -task vmsworker`, runs a shell **inside** it that `curl`s `PUT /v1/var/vms/epoch/verify` (own prefix) and `PUT /v1/var/vms/cameras/verify` (another's) with the allocation's own `NOMAD_TOKEN`; expects `own=200 other=403`. No running allocation → FAIL with "run the job first".
 
 ### 5a — the mirror is resource to resource
 `nomad service info -json resource` gives one resource's address; `PUT /mirror/srv-verify/vms/0/e1/19700101T000000Z.events.jsonl` with a one-event body must return 204 and `GET /mirrored/srv-verify` must list a `path` — a peer took a copy and lists it, and nothing went through a store. No registered service → FAIL.

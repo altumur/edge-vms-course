@@ -152,7 +152,7 @@ def test_the_console_over_http():
     from vms.config import SPEC
     from w2cplatform.variables import Forbidden
     box = Box(); ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)   # what the console process holds
+    con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)   # what the console process holds
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1")
     w.heartbeat_once()
     from vms.archive import ArchiveResource
@@ -228,8 +228,8 @@ def test_a_retry_that_lands_on_another_console_is_one_camera():
     import threading
     from vms.config import SPEC
     box = Box()
-    a = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
-    b = VmsController(box.vars.as_writer("vmsconsole", SPEC.acl_console()), box.objects, wall=box.wall)
+    a = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
+    b = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
     s1 = serve(a, None, port=0, wall=box.wall); s2 = serve(b, None, port=0, wall=box.wall)
     p1, p2 = s1.server_address[1], s2.server_address[1]
     try:

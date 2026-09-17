@@ -22,7 +22,7 @@ from tests.conftest import Box
 def _box():
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_vars = box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console())
+    con_vars = box.vars.as_writer("console", SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console())
     con = VmsController(con_vars, box.objects, wall=box.wall)
     rec_con = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)                      # the console's door to recordings
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)

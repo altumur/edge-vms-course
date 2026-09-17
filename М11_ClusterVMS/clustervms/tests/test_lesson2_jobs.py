@@ -70,7 +70,7 @@ def test_the_acl_from_inside_an_allocation():
     assert ctl.camera(1)["name"] == "ok" and c.vars.get("vms/epoch/1")[0] == {"epoch": "1"}
     # and the console's token: the operator's rows, never placement — two tokens, two prefixes, one class
     from vms.config import SPEC
-    con = ClusterController(c.vars.as_writer("vmsconsole", SPEC.acl_console()), c.objects, wall=c.wall)
+    con = ClusterController(c.vars.as_writer("console", SPEC.acl_console()), c.objects, wall=c.wall)
     assert con.create_camera({"source": "driverpack://file/2.mp4"})["id"] == 2 and con.update_camera(2, {"name": "from the console"})["revision"] == 2
     w.heartbeat_once()
     try:

@@ -1,4 +1,4 @@
-# deploy/vmsreccontroller-policy.hcl — bound to job vmsreccontroller's workload identity.
+# deploy/reccontroller-policy.hcl — bound to job reccontroller's workload identity.
 # The only writer of the recorder's PLACEMENT — which recorder writes which
 # camera's footage. Never a recording row (the console's), never the VMS's.
 namespace "default" {

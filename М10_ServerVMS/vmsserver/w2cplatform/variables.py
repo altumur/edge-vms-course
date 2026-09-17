@@ -148,7 +148,7 @@ class FileVariables:
     # Returns a new handle on the same directory seen through another identity, allowed only the given
     # prefixes (`'vms/*'`, `'vms/epoch/*'` style: a trailing `*` means prefix match, otherwise exact path).
     # This is what a Nomad ACL policy does for a task's token. The tests build the controller with
-    # `as_writer("vmscontroller", SPEC.acl_controller())` and the console with `as_writer("vmsconsole",
+    # `as_writer("vmscontroller", SPEC.acl_controller())` and the console with `as_writer("console",
     # SPEC.acl_console())`.
     def as_writer(self, writer: str, allowed: list[str]) -> "FileVariables":
         """The same store seen through another identity, allowed only these

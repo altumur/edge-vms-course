@@ -163,7 +163,7 @@ rec_ctl.assignment("r-1").units == [];  r.reconcile_once() -> [('stop', 2)]
 | Symptom | Likely cause |
 |---|---|
 | Every recording is `waiting: camera held by nobody` | No VMS worker has the camera in phase `running` with a `live_url`. The recorder reads the VMS heartbeat; check `vms/w-*/heartbeat`, not the recorder. |
-| The recording was placed on a recorder whose server has no archive | `requires: resource` only excludes a resource that is *silent*; `unknown` (no heartbeat yet) is allowed so a box works before `vmsresource` starts. Start the resource process; the reason says `whose resource is live`. |
+| The recording was placed on a recorder whose server has no archive | `requires: resource` only excludes a resource that is *silent*; `unknown` (no heartbeat yet) is allowed so a box works before `resource` starts. Start the resource process; the reason says `whose resource is live`. |
 | Two recorders on one server, one of them idle | `servers: distinct`, the default. Set `rec/policy {servers: shared}` from the console if that server's disks are really two places. |
 | The worker moved and the recorder keeps writing `e1` | `resubscribe()` runs before every reconcile pass and compares the source it chose (`shm://` or `rtsp://`) with the heartbeat's; a worker from before Lesson 4's fan-out publishes neither. |
 | Footage vanished after `Stop recording` | Not from the toggle: `rec/<cam>/` is retained by `ArchivePolicy` for `retention_days` after the row is gone (30 by default without a row). Check the resource's policy pass. |

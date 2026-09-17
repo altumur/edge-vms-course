@@ -264,7 +264,7 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
 
 Примечание к файлу заканчивается фразой, которая кажется административной и таковой не является:
 
-> *The archive mount in `vmsconsole.container` is what lets `/segment/` serve bytes; `/data/spool` is mounted read-only there because the console reads and never records.*
+> *The archive mount in `console.container` is what lets `/segment/` serve bytes; `/data/spool` is mounted read-only there because the console reads and never records.*
 
 **Права на файловую систему повторяют права в хранилище.** Токен консоли не даёт писать размещение; монтирование контейнера не даёт писать в спул.
 

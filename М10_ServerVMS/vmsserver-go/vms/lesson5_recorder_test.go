@@ -31,7 +31,7 @@ func recSetup(t *testing.T) *recBox {
 	t.Helper()
 	box := testbox.NewBox()
 	ctl := vms.NewVmsController(box.Vars.AsWriter("vmscontroller", vms.Spec.ACLController()...), box.Objects, 0, box.Wall.Now)
-	conVars := box.Vars.AsWriter("vmsconsole", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...)
+	conVars := box.Vars.AsWriter("console", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...)
 	con := vms.NewVmsController(conVars, box.Objects, 0, box.Wall.Now)
 	recCon := p.NewSpecController(vms.RecSpec, conVars, box.Objects, 0, box.Wall.Now, "") // the console's door to recordings
 	recCtl := p.NewSpecController(vms.RecSpec, box.Vars.AsWriter("reccontroller", vms.RecSpec.ACLController()...), box.Objects, 0, box.Wall.Now, "")

@@ -83,7 +83,7 @@ DET_NAME=d-1                     CAPACITY here is streams
 ## Шаг 2 — Токен уже, чем префикс
 
 ```python
-# - Три токена, три процесса: `vmsworker` (epochs, slots), `vmscontroller` (placement), `vmsconsole`
+# - Три токена, три процесса: `vmsworker` (epochs, slots), `vmscontroller` (placement), `console`
 #   (the operator's rows). Together they partition `vms/*`; none of them can do another's job.
 ```
 
@@ -92,7 +92,7 @@ DET_NAME=d-1                     CAPACITY here is streams
 | Процесс | Что пишет |
 |---|---|
 | `vmscontroller` | `vms/workers/*`, `vms/placement/*`, `vms/slots/*` |
-| `vmsconsole` | `vms/cameras/*`, `vms/next_id`, `vms/retention/*`, `vms/idem/*` |
+| `console` | `vms/cameras/*`, `vms/next_id`, `vms/retention/*`, `vms/idem/*` |
 | `vmsworker` | `vms/epoch/*`, `vms/slots/*` |
 
 **Ни один не может делать работу другого.** Консоль, у которой завёлся бы код размещения, получила бы `Forbidden` (урок 3 М10A). Воркер, попытавшийся поправить строку камеры, — тоже.
@@ -112,15 +112,15 @@ def test_who_may_write_where_is_in_the_mounts_too():
     """The ACL says which rows each token writes; the mounts say which bytes.
     The controller has no archive at all; the console cannot write the spool."""
     assert "/data/archive" not in vols("vmscontroller.container") and "/data/spool" not in vols("vmscontroller.container")
-    assert vols("vmsconsole.container")["/data/spool"].endswith(":ro,z")                # reads, never records
+    assert vols("console.container")["/data/spool"].endswith(":ro,z")                # reads, never records
     assert "/data/spool" not in vols("vmsworker@.container")                            # the worker records nothing: no spool
     assert vols("vmsworker@.container")["/data/archive"] == "/data/archive:z"          # its events, vms/<cam>/, on this box's resource
     assert vols("vmsworker@.container")["/data/media"].endswith(":ro,z")
     assert vols("recworker@.container")["/data/spool"] == "/data/spool:z"            # the recorder is the only writer of segments
     assert "/data/media" not in vols("recworker@.container")                          # it never reads a camera: it subscribes to the fan-out
     assert vols("vmsworker@.container")["/run/vms"] == "/run/vms:z" == vols("recworker@.container")["/run/vms"]
-    assert "/data/archive" not in vols("vmsreccontroller.container")
-    assert vols("vmsresource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
+    assert "/data/archive" not in vols("reccontroller.container")
+    assert vols("resource.container")["/data/spool"].endswith(":ro,z")               # the resource never records
 ```
 
 Каждая строка — утверждение из модуля, выраженное монтированием.
@@ -320,10 +320,10 @@ def test_the_units_run_the_entrypoints_the_package_has():
 ## Результат
 
 ```bash
-systemctl enable --now vmsresource vmscontroller vmsreccontroller vmsconsole
+systemctl enable --now resource vmscontroller reccontroller console
 systemctl enable --now vmsworker@w-1 recworker@r-1
-systemctl enable --now vmslivecontroller vmsgateway@g-1
-systemctl enable --now vmsdetcontroller vmsdetworker@d-1
+systemctl enable --now livecontroller liveworker@g-1
+systemctl enable --now detcontroller detworker@d-1
 ```
 
 Десять процессов, один образ, один файл окружения.

@@ -314,7 +314,7 @@ func TestTheConsoleOverHTTP(t *testing.T) {
 	// created and unplaces what it deleted.
 	box := testbox.NewBox()
 	ctl := vms.NewVmsController(box.Vars.AsWriter("vmscontroller", vms.Spec.ACLController()...), box.Objects, 0, box.Wall.Now)
-	con := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now) // what the console process holds
+	con := vms.NewVmsController(box.Vars.AsWriter("console", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now) // what the console process holds
 	w := worker(t, box, "w-1", vms.NewFakeActuator(), vms.VmsWorkerOptions{Server: "srv-1"})
 	w.HeartbeatOnce()
 	srv, ln, err := vms.Serve(con, vms.NewArchiveResource(box.Spool, box.Archive, 600, nil), "127.0.0.1:0", box.Wall.Now, nil)
@@ -422,8 +422,8 @@ func TestARetryThatLandsOnAnotherConsoleIsOneCamera(t *testing.T) {
 	// instance. The key is a Variable, claimed by create-only CAS, so the
 	// second console serves the first one's reply and never repeats the write.
 	box := testbox.NewBox()
-	a := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
-	b := vms.NewVmsController(box.Vars.AsWriter("vmsconsole", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
+	a := vms.NewVmsController(box.Vars.AsWriter("console", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
+	b := vms.NewVmsController(box.Vars.AsWriter("console", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
 	s1, l1, _ := vms.Serve(a, nil, "127.0.0.1:0", box.Wall.Now, nil)
 	s2, l2, _ := vms.Serve(b, nil, "127.0.0.1:0", box.Wall.Now, nil)
 	defer s1.Close()

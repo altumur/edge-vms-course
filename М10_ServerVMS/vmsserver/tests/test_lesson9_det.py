@@ -23,7 +23,7 @@ from tests.conftest import Box
 def _box():
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_vars = box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console())
+    con_vars = box.vars.as_writer("console", SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console())
     con = VmsController(con_vars, box.objects, wall=box.wall)
     det_ctl = SpecController(DET_SPEC, box.vars.as_writer("detcontroller", DET_SPEC.acl_controller()), box.objects, wall=box.wall)
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
@@ -75,7 +75,7 @@ def test_a_model_on_a_camera_is_placed_on_a_gpu_worker_and_writes_its_own_bucket
         assert call(base, "POST", "/det/units", {"name": "1-linecross", "cam": "1", "kind": "linecross"}, {"Idempotency-Key": "k1"})[0] == 201   # the same POST
         assert call(base, "POST", "/det/units", {"name": "x", "cam": "1", "kind": "motion", "worker": "d-2"}, {"Idempotency-Key": "k2"})[0] == 400  # placement is not the operator's
         try:
-            SpecController(DET_SPEC, box.vars.as_writer("vmsconsole", DET_SPEC.acl_console()), box.objects, wall=box.wall).place("1-linecross")
+            SpecController(DET_SPEC, box.vars.as_writer("console", DET_SPEC.acl_console()), box.objects, wall=box.wall).place("1-linecross")
             raise AssertionError("a console token never writes placement")
         except Forbidden:
             pass

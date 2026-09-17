@@ -37,7 +37,7 @@
 #   controller and console as the *fallback* for a worker whose heartbeat says nothing.
 # - `SEGMENT_SECONDS` (default `600`) — segment length handed to `GstActuator`.
 # - `CONSOLE_HOST` (`127.0.0.1`), `CONSOLE_PORT` (`8080`) — where the console listens
-#   (`vmsconsole.container` sets `0.0.0.0`).
+#   (`console.container` sets `0.0.0.0`).
 # - `RESOURCE_HOST` (`127.0.0.1`), `RESOURCE_PORT` (`8090`), `RESOURCE_URL` — the resource process's HTTP and the URL
 #   its heartbeat advertises (the console asks `/events` there); `EVENTDB` (`:memory:`) — its database file.
 # - `LOG_LEVEL` (`INFO`) — `logging.basicConfig` level.
@@ -54,7 +54,7 @@
 # them against the `Exec=` lines of the Quadlet units.
 #
 # ## Notes
-# - Three tokens, three processes: `vmsworker` (epochs, slots), `vmscontroller` (placement), `vmsconsole`
+# - Three tokens, three processes: `vmsworker` (epochs, slots), `vmscontroller` (placement), `console`
 #   (the operator's rows). Together they partition `vms/*`; none of them can do another's job. The mounts in
 #   `deploy/` repeat the same split in bytes (`test_who_may_write_where_is_in_the_mounts_too`).
 # - `CAPACITY` means two different things depending on the verb: the worker's own number (what it heartbeats
@@ -238,8 +238,8 @@ def gateway() -> None:
     from w2cplatform.spec import SpecController
     from .config import LIVE_SPEC
     from .gateway import LiveGateway
-    vars_ = open_vars(CONFIG_URL, writer="livegateway",
-                          acl={"livegateway": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
+    vars_ = open_vars(CONFIG_URL, writer="liveworker",
+                          acl={"liveworker": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     host, port = os.environ.get("GATEWAY_HOST", "127.0.0.1"), int(os.environ.get("GATEWAY_PORT", "8082"))
     peer = None
@@ -257,7 +257,7 @@ def gateway() -> None:
 
 
 # The screen and the API, as its own process ("count as many as you like"):
-# - Variables as writer `vmsconsole` with `SPEC.acl_console()` — `vms/cameras/*`, `vms/next_id`,
+# - Variables as writer `console` with `SPEC.acl_console()` — `vms/cameras/*`, `vms/next_id`,
 #   `vms/idem/*`, `vms/retention/*`; never placement. It holds a `VmsController` over that token, so a write
 #   it must not make (`place`) is a `Forbidden` from the store, not a rule in the console.
 # - `ArchiveResource($SPOOL, $ARCHIVE)` so the console can serve `/timeline/<id>` and `/segment/<path>` from
@@ -271,8 +271,8 @@ def console() -> None:
     from .console import serve
     from w2cplatform.spec import SpecController
     from .config import DET_SPEC, LIVE_SPEC, REC_SPEC
-    vars_ = open_vars(CONFIG_URL, writer="vmsconsole",
-                          acl={"vmsconsole": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
+    vars_ = open_vars(CONFIG_URL, writer="console",
+                          acl={"console": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))

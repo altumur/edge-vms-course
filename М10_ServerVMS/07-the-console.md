@@ -79,7 +79,7 @@ GET /det/units       -> the det subsystem's rows with the read model; POST /det/
 
 The page has drawn ticks from `/events?cam=7` since Step 1, and nothing in this lesson answers that route: the console holds no event database. It asks — `MergedIndex`, the platform's — every resource it finds by heartbeat, merges by time, and fences each event by its unit's own subsystem's epoch, which only the console's rows know. Who it asks, what a resource holds, why none of that is a subsystem — and the page's events list, live feed and Mark button — are [Lesson 10](10-events-the-database-that-is-a-cache.md); until then the timeline is empty and the state line says which resource did not answer.
 
-**Deliverable:** the console as its own unit (`vmsconsole.container`, Lesson 11) serving the page; a camera added from the page, edited, disabled and deleted; *Record* pressed — a row under `rec/recordings/` through the mount at `/rec/…`, placed by the rec controller — and a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
+**Deliverable:** the console as its own unit (`console.container`, Lesson 11) serving the page; a camera added from the page, edited, disabled and deleted; *Record* pressed — a row under `rec/recordings/` through the mount at `/rec/…`, placed by the rec controller — and a segment played; two console instances over one store answering the same retry with one camera; `/mounts` naming what the process fronts.
 
 ---
 

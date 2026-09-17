@@ -1,5 +1,5 @@
-# /etc/containers/systemd/vmsgateway@.container — a live gateway: the third
-# subsystem's worker. `systemctl start vmsgateway@g-1` — the instance name is
+# /etc/containers/systemd/liveworker@.container — a live gateway: the third
+# subsystem's worker. `systemctl start liveworker@g-1` — the instance name is
 # the slot. Stateless; count as many as the audience needs (in М11 a service
 # job scaled on live_worker_headroom, placed by constraint where a public
 # address or a GPU is). Its unit is a camera's live fan-out; its capacity is

@@ -24,7 +24,7 @@ def _box():
     """One box: a VMS worker recording camera 1, the two controllers, a console with both tokens."""
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_vars = box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console())
+    con_vars = box.vars.as_writer("console", SPEC.acl_console() + LIVE_SPEC.acl_console())
     con = VmsController(con_vars, box.objects, wall=box.wall)
     live_ctl = SpecController(LIVE_SPEC, box.vars.as_writer("livecontroller", LIVE_SPEC.acl_controller()), box.objects, wall=box.wall)
     w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive)
@@ -36,8 +36,8 @@ def _box():
 
 
 def _gateway(box, name, capacity=100, labels="", url=""):
-    g = LiveGateway(name, box.vars.as_writer("livegateway", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects,
-                    ctl=SpecController(LIVE_SPEC, box.vars.as_writer("livegateway", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects, wall=box.wall),
+    g = LiveGateway(name, box.vars.as_writer("liveworker", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects,
+                    ctl=SpecController(LIVE_SPEC, box.vars.as_writer("liveworker", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects, wall=box.wall),
                     capacity=capacity, clock=box.clock, wall=box.wall, server="srv-1", env={"LABELS": labels})
     g.serve("127.0.0.1", 0); g.heartbeat_once()
     return g
@@ -66,7 +66,7 @@ def test_the_first_viewer_creates_the_stream_and_the_controller_places_it():
         assert live_ctl.unit("1") == {"id": "1", "cam": "1", "labels": [], "grace": 30, "revision": 1}
         assert box.vars.list("live/placement/") == []                                 # the console could not place it
         try:
-            SpecController(LIVE_SPEC, box.vars.as_writer("vmsconsole", SPEC.acl_console() + LIVE_SPEC.acl_console()), box.objects, wall=box.wall).place("1")
+            SpecController(LIVE_SPEC, box.vars.as_writer("console", SPEC.acl_console() + LIVE_SPEC.acl_console()), box.objects, wall=box.wall).place("1")
             raise AssertionError("a console token never writes placement")
         except Forbidden:
             pass
