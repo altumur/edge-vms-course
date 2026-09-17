@@ -170,6 +170,12 @@ class SubsystemSpec:
     servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
     near: str = "none"            # a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
+    # `home: <field>` — the server named in that field of the unit's own row is where it prefers to run. A
+    # PREFERENCE and not a label: a label is a filter, and a unit whose home is down would become
+    # unplaceable — which is the one thing it must not be, because the home being down is exactly when the
+    # work has to continue somewhere else. It is topology, not taste: the camera is plugged into a switch
+    # beside that server. Coming home is then not a procedure but a consequence, bounded by `ensure_home`.
+    home: str = ""
     # `spread_by: <field>` — units sharing a value of that field go on DIFFERENT servers. Unlike `near` this
     # is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
     # is, and a second copy on the same server is not a second copy. Unplaceable while no other server
@@ -196,6 +202,7 @@ class SubsystemSpec:
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
                    near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
+                   home=str(pl.get("home", "") or ""),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
@@ -615,21 +622,40 @@ class SpecController(Controller):
                     return w, hb.extra.get("server", "?")
         return None
 
-    # The pick, with the affinity: the best worker on the holder's server if one has room, else the best
-    # anywhere; `(worker, free, note)` where the note says which it was — "beside w-1 holding it" or
-    # "away from w-1 on srv-1 (no room there)" — so the reason tells the operator whether the recording
-    # reads its worker's shared memory or its RTSP fan-out.
+    # `home: <field>`: the server that field of this unit's row names, or "". Read from the row, so an
+    # operator changes a camera's home the way they change its name.
+    def home_of(self, uid) -> str:
+        if not self.spec.home:
+            return ""
+        row = self.unit(uid)
+        return str(row.get(self.spec.home, "") or "") if row else ""
+
+    # The pick, with the two affinities in order — home first, then `near` — over a pool the FILTERS have
+    # already cut (`eligible`: the constraint and `spread_by`). `(worker, free, note)`, and the note says
+    # which it was: "at home on srv-a", "beside w-1 holding it", "away from home srv-a" — so the reason
+    # tells the operator both where the recording reads its source from and whether it is where it belongs.
+    #
+    # Home before near, because they disagree exactly when a server is down: `near` would pin a recorder to
+    # whichever server picked up the camera, and nothing would ever come back.
     def _pick(self, pool: list[str], uid) -> tuple[str | None, int, str]:
+        home = self.home_of(uid)
+        if home:
+            best, free = self._best([w for w in pool if self.server_of(w) == home])
+            if best is not None:
+                return best, free, f", at home on {home}"
         near = self.holder_near(uid)
         if near is not None:
             beside = [w for w in pool if self.server_of(w) == near[1]]
             best, free = self._best(beside)
             if best is not None:
-                return best, free, f", beside {near[0]} holding it"
+                return best, free, f", beside {near[0]} holding it" + (f" (home {home} has no room)" if home else "")
         best, free = self._best(pool)
+        note = ""
         if best is not None and near is not None:
-            return best, free, f", away from {near[0]} on {near[1]} (no room there)"
-        return best, free, ""
+            note = f", away from {near[0]} on {near[1]} (no room there)"
+        if best is not None and home and self.server_of(best) != home:
+            note += f"; away from home {home}"
+        return best, free, note
 
     # `most-free-capacity`: the worker with the largest `capacity_of − load`, strictly positive; ties go to
     # the first in sorted order.
@@ -758,6 +784,33 @@ class SpecController(Controller):
                     break                                   # the system is full; the unit waits, listed where it was
                 self.move(uid, best, f"{why}; most free capacity ({free}); on {self.server_of(best)}{near}")
                 moves.append((uid, gone, best))
+        return moves
+
+    # Units placed away from the home their row names, moved back — at most `budget` a pass, because every
+    # move is a new epoch and a seam in the recording. It is the other half of `home`: the preference in
+    # `_pick` decides where a unit goes when it is placed, and this is what happens to one already placed
+    # somewhere else when its home comes back.
+    #
+    # `eligible` runs first, so the filters still beat the preference: a unit whose home is barred by
+    # `spread_by` or by its labels stays where it is. A home with no live worker, or no room, is not an
+    # error and says nothing — the unit is where it can be, which is the point of a preference.
+    def ensure_home(self, budget: int = 1, workers: list[str] | None = None) -> list[tuple]:
+        """Units away from the home their row names, moved back, `budget` a pass."""
+        if not self.spec.home or budget <= 0:
+            return []
+        moves, pool = [], self._pool(workers)
+        for row in self.units():
+            if len(moves) >= budget:
+                break
+            uid, home = row["id"], str(row.get(self.spec.home, "") or "")
+            pl = self.placement(uid)
+            if not home or pl is None or self.server_of(pl.worker) == home:
+                continue
+            best, free = self._best([w for w in self.eligible(row, pool) if self.server_of(w) == home])
+            if best is None:
+                continue                                  # home is not back, or has no room: stay put, quietly
+            self.move(uid, best, f"home is {home}; most free capacity ({free}); on {home}")
+            moves.append((uid, pl.worker, best))
         return moves
 
     # Up to `budget` moves: each step takes the most and least loaded workers by `load/capacity`, stops if

@@ -80,7 +80,7 @@ def reccontroller() -> None:
     ctl = SpecController(REC_SPEC, open_vars(CONFIG_URL), objects, capacity=int(os.environ.get("CAPACITY", "50")))
     while not stop.is_set():
         try:
-            ctl.ensure_placed(); ctl.redistribute(); ctl.unplace_deleted()
+            ctl.ensure_placed(); ctl.redistribute(); ctl.ensure_home(1); ctl.unplace_deleted()
         except Exception:                         # noqa: BLE001
             logging.exception("rec placement pass failed")
         stop.wait(5)
@@ -93,7 +93,7 @@ def controller() -> None:
                             cluster=os.environ.get("CLUSTER", "cluster-a"))
     while not stop.is_set():
         try:
-            ctl.ensure_placed(); ctl.redistribute(); ctl.publish_snapshot()
+            ctl.ensure_placed(); ctl.redistribute(); ctl.ensure_home(1); ctl.publish_snapshot()
         except Exception:                         # noqa: BLE001
             logging.exception("placement pass failed")
         stop.wait(5)

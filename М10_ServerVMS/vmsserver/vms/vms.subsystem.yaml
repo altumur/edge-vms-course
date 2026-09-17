@@ -52,6 +52,11 @@ unit:
     # camera as `held`. Thirty-two channels imported for their footage would otherwise be thirty-two streams
     # nobody watches.
     live:                  {type: string, default: "always"}  # always | on-demand
+    # the server this camera belongs to — usually the one whose switch it is plugged into. A PREFERENCE
+    # (`placement.home` below), never a label: with a label a camera whose server is down would be
+    # unplaceable, and a server being down is exactly when the recording has to continue elsewhere. Empty
+    # means no home, which is every camera until an operator says otherwise.
+    home:                  {type: string}                     # the server it belongs to: a preference, not a constraint
   # rows the platform keeps beside the unit (`SpecController._derived`).
   derived:
     - row: retention/{id}            # vms/retention/<id> {days}: what the platform's resource job retains buckets by
@@ -81,6 +86,11 @@ placement:
   # `_best`: among eligible workers the one with the largest `capacity − load`, strictly positive; ties to
   # the first in sorted order. The only tie-break the catalogue has.
   tie_break:  most-free-capacity
+  # the field naming the camera's home server. `_pick` prefers a worker there when placing, and
+  # `ensure_home(budget)` brings back, one camera a pass, what is placed somewhere else — so a server
+  # returning from an outage takes its cameras back without anybody running a procedure. The filters
+  # (`labels-subset`, `spread_by`) still win: this only orders what is already eligible.
+  home:       home                              # the row's field naming the server it belongs to
   # `rebalance(budget)` stops when the spread in `load/capacity` between the most and least loaded workers
   # is under 10 %. Rebalance runs only when asked, never in the controller's pass.
   rebalance:  {dead_band: 0.10}

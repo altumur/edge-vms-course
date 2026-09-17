@@ -519,3 +519,68 @@ def test_backfill_stops_while_the_disk_is_over_the_mark():
     r.space_probe = lambda root: (1_000_000, 500_000)                    # room again, and the same call fetches
     assert not r.under_pressure()
     assert r.backfill(budget=1, now=now, force=True)
+
+
+# -- home: the server a camera belongs to ------------------------------------------------------------
+
+def _worker_on(box, name, server, labels=(), capacity=50):
+    w = VmsWorker(name, box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
+                  server=server, capacity=capacity, env={"LABELS": ",".join(labels)})
+    w.heartbeat_once()
+    return w
+
+
+def test_a_camera_prefers_its_home_and_records_anywhere_when_it_is_down():
+    """The one thing `home` must not be is a label.
+
+    A label is a filter: with `labels: [srv-a]` a camera whose server is down becomes
+    unplaceable, and the recording stops — at exactly the moment it must not. `home` is a
+    preference: placed at home when home is there, placed anywhere when it is not, and
+    brought back, one camera a pass, when it returns."""
+    box, ctl, con, con_vars = _box()
+    a, b = _worker_on(box, "w-a", "srv-a"), _worker_on(box, "w-b", "srv-b")
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4", "home": "srv-a"})
+    ctl.ensure_placed()
+    assert ctl.where(1) == "w-a" and "at home on srv-a" in ctl.placement(1).reason
+
+    # srv-a goes away: its worker stops heartbeating, and the camera goes where it can
+    box.wall.advance(60); b.heartbeat_once()
+    ctl.move(1, "w-b", "srv-a gone")
+    assert ctl.where(1) == "w-b"
+    con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4", "home": "srv-a"})
+    ctl.ensure_placed()                                    # a NEW camera of srv-a's, placed while it is down
+    assert ctl.where(2) == "w-b" and "away from home srv-a" in ctl.placement(2).reason
+    assert ctl.unplaceable() == []                         # the whole point: it records, it is not "unplaceable"
+
+    # srv-a comes back. One camera a pass — a move is a new epoch and a seam in the recording
+    a.heartbeat_once(); b.heartbeat_once()
+    assert ctl.ensure_home(1) == [(1, "w-b", "w-a")] and ctl.where(1) == "w-a" and ctl.where(2) == "w-b"
+    assert "home is srv-a" in ctl.placement(1).reason
+    assert ctl.ensure_home(1) == [(2, "w-b", "w-a")] and ctl.where(2) == "w-a"
+    assert ctl.ensure_home(1) == []                        # everybody home: nothing to say
+
+
+def test_a_camera_with_no_home_is_never_moved_by_it():
+    """Every camera until an operator says otherwise. An empty field is not a server name."""
+    box, ctl, con, con_vars = _box()
+    _worker_on(box, "w-a", "srv-a"); _worker_on(box, "w-b", "srv-b")
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
+    ctl.ensure_placed()
+    where = ctl.where(1)
+    assert "home" not in ctl.placement(1).reason
+    assert ctl.ensure_home(5) == [] and ctl.where(1) == where
+
+
+def test_the_filters_still_beat_the_preference():
+    """`home` orders what is already eligible; it never widens it. A camera whose labels no
+    worker on its home server can serve is placed where its labels CAN be served, and
+    `ensure_home` leaves it there — a preference that could overrule a filter would put a
+    camera on a server that cannot reach it."""
+    box, ctl, con, con_vars = _box()
+    _worker_on(box, "w-a", "srv-a", labels=["vlan:a"])
+    _worker_on(box, "w-b", "srv-b", labels=["vlan:b"])
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4",
+                       "home": "srv-a", "labels": ["vlan:b"]})     # home says srv-a, the switch says otherwise
+    ctl.ensure_placed()
+    assert ctl.where(1) == "w-b" and "away from home srv-a" in ctl.placement(1).reason
+    assert ctl.ensure_home(5) == [] and ctl.where(1) == "w-b"

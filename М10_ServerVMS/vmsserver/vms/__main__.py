@@ -185,11 +185,13 @@ def reccontroller() -> None:
 #   CAS.
 def _controller_loop(ctl) -> None:
     """One controller process per subsystem, the same loop: unplace what was deleted, place what is new onto the
-    workers it sees, move what a released slot left, publish the snapshot. Nothing else, ever."""
+    workers it sees, move what a released slot left, bring one unit home if its server came back, publish the
+    snapshot. Nothing else, ever."""
     while not stop.is_set():
         try:
             ctl.ensure_placed()                       # deleted rows unplaced; new units onto the workers it sees
             ctl.redistribute()                        # units of a RELEASED slot (scale-in) onto the rest
+            ctl.ensure_home(1)                        # ONE unit a pass back to the server its row names, if it is back
             ctl.publish_snapshot()
         except Exception:                             # noqa: BLE001
             logging.exception("placement pass failed")
