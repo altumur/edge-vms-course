@@ -576,7 +576,13 @@ class VmsWorker(Worker):
                        fenced=not self.recording_allowed, conflicts=self.conflicts(), passes=self.passes,
                        capacity=self.capacity, headroom=self.headroom(), started=self._started_wall,
                        previous_hb=self.previous_hb, previous_instance=self.previous_instance,
-                       archive=self.archive_root, devices=self.device_status())                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
+                       archive=self.archive_root, devices=self.device_status(),                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
+                       **self.heartbeat_extra())
+
+    # What a subclass adds to the heartbeat. Empty here: a worker publishes what every worker publishes,
+    # and a subsystem that has one more fact about itself says it without this method being rewritten.
+    def heartbeat_extra(self) -> dict:
+        return {}
 
     # -- the playback door ---------------------------------------------------------------------------
     # The holder's second surface, and the reason it is HTTP and not the RTSP fan-out: a browser has to

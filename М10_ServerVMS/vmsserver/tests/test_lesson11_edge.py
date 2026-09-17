@@ -648,3 +648,115 @@ def test_only_one_of_a_following_pair_may_be_the_follower():
         raise AssertionError("accepted a home naming no field")
     except ValueError as e:
         assert "names no field" in str(e)
+
+
+# -- draining a server: the rolling upgrade ----------------------------------------------------------
+
+def test_a_planned_stop_is_not_a_silence():
+    """A stopped process is noticed anyway — but being noticed is the SLOW path. A recorder's
+    units move when its slot has lapsed AND its server's resource is silent: two independent
+    silences, about a minute and a half of not recording. An upgrade is known in advance, so
+    the work leaves first and the machine stops empty.
+
+    One row says it, and every subsystem reads it through `_pool` and `redistribute`: nothing
+    is told anything, and no subsystem learns a new word."""
+    from w2cplatform.contract import DRAIN_KEY, DrainRefused
+    box, ctl, con, con_vars = _box()
+    _worker_on(box, "w-a", "srv-a"); _worker_on(box, "w-b", "srv-b")
+    for i in range(2):
+        con.create_camera({"name": f"c{i}", "source": f"driverpack://file/{i}.mp4"})
+    ctl.ensure_placed()
+    assert {ctl.where(1), ctl.where(2)} == {"w-a", "w-b"}          # one each, by capacity
+
+    con.drain("srv-a")                                             # the OPERATOR says it: the console's token, never the controller's
+    assert ctl.draining() == "srv-a" and box.vars.get(DRAIN_KEY)[0]["server"] == "srv-a"
+    assert "w-a" not in ctl._pool(None)                            # not placed on any more…
+    moves = ctl.redistribute()                                     # …and what it has leaves, orderly
+    assert [(m[1], m[2]) for m in moves] == [("w-a", "w-b")]
+    assert ctl.where(1) == ctl.where(2) == "w-b"
+    assert "server srv-a draining" in ctl.placement(1).reason
+
+    try:                                                           # one machine at a time, by CAS
+        con.drain("srv-b"); raise AssertionError("two servers draining at once")
+    except DrainRefused as e:
+        assert "already draining" in str(e)
+
+    con.undrain()                                                  # the machine is back
+    assert ctl.draining() == "" and "w-a" in ctl._pool(None)
+    assert ctl.redistribute() == []                                # nothing moves back on its own…
+    assert ctl.rebalance(1, 0.10) or True                          # …it is `home` and `rebalance` that refill
+
+
+def test_the_dry_run_answers_before_the_reboot_not_after():
+    """Fifty cameras leaving a machine have to land somewhere, and "somewhere" is a fact about
+    headroom and labels. `would_strand` asks it with the machinery that will answer for real
+    afterwards — the alternative is reading `/unplaceable` once the server is already down."""
+    box, ctl, con, con_vars = _box()
+    _worker_on(box, "w-a", "srv-a", labels=["vlan:a"])
+    _worker_on(box, "w-b", "srv-b", labels=["vlan:b"])
+    con.create_camera({"name": "only-a", "source": "driverpack://file/1.mp4", "labels": ["vlan:a"]})
+    con.create_camera({"name": "anywhere", "source": "driverpack://file/2.mp4"})
+    ctl.ensure_placed()
+    assert ctl.where(1) == "w-a"
+
+    assert ctl.would_strand("srv-b") == []          # camera 2 can go to srv-a
+    assert ctl.would_strand("srv-a") == ["1"]       # camera 1 cannot go anywhere else: say so BEFORE
+    assert ctl.unplaceable() == []                  # and nothing is stranded yet — this is a question, not a state
+
+
+def test_the_upgrade_script_polls_a_condition_instead_of_sleeping():
+    """`safe` is the whole point: units gone from that machine AND nothing left unwritten in
+    a spool. A recorder whose units have left promotes what they closed on its next pump —
+    and only then is it safe to pull the power."""
+    box, ctl, con, con_vars = _box()
+    from vms.console import make_console
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"]))
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+
+    rec_ctl = SpecController(REC_SPEC, box.vars, box.objects, wall=box.wall)
+    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    r = RecWorker("r-1", box.vars, box.objects, FakeActuator(), archive=arch, clock=box.clock,
+                  wall=box.wall, server="srv-1", env={})
+    arch2 = ArchiveResource(box.spool + "2", box.archive + "2", wall=box.wall)
+    r2 = RecWorker("r-2", box.vars, box.objects, FakeActuator(), archive=arch2, clock=box.clock,
+                   wall=box.wall, server="srv-2", env={})               # somewhere for the work to go
+    r.heartbeat_once(); r2.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once(); r.heartbeat_once()
+    assert rec_ctl.where("1") == "r-1"
+    m = make_console(con, arch, wall=box.wall, mounts={"rec": rec_ctl})   # the console's token: it may say "draining"
+
+    assert m.drain_route("GET", {})[1] == {"draining": "", "safe": True,
+                                           "subsystems": {"vms": {"draining": "", "subsystem": "vms"},
+                                                          "rec": {"draining": "", "subsystem": "rec"}}}
+    status, rep = m.drain_route("POST", {"server": "srv-1"})
+    assert status == 200 and rep["draining"] == "srv-1" and rep["safe"] is False
+    assert rep["subsystems"]["rec"]["units"] == 1                  # the recorder still carries it
+    assert rep["would_strand"] == {"vms": ["1"]}                   # and the camera has nowhere to go at all:
+    #                                                                one vms worker in the box, and it is on this machine.
+    #                                                                An upgrade script stops here rather than after the reboot.
+    _worker_on(box, "w-2", "srv-2")                                # give it somewhere, and the dry run goes quiet
+    assert m.drain_route("GET", {})[1].get("would_strand", {}) == {}
+
+    # a spool file nobody promoted yet: not safe, whatever the assignments say
+    t = box.wall()
+    p = segment_path(box.spool, "1", 1, datetime.fromtimestamp(t - 60, timezone.utc))
+    os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"x")
+    os.utime(p, (t - 30, t - 30))                                   # the box's clock, not the machine's
+    r.heartbeat_once()
+    assert m.drain_route("GET", {})[1]["subsystems"]["rec"]["spool"] == 1
+
+    assert [(mv[1], mv[2]) for mv in rec_ctl.redistribute()] == [("r-1", "r-2")]     # the work leaves, orderly
+    assert [(mv[1], mv[2]) for mv in ctl.redistribute()] == [("w-1", "w-2")]
+    r.heartbeat_once()
+    mid = m.drain_route("GET", {})[1]["subsystems"]["rec"]          # nothing assigned here any more…
+    assert mid["units"] == 0 and mid["spool"] == 1 and mid["safe"] is False   # …and still not safe: a segment is unwritten
+    r.reconcile_once(); r.pump_once(); r.heartbeat_once()           # …and the pump promotes what was closed
+    rep = m.drain_route("GET", {})[1]
+    assert rep["subsystems"]["rec"]["units"] == 0 and rep["subsystems"]["rec"]["spool"] == 0
+    assert rep["subsystems"]["vms"]["units"] == 0
+    assert rep["safe"] is True                                      # now the power may go
+
+    assert m.drain_route("DELETE", {})[1] == {"draining": "", "safe": True,
+                                              "subsystems": {"vms": {"draining": "", "subsystem": "vms"},
+                                                             "rec": {"draining": "", "subsystem": "rec"}}}

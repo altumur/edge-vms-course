@@ -351,7 +351,7 @@ class ArchivePolicy:
         from .space import cut, evacuate
         freed, out = 0, {}
         if self.objects is not None and self.peers is not None and self.server:
-            rep = evacuate(self.res, self.objects, self.peers, self.server, need, now)
+            rep = evacuate(self.res, self.objects, self.peers, self.server, need, now, vars_=self.vars)
             freed += rep["freed"]
             out.update({"evacuated": rep["moved"], **({"skipped": rep["skipped"]} if "skipped" in rep else {})})
         if freed < need:

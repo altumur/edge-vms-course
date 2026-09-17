@@ -146,6 +146,13 @@ class RecWorker(VmsWorker):
         self.resubscribe(now)
         return super().reconcile_once(now)
 
+    # What this recorder adds to the heartbeat: how many segments are in the spool and not yet in the
+    # archive. Normally nought or one — the fragment being written — and it is the answer to the only
+    # question a rolling upgrade really asks: is it safe to stop this machine now. A recorder whose units
+    # have left promotes what they closed on its next pump, and then this is zero.
+    def heartbeat_extra(self) -> dict:
+        return {"spool": len(self.archive.closed_in_spool(0.0, self.wall()))}
+
     def promote_closed(self) -> int:
         n = 0
         for p in self.archive.closed_in_spool(self.grace_seconds, self.wall()):

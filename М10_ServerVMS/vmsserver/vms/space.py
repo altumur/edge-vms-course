@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 from w2cplatform.console import holder_of
+from w2cplatform.contract import draining
 from w2cplatform.resource import resources_seen
 
 from .archive import SUB, ArchiveResource, Manifest
@@ -69,15 +70,19 @@ def foreign(archive: ArchiveResource, objects, server: str, now: float, lost_aft
 # tight moves the problem and invites the pair to trade gigabytes back and forth; a destination with no
 # room is skipped, and step 2 answers instead.
 def evacuate(archive: ArchiveResource, objects, peers, server: str, need: int, now: float,
-             lost_after: float = 45.0, max_segments: int = MAX_SEGMENTS) -> dict:
+             lost_after: float = 45.0, max_segments: int = MAX_SEGMENTS, vars_=None) -> dict:
     """Send foreign units home, delete what the destination confirms."""
     seen, freed, moved, skipped = resources_seen(objects), 0, 0, {}
+    drains = draining(vars_) if vars_ is not None else ""
     for unit, to in sorted(foreign(archive, objects, server, now, lost_after).items()):
         if freed >= need:
             break
         hb = seen.get(to)
         if hb is None or now - float(hb["ts"]) > lost_after:
             skipped[unit] = f"{to} silent"
+            continue
+        if to == drains:                                         # about to stop: do not hand it gigabytes first
+            skipped[unit] = f"{to} draining"
             continue
         room = float(hb.get("space", {}).get("free", 0)) * ROOM_MARGIN
         man = Manifest(archive.root, unit)

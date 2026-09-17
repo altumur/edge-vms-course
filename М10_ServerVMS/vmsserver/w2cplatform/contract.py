@@ -75,6 +75,21 @@ from .epoch import Lease, next_epoch
 from .objects import ObjectStore
 from .variables import Conflict, Variables
 
+# The one row that says which server is going away for a while. It is the platform's, not a subsystem's —
+# a machine carries several — and it holds ONE name: a rolling upgrade is one server at a time.
+DRAIN_KEY = "platform/drain"
+
+
+class DrainRefused(Exception):
+    """A second server asked to drain while one already is."""
+
+
+# The server being drained, or "". Read on every placement pass by every subsystem, so it is one small
+# row and not a directory: the answer must cost one `get`.
+def draining(vars_) -> str:
+    items, _ = vars_.get(DRAIN_KEY)
+    return (items or {}).get("server", "")
+
 
 # A name, and the key layout derived from it. Every path the platform touches for a subsystem is produced
 # here, so the layout is in one place.
@@ -313,6 +328,37 @@ class Controller:
         brings its process back under the same name."""
         return sorted((n for n, s in self.slots().items() if s.released and self.assignment(n).units),
                       key=slot_number)
+
+    # -- draining a SERVER ---------------------------------------------------------------------------
+    # `retire` is about one allocation; an upgrade is about a machine. One row says which server is going
+    # away for a while, and every subsystem reads it through `_pool` and `redistribute` — nothing is told
+    # anything, and no subsystem learns a new word.
+    #
+    # Why it is needed at all, when a stopped process is noticed anyway: being noticed is the SLOW path.
+    # A recorder's units move when its slot has lapsed AND its server's resource is silent — two
+    # independent silences, about a minute and a half of not recording. A planned stop is not a silence:
+    # we know about it before it happens, and the work can leave first.
+    #
+    # One server at a time, and that is the whole of the mutual exclusion: the row holds ONE name, written
+    # by CAS. Two operators, or a buggy script, cannot drain two machines at once by accident.
+    def draining(self) -> str:
+        """The server being drained right now, or ""."""
+        return draining(self.vars)
+
+    def drain(self, server: str) -> dict:
+        """An operator's statement that a server is about to stop. Refused while
+        another one is draining: a rolling upgrade is one machine at a time."""
+        def mutate(items):
+            have = (items or {}).get("server", "")
+            if have and have != server:
+                raise DrainRefused(f"{have} is already draining; one server at a time")
+            return {"server": server, "at": str(self.wall())}
+        return self.write(DRAIN_KEY, mutate)
+
+    def undrain(self) -> dict:
+        """The server is back. Its workers become placeable again, and `ensure_home`
+        starts bringing back what its rows name — one unit a pass."""
+        return self.write(DRAIN_KEY, lambda items: {"server": "", "at": str(self.wall())})
 
     # An operator's statement that a slot is gone for good: marks it `released` by CAS (no-op if already
     # released). The controller never decides this on its own from a silence.

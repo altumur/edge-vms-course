@@ -74,7 +74,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from .contract import Controller, Subsystem, slot_number
+from .contract import DRAIN_KEY, Controller, Subsystem, slot_number
 from .objects import ObjectStore
 from .variables import Variables
 
@@ -233,7 +233,8 @@ class SubsystemSpec:
     def acl_console(self) -> list[str]:
         """The operator's rows: what a console (one per server, any of them) may write — never placement."""
         out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*",   # idem: a retried POST answered the same by ANY instance
-               f"{self.name}/policy"]                                                         # the administrator's knobs: servers distinct | shared
+               f"{self.name}/policy",                                                         # the administrator's knobs: servers distinct | shared
+               DRAIN_KEY]                                                                     # "this machine is about to stop": the operator's, and the same row for every subsystem
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")
         return out
@@ -608,11 +609,36 @@ class SpecController(Controller):
     # the fact (`Slot.released`) and used it only to move units OFF such a worker (`redistribute`); without
     # this line the very next `place()` could put a new one back ON it, and the pass after that would move
     # it off again. A departure that still collects work is churn at every scale-in and every update.
+    # Workers on the server being drained: not placed on, and (in `redistribute`) moved off. The third
+    # kind of "not here" beside a released slot and a silent resource — and the only one the operator says
+    # BEFORE it is true, which is the whole point of an upgrade.
+    def on_draining(self, workers) -> list[str]:
+        server = self.draining()
+        return [w for w in workers if server and self.server_of(w) == server] if server else []
+
     def _pool(self, workers):
         pool = sorted(workers if workers is not None else self.workers_seen())
         leaving = {n for n, s in self.slots().items() if s.released}
-        gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool)) | leaving
+        gone = set(self.without_resource(pool)) | set(self.idle_by_policy(pool)) | leaving | set(self.on_draining(pool))
         return [w for w in pool if w not in gone]
+
+    # The dry run. Which units nothing else could serve if this server went away — asked BEFORE it does,
+    # with the machinery that will answer for real afterwards (`eligible` over the pool minus that server).
+    # Fifty cameras leaving a machine have to land somewhere, and "somewhere" is a fact about headroom and
+    # labels, not a hope. An upgrade script reads this and stops; the alternative is reading `/unplaceable`
+    # after the reboot.
+    def would_strand(self, server: str, workers: list[str] | None = None) -> list[str]:
+        """Unit ids that nothing left could serve if `server` stopped now."""
+        pool = [w for w in self._pool(workers) if self.server_of(w) != server]
+        out = []
+        for row in self.units():
+            uid = row["id"]
+            pl = self.placement(uid)
+            if pl is not None and self.server_of(pl.worker) != server:
+                continue                                   # it is not on that server: not its business
+            if not self.eligible(row, pool):
+                out.append(str(uid))
+        return out
 
     # `near: <sub>`: the worker of that subsystem whose heartbeat status lists this unit's id in phase
     # `running` — `(worker, server)` — or None. The recorder says `near: vms`: the camera's holder.
@@ -794,6 +820,9 @@ class SpecController(Controller):
         for w in self.without_resource(seen):
             if self.assignment(w).units:
                 gone_for.setdefault(w, f"resource on {self.server_of(w)} silent")
+        for w in self.on_draining(seen):                               # an operator said this machine is about to stop
+            if self.assignment(w).units:
+                gone_for.setdefault(w, f"server {self.server_of(w)} draining")
         for w, server in self.gone_servers().items():                  # the server is gone: its slot lapsed and its resource silent
             gone_for.setdefault(w, f"server {server} gone: slot {w} lapsed and its resource silent")
         for gone, why in gone_for.items():

@@ -85,7 +85,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from .contract import Assignment, Heartbeat
+from .contract import Assignment, DrainRefused, Heartbeat
 from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
@@ -298,6 +298,30 @@ class SpecConsole:
     # value of Nomad's `meta.archive`, the label the scheduler placed by), the state of its resource (`live`,
     # `silent`, `unknown`), its workers with load and capacity, and whether the controller would place
     # there now, with the reason when it would not.
+    # What one subsystem can say about a machine that is about to stop: how many of ITS units are still
+    # assigned there, whether anything it holds would be stranded by the stop, and — for a subsystem whose
+    # workers keep something unwritten — how deep that is. The Mount composes these into one answer,
+    # because an upgrade is a question about a server and a server carries several subsystems.
+    #
+    # `safe` is the whole point of the route: an upgrade script polls a CONDITION instead of sleeping and
+    # hoping. Nothing here decides anything; it reports.
+    def drain_state(self, server: str = "") -> dict:
+        ctl, now = self.ctl, self.wall()
+        server = server or ctl.draining()
+        if not server:
+            return {"draining": "", "subsystem": ctl.spec.name}
+        here = [w for w in heartbeats(ctl.objects, ctl.sub.name + "/") if ctl.server_of(w) == server]
+        units = sum(len(ctl.assignment(w).units) for w in here)
+        pending = 0
+        for w in here:
+            hb = heartbeats(ctl.objects, ctl.sub.name + "/").get(w)
+            if hb is not None and now - hb.ts <= self.lost_after:
+                pending += int(hb.extra.get("spool", 0) or 0)
+        strand = ctl.would_strand(server)
+        return {"draining": server, "subsystem": ctl.spec.name, "workers": sorted(here),
+                "units": units, "spool": pending, "would_strand": strand,
+                "safe": units == 0 and pending == 0}
+
     def servers(self) -> dict:
         ctl, now = self.ctl, self.wall()
         out: dict[str, dict] = {}
@@ -314,11 +338,14 @@ class SpecConsole:
                         row["idle_by_policy"] = True
         for server in resources_seen(ctl.objects):
             out.setdefault(server, {"archive": None, "resource": "unknown", "workers": []})
+        drains = ctl.draining()
         for server, s in out.items():
+            s["draining"] = server == drains
             s["resource"] = ctl.resource_state(server, self.lost_after)
             s["requires_resource"] = ctl.spec.requires == "resource"
-            s["placeable"] = not (s["requires_resource"] and s["resource"] == "silent")
-            s["why"] = f"resource on {server} silent" if not s["placeable"] else None
+            s["placeable"] = not (s["requires_resource"] and s["resource"] == "silent") and not s["draining"]
+            s["why"] = (f"server {server} draining" if s["draining"] else
+                        f"resource on {server} silent" if not s["placeable"] else None)
             s["workers"].sort(key=lambda x: x["worker"])
         return {"policy": ctl.policy(), "servers": dict(sorted(out.items()))}
 
@@ -576,6 +603,38 @@ class Mount:
     def describe(self) -> dict:
         return {"root": self.root.spec.name, "mounts": {n: c.describe() for n, c in self.mounts.items()}}
 
+    # `GET /drain` — is it safe to stop the machine yet; `POST /drain?server=srv-a` — say it is going to
+    # stop; `DELETE /drain` — it is back. The only route on the Mount itself rather than on a subsystem,
+    # because a server carries several and the answer is `safe` only when every one of them says so.
+    #
+    # An upgrade script is then three lines and no `sleep`: POST, poll until `safe`, stop the machine. And
+    # after the reboot, DELETE — and `ensure_home` refills it one unit a pass, which is why the script
+    # should wait for the work to come back before draining the NEXT machine. Otherwise ten servers'
+    # worth of units drift onto whichever two were upgraded last.
+    def drain_route(self, method: str, q: dict) -> tuple:
+        consoles = [self.root, *self.mounts.values()]
+        ctl = self.root.ctl
+        if method == "POST":
+            server = q.get("server", "")
+            if not server:
+                return 400, {"error": "a drain names a server", "detail": "a drain names a server"}
+            try:
+                ctl.drain(server)
+            except DrainRefused as e:
+                return 409, {"error": str(e), "detail": str(e)}
+        elif method == "DELETE":
+            ctl.undrain()
+        elif method != "GET":
+            return 404, {}
+        parts = [c.drain_state() for c in consoles]
+        server = ctl.draining()
+        if not server:
+            return 200, {"draining": "", "safe": True, "subsystems": {p["subsystem"]: p for p in parts}}
+        return 200, {"draining": server,
+                     "safe": all(p.get("safe") for p in parts),
+                     "would_strand": {p["subsystem"]: p["would_strand"] for p in parts if p.get("would_strand")},
+                     "subsystems": {p["subsystem"]: p for p in parts}}
+
     def handler(self):
         mnt = self
 
@@ -586,6 +645,8 @@ class Mount:
                 u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 if u.path == "/mounts":
                     return self._send(200, mnt.describe())
+                if u.path == "/drain":
+                    return self._send(*mnt.drain_route(method, q))
                 con, path = mnt.resolve(u.path)
                 con.dispatch(self, method, path, q)
 
