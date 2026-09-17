@@ -4,7 +4,7 @@ import os
 from vms.controller import VmsController
 from vms.reconciler import CONVERGED, LAGGING, STALLED, Reconciler
 from vms.worker import FakeActuator, VmsWorker
-from tests.conftest import Box, FakeStore, cam
+from tests.conftest import Box, Clock, FakeStore, cam
 
 
 # -- М9 Lesson 6's seven, unchanged in meaning ------------------------------------------
@@ -208,3 +208,33 @@ def test_lease_expiry_without_renewal_stops_starts():
     w.reconciler.lost(1, w.now())                             # the pipeline died meanwhile
     box.clock.advance(5)                                      # past its backoff
     assert w.reconcile_once() == [("start", 1)] and act.epochs[1] == 2     # a start takes a fresh epoch and lease
+
+
+def test_the_first_heartbeat_does_not_wait_for_the_first_tick():
+    """A worker nobody can see is a worker nothing is placed on.
+
+    The loop heartbeats every ten seconds, and for a long time the FIRST one arrived only because
+    `time.monotonic()` counts from boot, so `clock() - 0 >= 10` was true on the very first pass. Run the
+    same loop on a clock that starts at zero — which is what Go's monotonic does, and what a fake clock
+    does here — and that accident disappears: the worker claims its slot, says nothing for ten seconds,
+    and its cameras sit unplaced for as long. So the first heartbeat is sent before the loop, said out
+    loud, and this is the test that keeps it said.
+
+    Counted rather than timed: an orderly stop heartbeats too, so one pass with the announcement is two
+    heartbeats and one without it is one."""
+    import threading
+    box = Box()
+    clock = Clock(0.0)                     # counts from process start, as Go's Monotonic() does
+    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=clock, wall=box.wall, server="srv-1")
+    sent = []
+    real = w.heartbeat_once
+    w.heartbeat_once = lambda *a, **k: (sent.append(clock()), real(*a, **k))[1]
+
+    stop = threading.Event()
+    original_wait = stop.wait
+    stop.wait = lambda timeout=None: (stop.set(), original_wait(0))[1]   # one pass, then out
+    w.run(poll=0.01, stop=stop)
+
+    assert sent and sent[0] == 0.0, f"the first heartbeat waited: {sent}"
+    assert len(sent) == 2, sent          # the announcement, and the orderly stop's own
+    assert box.objects.get("vms/w-1/heartbeat")

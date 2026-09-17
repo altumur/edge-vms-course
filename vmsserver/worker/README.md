@@ -42,7 +42,7 @@ of a controller. `p.Controller` appears in them — it is not placement, it is t
 bookkeeping, writing exactly the rows the Python controller writes.
 
 A green suite here and a green suite in Python prove each half self-consistent and nothing whatever about
-whether the two agree. That is what `../tests/cross/` is for.
+whether the two agree. That is what `../tests/test_cross_go_worker.py` is for.
 
 ```
 go test ./...          # 51

@@ -632,7 +632,12 @@ class VmsWorker(Worker):
         import threading
         stop = stop or threading.Event()
         lease_every = max(1.0, (self.lease_ttl - self.lease_margin) / 3)
-        last_lease = last_hb = 0.0
+        # Said out loud rather than left to the clock: the first heartbeat goes NOW. `time.monotonic()`
+        # counts from boot, so `clock() - 0 >= 10` happens to be true here on the first pass — and Go's
+        # monotonic counts from process start, where it is false, which left a Go worker invisible to the
+        # controller for ten seconds. The two loops now do the same thing for a reason instead of by luck.
+        self.heartbeat_once()
+        last_lease, last_hb = 0.0, self.clock()
         while not stop.is_set():
             try:
                 self.reconcile_once()

@@ -45,46 +45,11 @@ vmsserver/
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container (no spool),
                                recworker@.container (the only writer of segments), vmscontroller.container, reccontroller.container, console.container, resource.container,
                                liveworker@.container, livecontroller.container, detworker@.container, detcontroller.container, vms.env.example, check-quadlet.sh
-  tests/                       98 tests, milliseconds, no GStreamer
-  worker/                      the Go half: `vms worker` and `vms recorder`, 51 tests — see worker/README.md
-  reference-go/                the complete Go port from before that cut, frozen and out of CI
+  tests/                       59 tests, milliseconds, no GStreamer
 ```
-
-## Two languages, and where the seam is
-
-The workers are Go; everything else here is Python. That is not a preference about languages, it is a fact
-about this system that was there from Lesson 1: between a controller and a worker there is **no call**.
-They meet in the store, and the worker's whole surface there is four families of keys —
-
-```
-<sub>/slots/<worker>       CAS write   the slot
-<sub>/epoch/<unit>         CAS write   the epoch, and the lease renewed against it
-<sub>/workers/<worker>     read        the assignment
-<sub>/<worker>/heartbeat   write       the heartbeat, as an object
-```
-
-— plus the unit's own row, read. So the halves can be written in different languages at the price of
-keeping those four shapes byte for byte, and at no other price: nothing has to be agreed at run time,
-there is no serialization layer between them and no version negotiation.
-
-Which half gets which language follows from what each one is. Placement is one process, cheap to run and
-expensive to get right — `constraint`, `spread_by`, `near`, `home`, the tie-break, redistribution,
-rebalancing — and it is where the design work lives; it stays in the language the course is written in. A
-worker is one long-lived process per server holding pipelines, and that is where a static binary and no
-GIL are worth something.
-
-The consequence to notice in the tree: `worker/w2cplatform/` has a `unit.go` and no `placement.go`. The
-spec's `unit` block — fields, types, defaults, the id rule — is what parses a row, and a worker parses
-rows; the `placement` block is read by `w2cplatform/spec.py` and by nothing in Go. The same two YAML files
-serve both.
-
-A green Python suite and a green Go suite prove each half self-consistent and nothing at all about whether
-they agree. `tests/cross/` is what holds them together: a real Go worker against the real Python
-controller over one store.
 
 ```bash
-python3 tests/run.py                                   # 98 tests
-(cd worker && go test ./...)                           # 51 tests, the Go half
+python3 tests/run.py                                   # 59 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: holds cameras, rtsp://<box>:8554/<cam>; without: the fake actuator
 RECORDER_NAME=r-1 python3 -m vms recorder              # subscribes to the fan-out, writes rec/<cam>/ into the archive

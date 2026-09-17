@@ -3,8 +3,8 @@ package w2cplatform_test
 // The subsystem contract — the surface both halves of the platform must keep, byte for byte.
 //
 // This is the Go side of it. Everything here is checked again, in the same words, by the Python suite;
-// the two are only really held together by tests/cross/ (a Go worker against a Python controller over one
-// store), because a green suite on each side proves each side self-consistent and nothing about whether
+// the two are only really held together by tests/test_cross_go_worker.py (a real Go worker against the real
+// Python controller over one store), because a green suite on each side proves each side self-consistent and nothing about whether
 // they agree.
 
 import (
