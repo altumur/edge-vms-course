@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"vmsserver/testbox"
 	"vmsserver/vms"
@@ -324,4 +326,62 @@ func TestLeaseExpiryWithoutRenewalStopsStarts(t *testing.T) {
 	box.Clock.Advance(5)            // past its backoff
 	eq(t, w.ReconcileOnce(), actions("start 1"))
 	eq(t, act.Epochs["1"], 2) // a start takes a fresh epoch and lease
+}
+
+// countingObjects counts the writes, so a test can ask HOW MANY heartbeats went out rather than whether
+// one did. Everything else is the real store underneath.
+type countingObjects struct {
+	p.ObjectStore
+	mu   sync.Mutex
+	puts map[string]int
+}
+
+func (c *countingObjects) Put(key string, data []byte) error {
+	c.mu.Lock()
+	c.puts[key]++
+	c.mu.Unlock()
+	return c.ObjectStore.Put(key, data)
+}
+
+func (c *countingObjects) count(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.puts[key]
+}
+
+func TestTheFirstHeartbeatDoesNotWaitForTheFirstTick(t *testing.T) {
+	// A worker nobody can see is a worker nothing is placed on.
+	//
+	// Both loops heartbeat every ten seconds, and for a long time the FIRST one here waited for that
+	// tick: Monotonic() counts from process start, so `clock() - 0 >= 10` is false on the first pass.
+	// Python's time.monotonic() counts from boot, where the same line is true — one loop, two behaviours,
+	// and a restarted Go worker invisible to the controller, its cameras unplaced, for ten seconds.
+	//
+	// Neither suite could see that. It takes a real worker of one language against a real controller of
+	// the other, which is what ../../vmsserver/tests/test_cross_go_worker.py does, and where it was
+	// found. This is the same claim, kept here where it is cheap to check.
+	//
+	// Counted rather than timed, and on a clock that never advances: an orderly stop heartbeats too, so
+	// one pass with the announcement is two heartbeats and one without it is one.
+	box := testbox.NewBox()
+	objects := &countingObjects{ObjectStore: box.Objects, puts: map[string]int{}}
+	clock := testbox.NewClock(0) // counts from process start — the case that used to be silent
+	w, err := vms.NewVmsWorker("w-1", box.Vars, objects, vms.NewFakeActuator(),
+		vms.VmsWorkerOptions{Server: "srv-1", WorkerOptions: p.WorkerOptions{Clock: clock.Now, Wall: box.Wall.Now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() { defer close(done); w.Run(time.Millisecond, stop) }()
+	time.Sleep(50 * time.Millisecond) // many passes; the clock does not move, so no tick is due
+	close(stop)
+	<-done
+
+	if n := objects.count("vms/w-1/heartbeat"); n != 2 {
+		t.Fatalf("heartbeats: %d — want the announcement before the loop and the orderly stop's own", n)
+	}
+	if raw, _ := box.Objects.Get("vms/w-1/heartbeat"); raw == nil {
+		t.Fatal("nothing in the store")
+	}
 }

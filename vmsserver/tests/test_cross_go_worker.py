@@ -1,6 +1,6 @@
 """The one test that holds the two halves together.
 
-Everything else in this package proves Python self-consistent, and `worker/`'s 51 tests prove Go
+Everything else in this package proves Python self-consistent, and `../vmsserver-go`'s 89 tests prove Go
 self-consistent. Neither says a word about whether the two AGREE — and they meet nowhere but in the
 store, so a disagreement would be silent: a renamed heartbeat field, a slot row written with a different
 spelling, a manifest line with a float where the other side expects an int. Nothing would fail to
@@ -49,7 +49,7 @@ def p_slot(vars_, name):
     return Slot.from_items(name, vars_.get(f"vms/slots/{name}")[0])
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WORKER_SRC = os.path.join(os.path.dirname(HERE), "worker")
+GO_SRC = os.path.join(os.path.dirname(os.path.dirname(HERE)), "vmsserver-go")
 
 pytestmark = pytest.mark.skipif(shutil.which("go") is None,
                                 reason="no Go toolchain: the cross-language test needs one")
@@ -58,7 +58,7 @@ pytestmark = pytest.mark.skipif(shutil.which("go") is None,
 def _build(tmp: str) -> str:
     """One binary, built once — `go run` would recompile per process and the timings below are real."""
     out = os.path.join(tmp, "vms")
-    subprocess.run(["go", "build", "-o", out, "./cmd/vms"], cwd=WORKER_SRC, check=True,
+    subprocess.run(["go", "build", "-o", out, "./cmd/vms"], cwd=GO_SRC, check=True,
                    capture_output=True, timeout=300)
     return out
 

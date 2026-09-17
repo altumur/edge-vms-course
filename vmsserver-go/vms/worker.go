@@ -662,7 +662,16 @@ func (w *VmsWorker) Run(poll time.Duration, stop <-chan struct{}) {
 	if leaseEvery < 1 {
 		leaseEvery = 1
 	}
-	var lastLease, lastHb float64
+	// The first heartbeat goes BEFORE the loop, not on the first tick that happens to be ten seconds old.
+	// Monotonic() counts from process start here and time.monotonic() counts from boot in Python, so
+	// "clock() - 0 >= 10" is false in one and true in the other: the same loop, and a Go worker invisible
+	// to the controller for its first ten seconds while a Python one is visible at once — ten seconds of
+	// a restarted worker's cameras sitting unplaced, from an accident of what a clock counts from.
+	// Both loops now say it instead of relying on it. (../vmsserver/tests/test_cross_go_worker.py found
+	// this by running this binary against the Python controller; neither suite alone could have.)
+	heartbeat()
+	lastHb := w.Clock()
+	var lastLease float64
 	for {
 		select {
 		case <-stop:

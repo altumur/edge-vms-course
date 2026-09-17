@@ -45,16 +45,44 @@ vmsserver/
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container (no spool),
                                recworker@.container (the only writer of segments), vmscontroller.container, reccontroller.container, console.container, resource.container,
                                liveworker@.container, livecontroller.container, detworker@.container, detcontroller.container, vms.env.example, check-quadlet.sh
-  tests/                       59 tests, milliseconds, no GStreamer
+  tests/                       101 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
+                               from ../vmsserver-go against this controller over one store (skipped where there is no Go)
 ```
 
 ```bash
-python3 tests/run.py                                   # 59 tests
+python3 tests/run.py                                   # 101 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: holds cameras, rtsp://<box>:8554/<cam>; without: the fake actuator
 RECORDER_NAME=r-1 python3 -m vms recorder              # subscribes to the fan-out, writes rec/<cam>/ into the archive
 python3 -m vms worker                                  # no name: claims the first free slot — a lapsed one first
 ```
+
+## The Go port, and the one test that holds the two together
+
+[`../vmsserver-go/`](../vmsserver-go/README.md) is this package whole, in Go: the same platform, the same
+subsystem, the same decisions, 89 tests. Both ports are complete and both are kept complete — the claim
+this course makes is that the shape can be stated twice, in two languages, and come out the same, and a
+half-port would not state it.
+
+A green suite here and a green suite there prove each side self-consistent and **nothing at all** about
+whether the two agree. They meet only in the store, so a disagreement would be silent: a renamed
+heartbeat field, a slot row in another spelling, a float where the other side expects an int — nothing
+fails to compile, no suite goes red, and the first sign is a camera that is placed and never recorded.
+
+`tests/test_cross_go_worker.py` is the answer: the real Go binary against the real Python controller over
+one directory. The controller places a camera on a worker it has never spoken to and can only see — the
+heartbeat is the whole basis for the decision; the worker reads that placement out of its assignment row,
+takes the epoch and says so in a heartbeat Python parses back into the console's read model; a segment
+the Go recorder promotes is read by Python's `Manifest`, with the same path grammar, the same line and
+the same numbers; and a planned stop releases the slot *on purpose*, which is the row Lesson 22's rolling
+upgrade turns on.
+
+It skips where there is no Go toolchain and runs where there is. The first time it ran, it found one.
+Both loops heartbeat every ten seconds, and the first one went out only because `time.monotonic()` counts
+from boot, so `clock() - 0 >= 10` happened to be true on the first pass. Go's monotonic counts from
+process start, where it is false — the same loop, and a Go worker invisible to the controller for its
+first ten seconds, its cameras unplaced for as long. Both halves now send it before the loop, said out
+loud, and both suites keep it said.
 
 ## What each lesson's deliverable became
 

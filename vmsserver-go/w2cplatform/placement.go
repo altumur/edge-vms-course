@@ -1,10 +1,14 @@
 package w2cplatform
 
-// Where a unit GOES — the other half of unit.go, and the half a worker never needs. Everything here is
-// the controller's: the pool, the filters (constraint, spread_by), the preferences (near, home), the
-// tie-break, redistribution and rebalancing. A worker reads its assignment and does what it says; it has
-// no opinion about how the assignment was arrived at, which is why placement can live in one language
-// and the workers in another.
+// Where a unit GOES — the other half of unit.go. Everything here is the controller's: the pool, the
+// filters (constraint, spread_by), the preferences (near, home), the tie-break, redistribution and
+// rebalancing.
+//
+// The split from unit.go is the spec's own: a `unit` block says what a row IS — fields, types, defaults,
+// the id rule — and a `placement` block says where it goes. A worker needs the first and never reads the
+// second; it takes its assignment and does what it says, with no opinion about how the assignment was
+// arrived at. That is why a controller and a worker can meet in the store and nowhere else, and it is
+// worth being able to see in the file list.
 
 import (
 	"encoding/json"
