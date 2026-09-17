@@ -306,3 +306,55 @@ def test_the_tree_is_walked_once_a_pass_and_never_on_a_heartbeat():
     res.pass_()
     assert len(walks) == 2 and res.usage_at == box.wall()  # the pass is where the walk belongs
     assert res.heartbeat()["usage_at"] == box.wall()
+
+
+def test_the_schema_is_raised_after_the_upgrade_and_never_during_it():
+    """A rolling upgrade means old and new processes read the same rows for a while.
+    Adding a field is free; changing what one MEANS is a new schema number — and the
+    direction of every check here is what keeps the upgrade rolling.
+
+    A NEWER process against an older store is fine: it understands the old layout, and
+    that is the whole of an upgrade. An OLDER process against a newer store refuses to
+    start, loudly, rather than quietly dropping fields it does not know on its next
+    read-modify-write. And the version is raised once, by the operator, when everything
+    is new — never by the first new process, which would lock out every machine not yet
+    upgraded and turn a rolling upgrade into an outage."""
+    from w2cplatform.contract import (BUILD, SCHEMA, SCHEMA_KEY, Controller, SchemaTooNew,
+                                      Subsystem, builds, check_schema, schema_version)
+    box = Box()
+    ctl = Controller(Subsystem("vms"), box.vars, box.objects, wall=box.wall)
+    assert schema_version(box.vars) == SCHEMA          # absent: a fresh install is whatever this build is
+
+    box.vars.put(SCHEMA_KEY, {"version": str(SCHEMA + 1)}, cas=0)     # somebody upgraded the store
+    try:
+        Controller(Subsystem("vms"), box.vars, box.objects, wall=box.wall)
+        raise AssertionError("an old build started against a newer store")
+    except SchemaTooNew as e:
+        assert "understands" in str(e)
+    box.vars.put(SCHEMA_KEY, {"version": str(SCHEMA)}, cas=box.vars.get(SCHEMA_KEY)[1])
+    assert check_schema(box.vars) == SCHEMA
+
+    # every process says what it understands, and one scan finds them all — any subsystem, and the resource
+    from vms.worker import FakeActuator, VmsWorker
+    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-1")
+    w.heartbeat_once()
+    seen = builds(box.objects, box.wall())
+    assert seen["vms/w-1"]["schema"] == SCHEMA and seen["vms/w-1"]["build"] == BUILD and seen["vms/w-1"]["live"]
+
+    # raising is refused while anything live understands less: you cannot raise the store out from
+    # under a machine you forgot to upgrade
+    old = Heartbeat("w-2", box.wall(), [], {"server": "srv-2", "schema": SCHEMA, "build": "old"}).to_bytes()
+    box.objects.put("vms/w-2/heartbeat", old)
+    try:
+        ctl.set_schema(SCHEMA + 1); raise AssertionError("raised the schema over a running old build")
+    except SchemaTooNew as e:
+        assert "still running" in str(e) and "vms/w-2" in str(e)
+
+    box.wall.advance(60); w.heartbeat_once()            # w-2 is gone; w-1 is new and says so
+    box.objects.put("vms/w-1/heartbeat",
+                    Heartbeat("w-1", box.wall(), [], {"server": "srv-1", "schema": SCHEMA + 1}).to_bytes())
+    assert ctl.set_schema(SCHEMA + 1)["version"] == str(SCHEMA + 1)
+    try:
+        ctl.set_schema(SCHEMA); raise AssertionError("the schema went back")
+    except SchemaTooNew as e:
+        assert "does not go back" in str(e)

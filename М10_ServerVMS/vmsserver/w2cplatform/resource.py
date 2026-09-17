@@ -77,6 +77,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .contract import BUILD, SCHEMA, check_schema
 from .events import Bucket, buckets_under, parse_bucket, subsystems_under
 
 MIRROR_DIR = ".mirror"
@@ -229,6 +230,7 @@ class Resource:
                  wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0, space_probe=None):
         self.root, self.server, self.url, self.vars, self.objects = root, server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
+        check_schema(vars_)                                  # a build older than the store does not run at all
         self.space_probe = space_probe or disk_space         # a test cannot fill a disk
         self.last_usage: int | None = None                   # the tree walk's answer, refreshed by `pass_`
         self.usage_at = 0.0                                  # …and when it was taken: a stale number must say so
@@ -284,6 +286,7 @@ class Resource:
     # `mirrors` is how `restore` and the index find who holds copies.
     def heartbeat(self) -> dict:
         hb = {"server": self.server, "ts": self.wall(), "url": self.url,
+              "schema": SCHEMA, "build": BUILD,                      # what this build understands, and what it is
               "usage": self.usage_cached(), "usage_at": self.usage_at,
               "space": self.space(), "units": self.units(),
               "mirrors": {s: len(mirrored_buckets(self.root, s, self.bucket_seconds)) for s in mirrored_servers(self.root)}}

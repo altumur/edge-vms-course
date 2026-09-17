@@ -75,6 +75,57 @@ from .epoch import Lease, next_epoch
 from .objects import ObjectStore
 from .variables import Conflict, Variables
 
+# What layout of the store this build understands. A rolling upgrade means old and new processes read and
+# write the same rows for a while, so adding a field is free and changing what one MEANS is not: that is a
+# new number here, and a step the operator takes once everything is new.
+SCHEMA = 1
+SCHEMA_KEY = "platform/schema"
+BUILD = os.environ.get("BUILD", "dev")            # what a person reads on /schema; the machine reads SCHEMA
+
+
+class SchemaTooNew(Exception):
+    """This build does not understand the layout the store is already in."""
+
+
+# The store's layout version — absent means "whatever this build is", which is a fresh install.
+def schema_version(vars_) -> int:
+    items, _ = vars_.get(SCHEMA_KEY)
+    return int((items or {}).get("version", SCHEMA))
+
+
+# Called by every process that touches the store, at construction. A build older than the store refuses to
+# run rather than read rows it will misunderstand — loudly, in a restart loop the operator can see, and not
+# quietly with half the fields dropped on the next read-modify-write.
+#
+# Note which direction is checked. A NEWER process against an older store is fine and is the whole of a
+# rolling upgrade: it understands the old layout. The version is raised afterwards, once, by the operator —
+# never by the first new process to start, which would lock out every machine not yet upgraded and turn a
+# rolling upgrade into an outage.
+def check_schema(vars_) -> int:
+    have = schema_version(vars_)
+    if have > SCHEMA:
+        raise SchemaTooNew(f"store is at schema {have}; this build understands {SCHEMA}")
+    return have
+
+
+# Every process that heartbeats, with the schema it understands and the build it is. The keys are
+# `<subsystem>/<worker>/heartbeat` and `platform/resources/<server>/heartbeat`; nothing else ends that way,
+# so one scan answers "what is running in this cluster" across subsystems.
+def builds(objects, now: float, lost_after: float = 45.0) -> dict[str, dict]:
+    out = {}
+    for key in objects.list(""):
+        if not key.endswith("/heartbeat"):
+            continue
+        raw = objects.get(key)
+        if not raw:
+            continue
+        d = json.loads(raw)
+        ts = float(d.get("ts", 0))
+        out[key[: -len("/heartbeat")]] = {"schema": int(d.get("schema", SCHEMA)), "build": d.get("build", "?"),
+                                          "ts": ts, "live": now - ts <= lost_after}
+    return out
+
+
 # The one row that says which server is going away for a while. It is the platform's, not a subsystem's —
 # a machine carries several — and it holds ONE name: a rolling upgrade is one server at a time.
 DRAIN_KEY = "platform/drain"
@@ -229,6 +280,7 @@ class Controller:
     # Keeps the `Subsystem`, the two stores and a wall clock (tests inject a fake).
     def __init__(self, sub: Subsystem, vars_: Variables, objects: ObjectStore, wall=time.time):
         self.sub, self.vars, self.objects, self.wall = sub, vars_, objects, wall
+        check_schema(vars_)                       # a build older than the store does not run at all
 
     # The one write primitive: read `(items, idx)`, call `mutate(dict(items or {}))`; if it returns `None`
     # nothing is written and the current items are returned; otherwise `put(cas=idx)`; on `Conflict` re-read
@@ -355,6 +407,23 @@ class Controller:
             return {"server": server, "at": str(self.wall())}
         return self.write(DRAIN_KEY, mutate)
 
+    # The operator's one-way step, taken once every machine is new. Refused while anything LIVE says it
+    # understands less — which is checkable, because every process publishes the number in its heartbeat.
+    # That is the guard that makes the whole scheme safe: you cannot raise the store out from under a
+    # machine you forgot to upgrade.
+    def set_schema(self, version: int) -> dict:
+        now = self.wall()
+        behind = {n: b for n, b in builds(self.objects, now).items() if b["live"] and b["schema"] < version}
+        if behind:
+            raise SchemaTooNew(f"still running: {', '.join(sorted(behind))} — at schema "
+                               f"{min(b['schema'] for b in behind.values())}")
+        def mutate(items):
+            have = int((items or {}).get("version", SCHEMA))
+            if version < have:
+                raise SchemaTooNew(f"schema does not go back: {have} -> {version}")
+            return {"version": str(version), "at": str(now)}
+        return self.write(SCHEMA_KEY, mutate)
+
     def undrain(self) -> dict:
         """The server is back. Its workers become placeable again, and `ensure_home`
         starts bringing back what its rows name — one unit a pass."""
@@ -389,6 +458,7 @@ class Worker:
                  lease_ttl: float = 30.0, lease_margin: float = 5.0, clock=time.monotonic, wall=time.time,
                  instance: str | None = None, slot_ttl: float = 45.0):
         self.sub, self.vars, self.objects = sub, vars_, objects
+        check_schema(vars_)                       # a build older than the store does not run at all
         self.clock, self.wall = clock, wall
         self.lease_ttl, self.lease_margin = lease_ttl, lease_margin
         self.epochs: dict[str, int] = {}          # unit -> epoch this worker holds
@@ -523,6 +593,11 @@ class Worker:
     # VMS passes `server`, `labels`, `capacity`, `headroom`, `conflicts`, `started`, `previous_hb`, etc. as
     # `extra`.
     def heartbeat(self, status: list[dict], **extra) -> None:
+        # `schema` and `build` are on EVERY heartbeat, from here, so no subsystem has to remember them:
+        # the first says what layout this process understands (what `set_schema` is checked against), the
+        # second is for the person looking at a half-upgraded cluster.
+        extra.setdefault("schema", SCHEMA)
+        extra.setdefault("build", BUILD)
         self.objects.put(self.sub.heartbeat_key(self.name),
                          Heartbeat(self.name, self.wall(), status, extra).to_bytes())
 

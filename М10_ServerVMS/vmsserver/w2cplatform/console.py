@@ -85,7 +85,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from .contract import Assignment, DrainRefused, Heartbeat
+from .contract import SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew, builds, schema_version
 from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
@@ -603,6 +603,32 @@ class Mount:
     def describe(self) -> dict:
         return {"root": self.root.spec.name, "mounts": {n: c.describe() for n, c in self.mounts.items()}}
 
+    # `GET /schema` — what layout the store is in, what every live process understands, and whether the
+    # version can be raised; `PUT /schema?version=2` — raise it, once every machine is new.
+    #
+    # The two halves of an upgrade read side by side here: `/drain` is about one machine at a time,
+    # `/schema` is about the moment all of them are done. Raising early is the mistake the guard exists
+    # for — it would lock out whatever was not upgraded, which is exactly what a rolling upgrade is
+    # trying to avoid.
+    def schema_route(self, method: str, q: dict) -> tuple:
+        ctl = self.root.ctl
+        now = ctl.wall()
+        if method == "PUT":
+            try:
+                ctl.set_schema(int(q.get("version", 0)))
+            except SchemaTooNew as e:
+                return 409, {"error": str(e), "detail": str(e)}
+            except ValueError:
+                return 400, {"error": "a version is a number", "detail": "a version is a number"}
+        elif method != "GET":
+            return 404, {}
+        running = builds(ctl.objects, now)
+        live = {n: b for n, b in running.items() if b["live"]}
+        return 200, {"version": schema_version(ctl.vars), "understood": SCHEMA,
+                     "builds": sorted({b["build"] for b in live.values()}),
+                     "can_raise_to": min([b["schema"] for b in live.values()], default=SCHEMA),
+                     "processes": dict(sorted(running.items()))}
+
     # `GET /drain` — is it safe to stop the machine yet; `POST /drain?server=srv-a` — say it is going to
     # stop; `DELETE /drain` — it is back. The only route on the Mount itself rather than on a subsystem,
     # because a server carries several and the answer is `safe` only when every one of them says so.
@@ -647,6 +673,8 @@ class Mount:
                     return self._send(200, mnt.describe())
                 if u.path == "/drain":
                     return self._send(*mnt.drain_route(method, q))
+                if u.path == "/schema":
+                    return self._send(*mnt.schema_route(method, q))
                 con, path = mnt.resolve(u.path)
                 con.dispatch(self, method, path, q)
 
