@@ -30,7 +30,7 @@ Prints `health: <reason>` to stderr and exits 1. Every refusal goes through it, 
 - `val()` — awk lookup of one series by exact name in `$METRICS`, printing `MISSING` if absent.
 - `vms_workers_live` and `vms_cameras_running` must both exist, else "missing a required series".
 - `live >= 1`, else "no worker is live": the console is up and nobody is home.
-- `configured` — `GET $VMS_CONSOLE/cameras`, JSON, count of entries in `configured` whose `enabled` is not false (the М10 console's `/<rows>` reply is `{rows, configured}`; see `М10_ServerVMS/vmsserver/vms/console.py.md`). If curl or the JSON parse fails it is `MISSING` → fail "answered /metrics but not /cameras".
+- `configured` — `GET $VMS_CONSOLE/cameras`, JSON, count of entries in `configured` whose `enabled` is not false (the М10 console's `/<rows>` reply is `{rows, configured}`; see `vmsserver/vms/console.py.md`). If curl or the JSON parse fails it is `MISSING` → fail "answered /metrics but not /cameras".
 - `configured == 0` → pass and say so: no cameras, no footage to prove, rows 1–2 only. A stated product decision.
 - `running >= 1`, else "N camera(s) configured, none held".
 - `recordings` — `GET $VMS_CONSOLE/rec/recordings`, the recorder's rows through the console's mount (М10 Lesson 5); `0` → pass, "no recordings configured — footage test vacuous" (a camera may be watched and never recorded).

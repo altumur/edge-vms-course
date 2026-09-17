@@ -1,6 +1,6 @@
 # Containerfile — `localhost/clustervms:latest`: М10's image plus the `cluster` package, six entrypoints
 
-**Role.** The one image every Nomad job in `deploy/*.nomad.hcl` runs. It starts `FROM` М10's `localhost/vmsserver:latest` (see `../../../М10_ServerVMS/vmsserver/deploy/Containerfile.md`: Debian, Python, GStreamer, `w2cplatform/`, `vms/`, `gstvms/` under `/app`), so a Quadlet unit on the М9 box and a job on the cluster differ only in who starts the process. The header comment gives the build order — М10's image first, then this one from the `clustervms/` module directory — and the four verbs: `python3 -m cluster worker | controller | console | resource`. Built on each server (the jobspecs reference a `localhost/` image, so there is no registry; Podman pulls nothing).
+**Role.** The one image every Nomad job in `deploy/*.nomad.hcl` runs. It starts `FROM` М10's `localhost/vmsserver:latest` (see `../../../vmsserver/deploy/Containerfile.md`: Debian, Python, GStreamer, `w2cplatform/`, `vms/`, `gstvms/` under `/app`), so a Quadlet unit on the М9 box and a job on the cluster differ only in who starts the process. The header comment gives the build order — М10's image first, then this one from the `clustervms/` module directory — and the four verbs: `python3 -m cluster worker | controller | console | resource`. Built on each server (the jobspecs reference a `localhost/` image, so there is no registry; Podman pulls nothing).
 
 ## Stanza by stanza
 

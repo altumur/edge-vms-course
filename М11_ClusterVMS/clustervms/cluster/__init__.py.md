@@ -7,7 +7,7 @@
 - The search loop — tries three candidates in order and appends the **first** existing directory to `sys.path`:
   1. `$VMSSERVER_PATH` — set to `/app` by `deploy/Containerfile`, where М10's image already holds `vms/`, `w2cplatform/` and `gstvms/`;
   2. `<clustervms>/vmsserver` — a sibling checkout or symlink beside `cluster/`;
-  3. `<notes>/М10_ServerVMS/vmsserver` — the course layout, two directories up from `clustervms/`, which is what the tests use in this tree.
+  3. `<notes>/vmsserver` — the course layout, two directories up from `clustervms/`, which is what the tests use in this tree. (Before 17 September 2026 the package sat at `М10_ServerVMS/vmsserver`; that candidate is still tried, last, so an old checkout keeps working.)
   It **appends** rather than inserts (the comment says why): `clustervms/tests/` must shadow `vmsserver/tests/` when both are importable as `tests`.
 
 ## Notes

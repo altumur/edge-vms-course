@@ -120,7 +120,7 @@ What that means concretely:
 
 ## Lessons
 
-*Eleven lessons, written — [the index](README.md); the code is [`vmsserver/`](vmsserver/README.md). Each builds one artifact; the sketch below is the original five-lesson plan, kept, with the recorder added where the split put it (15 September 2026).*
+*Eleven lessons, written — [the index](README.md); the code is [`vmsserver/`](../vmsserver/README.md). Each builds one artifact; the sketch below is the original five-lesson plan, kept, with the recorder added where the split put it (15 September 2026).*
 
 ### Lesson 1 — The subsystem contract
 

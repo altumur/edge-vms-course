@@ -106,7 +106,7 @@ The cloud VMS spec forbade a database outright. The appliance needs one, and und
 - The reconcile loop, built against a fake actuator first: desired persisted, actual derived, `observed_revision >= revision` as the only test of applied
 - Fifty GStreamer pipelines in one Python process — the GIL boundary demonstrated, `watchdog` for stall detection, and where Python stops being the right answer
 
-### М10 — ServerVMS: the platform's shape on one server · 5 lessons · [written](./М10_ServerVMS/README.md) · [design](./М10_ServerVMS/module-design.md) · [code](./М10_ServerVMS/vmsserver/README.md)
+### М10 — ServerVMS: the platform's shape on one server · 5 lessons · [written](./М10_ServerVMS/README.md) · [design](./М10_ServerVMS/module-design.md) · [code](./vmsserver/README.md)
 
 The module that rebuilds М9's recorder on the decision М11 arrived at last — and retires the word, because what is on a server needs none — — **workers, resources, one controller** — and does it on a single box first, so the shape can be prototyped without a scheduler, without KVS and without a database. Three things are built from the GStreamer end: `driverpacksrc`, a source element that plays files whose names stand in for RTSP addresses; `archivesink`, a local archive on the spool's discipline; and the two processes every subsystem will give the platform — a **controller** that is the only writer of configuration in the cluster and a **worker** that runs pipelines and nothing else.
 
@@ -124,7 +124,7 @@ The only module where getting it wrong corrupts customer data rather than merely
 - **Nomad decides how many workers and where.** The worker job carries a `scaling` policy on the workers' own load; the Nomad Autoscaler (MPL-2.0) moves `count`; the controller has no Nomad client. Scale-in releases a slot and the controller redistributes; a crash releases nothing and the controller waits
 - **Leases, epochs and the zombie writer.** Dead, partitioned and paused are indistinguishable, and the design must be correct without resolving that. Fencing happens **at the resource, not the controller** — the epoch per camera is in every path — and one layer earlier at the slot, which is what makes Nomad's duplicate-index bug harmless
 - **The cluster directory is the assignment.** One scan of `vms/workers/*` answers *where is camera 7*, in one raft, strongly consistent. Placement under label constraints by the workers' own capacity, the stability rule, the server in the reason, and why consistent hashing is the reflexive wrong answer
-- **`clustervms/` is built on М10's `vmsserver/`**, importing the contract, the controller, the worker and the archive unchanged; `vmsserver-go/` and `clustervms-go/` are both modules in Go with the same relationship (a `replace` directive instead of `sys.path`), 70 tests, and the measurement
+- **`clustervms/` is built on `vmsserver/`**, importing the contract, the controller, the worker and the archive unchanged; `vmsserver/worker/` is the Go half of the same package — the two workers, run on a cluster as jobs, against the Python controller they meet in the store
 
 ### М12 — DomainVMS: several clusters, and the top of the product · 8 lessons · [written](./М12_DomainVMS/README.md) · [design](./М12_DomainVMS/module-design.md) · [code](./М12_DomainVMS/domainvms/README.md)
 

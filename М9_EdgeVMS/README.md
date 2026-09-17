@@ -115,7 +115,7 @@ Two corrections worth knowing before you start, both found by running the thing 
 cd edgevms/recorder && python3 tests/run.py       # 27 tests, no database, no GStreamer, milliseconds
 ```
 
-The production language question — Python for the course, Go and C++ for the product — is argued where it is measured: [`vmsserver-go/`](../М10_ServerVMS/vmsserver-go/README.md) and [`clustervms-go/`](../М11_ClusterVMS/clustervms-go/README.md) port М10 and М11 whole with the same seventy tests, and the reconcile loop written here is what ports unchanged.
+The production language question — Python for the course, Go and C++ for the product — is argued where it is measured, and the answer turned out to be neither language for everything: [`vmsserver/worker/`](../vmsserver/worker/README.md) is the two workers in Go, 51 tests, and the reconcile loop written here is what ports unchanged; placement, the console and the resource stay Python, because between them and a worker there is no call — only the store. [`vmsserver/reference-go/`](../vmsserver/reference-go/README.md) keeps the whole-module port that came first.
 
 ### The stand-ins, and where they get collected
 

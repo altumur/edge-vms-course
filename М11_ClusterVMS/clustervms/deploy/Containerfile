@@ -3,7 +3,7 @@
 # Quadlet unit runs on the М9 box, with `cluster` on top — so a job here and
 # a unit there differ only in who starts the process. Build М10's first,
 # then this one from the module directory:
-#   podman build -f ../../М10_ServerVMS/vmsserver/deploy/Containerfile -t localhost/vmsserver:latest ../../М10_ServerVMS/vmsserver
+#   podman build -f ../../vmsserver/deploy/Containerfile -t localhost/vmsserver:latest ../../vmsserver
 #   podman build -f deploy/Containerfile -t localhost/clustervms:latest .
 # Six entrypoints: python3 -m cluster worker | controller | recorder | reccontroller | console | resource.
 FROM localhost/vmsserver:latest

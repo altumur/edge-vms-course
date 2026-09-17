@@ -1,6 +1,6 @@
 # vmsworker.nomad.hcl — the worker as a service job: `count = N`, the autoscaler moves N, each allocation claims its slot by CAS
 
-**Role.** Lesson 2 (and 4 for `disconnect`). The jobspec for `python3 -m cluster worker` (see `../cluster/__main__.py.md`, `../cluster/worker.py.md`) — DriverPack as a service job, the cluster's replacement for М10's `vmsworker@.container` template (`../../../М10_ServerVMS/vmsserver/deploy/vmsworker@.container.md`). The header's rule: `count = N` and *nothing in the VMS decides N* — the operator sets the bounds, the Nomad Autoscaler moves `count` from the workers' own load, the controller never does. Each allocation claims slot `w-<NOMAD_ALLOC_INDEX>` by CAS on `vms/slots/w-<n>`: the index is the preference, the Variable is the proof. Its token is `vmsworker-policy.hcl`.
+**Role.** Lesson 2 (and 4 for `disconnect`). The jobspec for `python3 -m cluster worker` (see `../cluster/__main__.py.md`, `../cluster/worker.py.md`) — DriverPack as a service job, the cluster's replacement for М10's `vmsworker@.container` template (`../../../vmsserver/deploy/vmsworker@.container.md`). The header's rule: `count = N` and *nothing in the VMS decides N* — the operator sets the bounds, the Nomad Autoscaler moves `count` from the workers' own load, the controller never does. Each allocation claims slot `w-<NOMAD_ALLOC_INDEX>` by CAS on `vms/slots/w-<n>`: the index is the preference, the Variable is the proof. Its token is `vmsworker-policy.hcl`.
 
 ## Stanza by stanza
 

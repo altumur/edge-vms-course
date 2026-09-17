@@ -1,0 +1,30 @@
+# The recorder: the FOURTH subsystem, and the only one placed on top of the archive.
+# A unit is one camera's recording, named by the camera: rec/recordings/<cam>. The recorder
+# subscribes to the camera's worker (live_shm on the same server, live_url elsewhere), takes
+# rec/epoch/<cam>, and writes rec/<cam>/e<epoch>/ on ITS server's archive. Created by the operator
+# (the page's Record toggle): a camera exists without a recording, and records when a row is here.
+name: rec
+unit:
+  rows: recordings                   # rec/recordings/<cam>
+  id: cam                            # one recording per camera, named by it
+  fields:
+    cam:            {type: string, required: true}   # the VMS camera id
+    retention_days: {type: int,    default: 30}      # media: the recorder's own policy, on its manifest
+    enabled:        {type: bool,   default: true}
+    labels:         {type: list}                     # where it may run: a recorder whose server has these labels
+    home:           {type: string}                   # the server whose archive holds it: the operator's answer to "where does this footage live"
+placement:
+  capacity:   {from: capacity, fallback: 50}         # recordings a recorder can write — its own number: disks and NIC
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   resource                               # the only subsystem that must be where the archive is
+  servers:    distinct                               # one recorder per server carries recordings (the console may say shared)
+  tie_break:  most-free-capacity
+  # No near. A recorder does not follow a camera around: it is the one thing here that CANNOT move, being
+  # pinned to disks (requires: resource above), and a fan-out can be read from any server over RTSP. So the
+  # recording names the disk and the camera comes to it (near: rec in vms.subsystem.yaml).
+  home:       home                                   # the row's field naming the server whose archive holds it; a preference, never a filter
+  rebalance:  {dead_band: 0.10}
+snapshot: [cam, retention_days, enabled, labels, home]
+console:
+  running: recordings_running          # rec_recordings_running: recordings whose pipeline is writing
