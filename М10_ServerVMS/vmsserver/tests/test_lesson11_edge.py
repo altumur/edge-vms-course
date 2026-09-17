@@ -521,7 +521,102 @@ def test_backfill_stops_while_the_disk_is_over_the_mark():
     assert r.backfill(budget=1, now=now, force=True)
 
 
-# -- home: the server a camera belongs to ------------------------------------------------------------
+# -- home: the server a RECORDING belongs to ---------------------------------------------------------
+
+def _rec_home_box():
+    """Two recorders on two servers, each with a resource answering (`rec` requires one)."""
+    import json
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars, box.objects, wall=box.wall)
+    for w, server in (("r-1", "srv-a"), ("r-2", "srv-b")):
+        _rec_alive(box, w, server)
+    return box, rec
+
+
+def _rec_alive(box, worker, server, labels=()):
+    import json
+    box.objects.put(REC_SPEC.sub.heartbeat_key(worker),
+                    Heartbeat(worker, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50,
+                                                       "labels": ",".join(labels)}).to_bytes())
+    box.objects.put(f"platform/resources/{server}/heartbeat",
+                    json.dumps({"server": server, "ts": box.wall(), "url": f"http://{server}", "units": {}}).encode())
+
+
+def test_a_recording_prefers_its_home_and_is_written_anywhere_when_it_is_down():
+    """The one thing `home` must not be is a label.
+
+    A label is a filter: with `labels: [srv-a]` a recording whose server is down becomes
+    unplaceable, and the recording stops — at exactly the moment it must not. `home` is a
+    preference: at home when home is there, anywhere when it is not, and back, one a pass,
+    when it returns. The footage written meanwhile stays where it was written until that
+    server needs the room (`vms/space.py`)."""
+    box, rec = _rec_home_box()
+    rec.create({"cam": "1", "home": "srv-a"})
+    rec.ensure_placed()
+    assert rec.where("1") == "r-1" and "at home on srv-a" in rec.placement("1").reason
+
+    box.wall.advance(60); _rec_alive(box, "r-2", "srv-b")          # srv-a goes away, with its resource
+    rec.move("1", "r-2", "srv-a gone")
+    rec.create({"cam": "2", "home": "srv-a"})                      # a NEW recording of srv-a's, while it is down
+    rec.ensure_placed()
+    assert rec.where("2") == "r-2" and "away from home srv-a" in rec.placement("2").reason
+    assert rec.unplaceable() == []                                 # the point: it records, it is not "unplaceable"
+
+    _rec_alive(box, "r-1", "srv-a"); _rec_alive(box, "r-2", "srv-b")
+    assert rec.ensure_home(1) == [("1", "r-2", "r-1")] and rec.where("1") == "r-1" and rec.where("2") == "r-2"
+    assert "home is srv-a" in rec.placement("1").reason
+    assert rec.ensure_home(1) == [("2", "r-2", "r-1")] and rec.where("2") == "r-1"
+    assert rec.ensure_home(1) == []                                # everybody home: nothing to say
+
+
+def test_a_recording_with_no_home_is_never_moved_by_it():
+    """Every recording until an operator says otherwise. An empty field is not a server name,
+    and `near: vms` still decides where a homeless one is PLACED — it just never drags it back
+    later, which is what would make two subsystems chase each other for ever."""
+    box, rec = _rec_home_box()
+    rec.create({"cam": "1"})
+    rec.ensure_placed()
+    where = rec.where("1")
+    assert "home" not in rec.placement("1").reason
+    assert rec.ensure_home(5) == [] and rec.where("1") == where
+
+
+def test_the_filters_still_beat_the_preference():
+    """`home` orders what is already eligible; it never widens it. A recording whose labels no
+    recorder on its home server can serve is placed where they CAN be served, and `ensure_home`
+    leaves it there — a preference that could overrule a filter would put a recording on a
+    server whose disks the operator ruled out."""
+    box, rec = _rec_home_box()
+    _rec_alive(box, "r-1", "srv-a", labels=["disks:slow"])
+    _rec_alive(box, "r-2", "srv-b", labels=["disks:fast"])
+    rec.create({"cam": "1", "home": "srv-a", "labels": ["disks:fast"]})
+    rec.ensure_placed()
+    assert rec.where("1") == "r-2" and "away from home srv-a" in rec.placement("1").reason
+    assert rec.ensure_home(5) == [] and rec.where("1") == "r-2"
+
+
+def test_the_camera_follows_its_recording_and_not_the_other_way():
+    """Which of the pair is the anchor, and why it has to be the recording.
+
+    A recording writes to a disk and a disk does not move; a fan-out can be read from any
+    server over RTSP. So the recording names a home and the camera says `home: near` — it
+    goes where its recording is. Both pointing at each other would be worse than either:
+    with no anchor, every pass moves each towards where the other was, and they swap."""
+    box, ctl, con, con_vars = _box()
+    _worker_on(box, "w-a", "srv-a"); _worker_on(box, "w-b", "srv-b")
+    box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),               # the recording of camera 1 is on srv-b
+                    Heartbeat("r-1", box.wall(), [{"id": "1", "phase": "running"}], {"server": "srv-b"}).to_bytes())
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
+    ctl.ensure_placed()
+    assert ctl.where(1) == "w-b" and "beside r-1 holding it" in ctl.placement(1).reason
+
+    box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),               # the recording goes home to srv-a
+                    Heartbeat("r-1", box.wall(), [], {"server": "srv-b"}).to_bytes())
+    box.objects.put(REC_SPEC.sub.heartbeat_key("r-2"),
+                    Heartbeat("r-2", box.wall(), [{"id": "1", "phase": "running"}], {"server": "srv-a"}).to_bytes())
+    assert ctl.ensure_home(1) == [(1, "w-b", "w-a")]                 # and the camera follows it
+    assert "it follows rec onto srv-a" in ctl.placement(1).reason
+
 
 def _worker_on(box, name, server, labels=(), capacity=50):
     w = VmsWorker(name, box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
@@ -530,57 +625,27 @@ def _worker_on(box, name, server, labels=(), capacity=50):
     return w
 
 
-def test_a_camera_prefers_its_home_and_records_anywhere_when_it_is_down():
-    """The one thing `home` must not be is a label.
+def test_only_one_of_a_following_pair_may_be_the_follower():
+    """The asymmetry is the design, so it is asserted and not merely commented.
 
-    A label is a filter: with `labels: [srv-a]` a camera whose server is down becomes
-    unplaceable, and the recording stops — at exactly the moment it must not. `home` is a
-    preference: placed at home when home is there, placed anywhere when it is not, and
-    brought back, one camera a pass, when it returns."""
-    box, ctl, con, con_vars = _box()
-    a, b = _worker_on(box, "w-a", "srv-a"), _worker_on(box, "w-b", "srv-b")
-    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4", "home": "srv-a"})
-    ctl.ensure_placed()
-    assert ctl.where(1) == "w-a" and "at home on srv-a" in ctl.placement(1).reason
+    `home: near` says "wherever the thing I follow is". Two subsystems that each said it
+    would have no anchor: every pass moves each towards where the other WAS, and they swap
+    places instead of meeting. One of the pair must name a real home. In the VMS that is the
+    recording — it writes to a disk, and a disk does not move."""
+    assert SPEC.near == "rec" and SPEC.home == "near"          # the camera follows
+    assert REC_SPEC.home == "home" and REC_SPEC.home != "near"  # the recording is the anchor
+    assert REC_SPEC.near == "vms"                               # …and still prefers the holder when it has no home
 
-    # srv-a goes away: its worker stops heartbeating, and the camera goes where it can
-    box.wall.advance(60); b.heartbeat_once()
-    ctl.move(1, "w-b", "srv-a gone")
-    assert ctl.where(1) == "w-b"
-    con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4", "home": "srv-a"})
-    ctl.ensure_placed()                                    # a NEW camera of srv-a's, placed while it is down
-    assert ctl.where(2) == "w-b" and "away from home srv-a" in ctl.placement(2).reason
-    assert ctl.unplaceable() == []                         # the whole point: it records, it is not "unplaceable"
-
-    # srv-a comes back. One camera a pass — a move is a new epoch and a seam in the recording
-    a.heartbeat_once(); b.heartbeat_once()
-    assert ctl.ensure_home(1) == [(1, "w-b", "w-a")] and ctl.where(1) == "w-a" and ctl.where(2) == "w-b"
-    assert "home is srv-a" in ctl.placement(1).reason
-    assert ctl.ensure_home(1) == [(2, "w-b", "w-a")] and ctl.where(2) == "w-a"
-    assert ctl.ensure_home(1) == []                        # everybody home: nothing to say
-
-
-def test_a_camera_with_no_home_is_never_moved_by_it():
-    """Every camera until an operator says otherwise. An empty field is not a server name."""
-    box, ctl, con, con_vars = _box()
-    _worker_on(box, "w-a", "srv-a"); _worker_on(box, "w-b", "srv-b")
-    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
-    ctl.ensure_placed()
-    where = ctl.where(1)
-    assert "home" not in ctl.placement(1).reason
-    assert ctl.ensure_home(5) == [] and ctl.where(1) == where
-
-
-def test_the_filters_still_beat_the_preference():
-    """`home` orders what is already eligible; it never widens it. A camera whose labels no
-    worker on its home server can serve is placed where its labels CAN be served, and
-    `ensure_home` leaves it there — a preference that could overrule a filter would put a
-    camera on a server that cannot reach it."""
-    box, ctl, con, con_vars = _box()
-    _worker_on(box, "w-a", "srv-a", labels=["vlan:a"])
-    _worker_on(box, "w-b", "srv-b", labels=["vlan:b"])
-    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4",
-                       "home": "srv-a", "labels": ["vlan:b"]})     # home says srv-a, the switch says otherwise
-    ctl.ensure_placed()
-    assert ctl.where(1) == "w-b" and "away from home srv-a" in ctl.placement(1).reason
-    assert ctl.ensure_home(5) == [] and ctl.where(1) == "w-b"
+    # a spec that follows nothing cannot say it follows
+    from w2cplatform.spec import SubsystemSpec
+    bad = {"name": "x", "unit": {"fields": {}}, "placement": {"home": "near"}}
+    try:
+        SubsystemSpec.from_dict(bad); raise AssertionError("accepted home: near with no near")
+    except ValueError as e:
+        assert "needs a near to follow" in str(e)
+    # and a home that names no field is a typo, not an empty home
+    try:
+        SubsystemSpec.from_dict({"name": "x", "unit": {"fields": {}}, "placement": {"home": "hom"}})
+        raise AssertionError("accepted a home naming no field")
+    except ValueError as e:
+        assert "names no field" in str(e)

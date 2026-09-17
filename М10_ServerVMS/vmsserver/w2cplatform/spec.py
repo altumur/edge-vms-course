@@ -170,11 +170,12 @@ class SubsystemSpec:
     servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
     near: str = "none"            # a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
-    # `home: <field>` — the server named in that field of the unit's own row is where it prefers to run. A
-    # PREFERENCE and not a label: a label is a filter, and a unit whose home is down would become
-    # unplaceable — which is the one thing it must not be, because the home being down is exactly when the
-    # work has to continue somewhere else. It is topology, not taste: the camera is plugged into a switch
-    # beside that server. Coming home is then not a procedure but a consequence, bounded by `ensure_home`.
+    # `home: <field>` — the server named in that field of the unit's own row is where it prefers to run;
+    # `home: near` — wherever the subsystem this one follows is. A PREFERENCE and not a label: a label is a
+    # filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
+    # because the home being down is exactly when the work has to continue somewhere else. It is topology,
+    # not taste: the recording's home is the disk it is written to. Coming home is then not a procedure but
+    # a consequence, bounded by `ensure_home`.
     home: str = ""
     # `spread_by: <field>` — units sharing a value of that field go on DIFFERENT servers. Unlike `near` this
     # is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
@@ -197,7 +198,7 @@ class SubsystemSpec:
                 f.default = f.parse(f.default) if f.type != "string" else str(f.default)
         derived = [Derived(x["row"], dict(x.get("items", {})), x.get("on_delete")) for x in unit.get("derived", [])]
         cap = pl.get("capacity", {}) or {}
-        return cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
+        spec = cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
@@ -206,6 +207,11 @@ class SubsystemSpec:
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
+        if spec.home == "near" and spec.near == "none":
+            raise ValueError(f"spec {spec.name}: home: near needs a near to follow")
+        if spec.home and spec.home != "near" and spec.home not in fields:
+            raise ValueError(f"spec {spec.name}: home names no field: {spec.home!r}")
+        return spec
 
     # `yaml.safe_load` then `from_dict`. PyYAML is imported lazily so the rest of the platform has no
     # dependency on it.
@@ -622,25 +628,27 @@ class SpecController(Controller):
                     return w, hb.extra.get("server", "?")
         return None
 
-    # Where this unit belongs, for `ensure_home`: the server its `home` field names, or — for a subsystem
-    # that has no `home` of its own but follows another with `near` — the server holding what it follows.
+    # Where this unit belongs, for `ensure_home`. `home` is either the name of a field on the row — the
+    # server an operator named — or the literal `near`, meaning "wherever the thing I follow is".
     #
-    # The second half is what makes a subsystem come home behind the one it follows. `near` alone is
-    # applied once, when a unit is placed, and a recorder that was moved while a server was down keeps
-    # writing where it landed for ever: reading the camera's fan-out over RTSP works, so nothing is broken
-    # and nothing ever moves back. The recording's home is wherever its camera is — it has no server of
-    # its own to name, and does not need one.
+    # The second form is what makes one subsystem come home BEHIND another. `near` alone is applied once,
+    # when a unit is placed: a camera whose worker was moved while a server was down keeps being held
+    # there for ever, because reading its fan-out over RTSP works and nothing is broken.
+    #
+    # Exactly one of a following pair may say `home: near`, and that is not a detail. Two subsystems that
+    # each follow the other have no anchor: every pass moves each towards where the other was, and they
+    # swap places instead of meeting. The anchor is the one with a real home — for the VMS, the recording,
+    # because it writes to a disk and a disk does not move.
     def home_for(self, row: dict) -> str:
-        if self.spec.home:
-            return str(row.get(self.spec.home, "") or "")
-        near = self.holder_near(row["id"]) if self.spec.near != "none" else None
-        return near[1] if near and near[1] != "?" else ""
+        if self.spec.home == "near":
+            near = self.holder_near(row["id"]) if self.spec.near != "none" else None
+            return near[1] if near and near[1] != "?" else ""
+        return str(row.get(self.spec.home, "") or "") if self.spec.home else ""
 
-    # `home: <field>`: the server that field of this unit's row names, or "". Read from the row, so an
-    # operator changes a camera's home the way they change its name.
+    # The same, addressed by id — what `_pick` needs before a unit is placed anywhere.
     def home_of(self, uid) -> str:
-        if not self.spec.home:
-            return ""
+        if not self.spec.home or self.spec.home == "near":
+            return ""                                     # the `near` form is resolved by `_pick`, which has the holder
         row = self.unit(uid)
         return str(row.get(self.spec.home, "") or "") if row else ""
 
@@ -652,22 +660,23 @@ class SpecController(Controller):
     # Home before near, because they disagree exactly when a server is down: `near` would pin a recorder to
     # whichever server picked up the camera, and nothing would ever come back.
     def _pick(self, pool: list[str], uid) -> tuple[str | None, int, str]:
-        home = self.home_of(uid)
+        near = self.holder_near(uid)
+        home = near[1] if self.spec.home == "near" and near else self.home_of(uid)
+        follows = self.spec.home == "near"
         if home:
             best, free = self._best([w for w in pool if self.server_of(w) == home])
             if best is not None:
-                return best, free, f", at home on {home}"
-        near = self.holder_near(uid)
-        if near is not None:
+                return best, free, (f", beside {near[0]} holding it" if follows else f", at home on {home}")
+        if near is not None and not follows:
             beside = [w for w in pool if self.server_of(w) == near[1]]
             best, free = self._best(beside)
             if best is not None:
                 return best, free, f", beside {near[0]} holding it" + (f" (home {home} has no room)" if home else "")
         best, free = self._best(pool)
         note = ""
-        if best is not None and near is not None:
+        if best is not None and near is not None and self.server_of(best) != near[1]:
             note = f", away from {near[0]} on {near[1]} (no room there)"
-        if best is not None and home and self.server_of(best) != home:
+        if best is not None and home and not follows and self.server_of(best) != home:
             note += f"; away from home {home}"
         return best, free, note
 
@@ -811,7 +820,7 @@ class SpecController(Controller):
     def ensure_home(self, budget: int = 1, workers: list[str] | None = None) -> list[tuple]:
         """Units away from the home their row names — or, with `near` and no `home`, away
         from the server holding what they follow — moved back, `budget` a pass."""
-        if budget <= 0 or (not self.spec.home and self.spec.near == "none"):
+        if budget <= 0 or not self.spec.home:
             return []
         moves, pool = [], self._pool(workers)
         for row in self.units():
@@ -824,7 +833,7 @@ class SpecController(Controller):
             best, free = self._best([w for w in self.eligible(row, pool) if self.server_of(w) == home])
             if best is None:
                 continue                                  # home is not back, or has no room: stay put, quietly
-            why = "home is" if self.spec.home else f"it follows {self.spec.near} onto"
+            why = f"it follows {self.spec.near} onto" if self.spec.home == "near" else "home is"
             self.move(uid, best, f"{why} {home}; most free capacity ({free}); on {home}")
             moves.append((uid, pl.worker, best))
         return moves

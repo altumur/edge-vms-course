@@ -264,11 +264,11 @@ def test_nothing_is_deleted_on_a_204_alone():
 def test_the_round_trip_a_server_leaves_comes_back_and_takes_its_footage_with_it():
     """The scenario end to end, with nothing in it that knows it is a scenario.
 
-    srv-a goes away; the recording continues on srv-b. srv-a comes back; the camera goes
-    home because its row names one, and the recording follows the camera because it has no
-    home of its own and does not need one. The footage written on srv-b stays there — it is
-    playable and nobody is short of room — until srv-b's own disk goes over its mark, and
-    then srv-b sends it to where the recording lives now.
+    srv-a goes away; the recording continues on srv-b. srv-a comes back; the recording goes
+    home because its row names the server whose archive holds it, and the camera follows the
+    recording, because the recording writes to a disk and a disk does not move. The footage
+    written on srv-b stays there — it is playable and nobody is short of room — until srv-b's
+    own disk goes over its mark, and then srv-b sends it to where the recording lives now.
 
     Four mechanisms, no coordinator, and not one of them mentions an outage."""
     from cluster.controller import ClusterController
@@ -279,14 +279,14 @@ def test_the_round_trip_a_server_leaves_comes_back_and_takes_its_footage_with_it
     ctl = ClusterController(c.vars, c.objects, wall=c.wall)
     rec = SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall)
     rs = {s: _hb(c, s, free=500_000) for s in c.servers}
-    ctl.create_camera({"source": "driverpack://file/1.mp4", "home": "srv-a"})
-    rec.create({"cam": "1"})
+    ctl.create_camera({"source": "driverpack://file/1.mp4"})
+    rec.create({"cam": "1", "home": "srv-a"})            # the operator names the disk the footage lives on
 
     # at home: the camera on srv-a, the recording beside it because `near: vms`
     a = c.worker(1, "srv-a"); a.heartbeat_once(); ctl.ensure_placed(); a.reconcile_once(); a.heartbeat_once()
     ra = c.recorder(1, "srv-a"); ra.heartbeat_once(); rec.ensure_placed(); ra.reconcile_once(); ra.heartbeat_once()
-    assert "at home on srv-a" in ctl.placement(1).reason
-    assert rec.where("1") == "r-1" and "beside w-1 holding it" in rec.placement("1").reason
+    assert rec.where("1") == "r-1" and "at home on srv-a" in rec.placement("1").reason
+    assert ctl.where(1) == "w-1"
 
     # srv-a leaves. Lesson 4 has the failover itself; what matters here is that the work
     # continues on srv-b — the recording moves because its spec requires a resource and
@@ -308,11 +308,12 @@ def test_the_round_trip_a_server_leaves_comes_back_and_takes_its_footage_with_it
     # srv-a comes back, and nothing is asked to "recover"
     for r in rs.values(): r.heartbeat()
     a.heartbeat_once(); ra.heartbeat_once()
-    assert ctl.ensure_home(1) == [(1, "w-2", "w-1")]       # the camera, because its row names a home
-    a.reconcile_once(); a.heartbeat_once()
-    moves = rec.ensure_home(1)                             # the recording, because it follows the camera
+    moves = rec.ensure_home(1)                             # the recording, because its row names a home
     assert [(m[1], m[2]) for m in moves] == [("r-2", "r-1")]
-    assert "it follows vms onto srv-a" in rec.placement("1").reason
+    assert "home is srv-a" in rec.placement("1").reason
+    ra.reconcile_once(); ra.heartbeat_once()
+    assert ctl.ensure_home(1) == [(1, "w-2", "w-1")]        # the camera, because it follows the recording
+    assert "it follows rec onto srv-a" in ctl.placement(1).reason
 
     # and the footage on srv-b: nothing happens while srv-b has room
     bres = cluster_resource(c.servers["srv-b"].resource, "srv-b", "http://srv-b", c.vars, c.objects,
