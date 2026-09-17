@@ -178,14 +178,18 @@ class SubsystemSpec:
     servers: str = "shared"
     tie_break: str = "most-free-capacity"
     near: str = "none"
+    spread_by: str = ""
+    home: str = ""
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
     running_gauge: str = "units_running"
 ```
 
-Шестнадцать полей, и у **каждого** есть значение по умолчанию, кроме имени. Это и есть определение того, что подсистема обязана сказать о себе: только имя. Всё остальное — уточнения.
+Восемнадцать полей, и у **каждого** есть значение по умолчанию, кроме имени. Это и есть определение того, что подсистема обязана сказать о себе: только имя. Всё остальное — уточнения.
 
-Первые пять — про единицу: префикс, как называются строки, чем опознаётся, какие поля, какие производные строки. Следующие восемь — про размещение, и о них уроки 12 и 13: откуда брать ёмкость, чем ограничивать, требуется ли ресурс, один воркер на сервер или несколько, чем разрывать ничью, рядом с кем стоять, какой мёртвой зоной глушить перебалансировку. Последние два — что уезжает наружу и как зовут метрику.
+Первые пять — про единицу: префикс, как называются строки, чем опознаётся, какие поля, какие производные строки. Следующие десять — про размещение, и о них уроки 12 и 13: откуда брать ёмкость, чем ограничивать, требуется ли ресурс, один воркер на сервер или несколько, чем разрывать ничью, рядом с кем стоять, что разносить по разным серверам, где единица живёт, какой мёртвой зоной глушить перебалансировку. Последние два — что уезжает наружу и как зовут метрику.
+
+Три из этих десяти стоят рядом и различаются тем, **что** они делают с пулом воркеров, а не тем, про что они. `constraint` и `spread_by` — фильтры: они пул сужают, и могут оставить его пустым. `near` и `home` — предпочтения: они пул упорядочивают, и оставить его пустым не могут. Урок 12 показывает, почему дом обязан быть предпочтением, а разнесение копий — фильтром.
 
 Читая этот список, стоит заметить, чего в нём **нет**: ни одного поля про то, что подсистема делает. Ни типа работы, ни расписания, ни зависимостей между единицами. Спецификация описывает единицу как **объект учёта**, и ничего — как объект действия. Действие целиком принадлежит воркеру, и платформа о нём не спрашивает.
 
@@ -202,17 +206,24 @@ class SubsystemSpec:
                 f.default = f.parse(f.default) if f.type != "string" else str(f.default)
         derived = [Derived(x["row"], dict(x.get("items", {})), x.get("on_delete")) for x in unit.get("derived", [])]
         cap = pl.get("capacity", {}) or {}
-        return cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
+        spec = cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")),
                    servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
-                   near=str(pl.get("near", "none")), dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
+                   near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
+                   home=str(pl.get("home", "") or ""),
+                   dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or list(fields)),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
+        if spec.home == "near" and spec.near == "none":
+            raise ValueError(f"spec {spec.name}: home: near needs a near to follow")
+        if spec.home and spec.home != "near" and spec.home not in fields:
+            raise ValueError(f"spec {spec.name}: home names no field: {spec.home!r}")
+        return spec
 ```
 
-Длинно и однообразно — и в этой однообразности три решения.
+Длинно и однообразно — и в этой однообразности три решения. Плюс две проверки в конце: следовать не за кем и дом, который не называет поля, — это опечатки, и пусть они падают при запуске, а не тихо превращаются в «дома нет».
 
 **Снисходительность.** `d.get("unit", {})`, `pl.get("capacity", {}) or {}`, `unit.get("derived", [])`. Отсутствующая секция — это не ошибка, а «ничего особенного». YAML из трёх строк (`name`, `unit.rows`, одно поле) — валидная спецификация. Обратите внимание на `or {}`: в YAML `capacity:` без значения даёт `None`, а не пустой словарь, и без `or {}` следующая строка упала бы.
 
