@@ -570,9 +570,8 @@ def test_a_recording_prefers_its_home_and_is_written_anywhere_when_it_is_down():
 
 
 def test_a_recording_with_no_home_is_never_moved_by_it():
-    """Every recording until an operator says otherwise. An empty field is not a server name,
-    and `near: vms` still decides where a homeless one is PLACED — it just never drags it back
-    later, which is what would make two subsystems chase each other for ever."""
+    """Every recording until an operator says otherwise. An empty field is not a server name:
+    a homeless recording is placed on the disk with the most room, and stays there."""
     box, rec = _rec_home_box()
     rec.create({"cam": "1"})
     rec.ensure_placed()
@@ -634,7 +633,7 @@ def test_only_one_of_a_following_pair_may_be_the_follower():
     recording — it writes to a disk, and a disk does not move."""
     assert SPEC.near == "rec" and SPEC.home == "near"          # the camera follows
     assert REC_SPEC.home == "home" and REC_SPEC.home != "near"  # the recording is the anchor
-    assert REC_SPEC.near == "vms"                               # …and still prefers the holder when it has no home
+    assert REC_SPEC.near == "none"                              # …and follows nothing: it is pinned to disks
 
     # a spec that follows nothing cannot say it follows
     from w2cplatform.spec import SubsystemSpec

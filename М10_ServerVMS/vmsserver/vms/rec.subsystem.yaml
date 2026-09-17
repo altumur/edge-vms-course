@@ -28,14 +28,18 @@ placement:
   requires:   resource                               # the only subsystem that must be where the archive is
   servers:    distinct                               # the default policy: one recorder per server carries recordings (the console may say shared)
   tie_break:  most-free-capacity
-  near:       vms                                    # an affinity: prefer the recorder on the server whose worker holds the camera — it then reads the
-                                                     # worker's shared-memory branch instead of its RTSP fan-out; elsewhere when that server has no room
-  # the row's own `home` wins over that affinity, and unlike it is MAINTAINED: `_pick` prefers a recorder
-  # there when placing, and `ensure_home(budget)` brings back, one recording a pass, what is written
-  # somewhere else — so a server returning from an outage takes its recordings back without anybody
-  # running a procedure. A preference, never a filter: a recording whose home is down is written
-  # elsewhere, which is the whole reason the home may be down. The filters (`labels-subset`, `spread_by`,
-  # `requires: resource`) still win — this only orders what is already eligible.
+  # No `near`. A recorder does not follow a camera around: it is the one thing here that CANNOT move, being
+  # pinned to disks (`requires: resource` above), and a fan-out can be read from any server over RTSP. So
+  # the recording names the disk and the camera comes to it — `near: rec` in `vms.subsystem.yaml`. The pair
+  # ends up on one server either way and the recorder reads shared memory; what changes is which of the two
+  # decides, and it has to be the one with the disks.
+  #
+  # `home` is a preference, never a filter: a recording whose home is down is written elsewhere, which is
+  # the whole reason the home may be down. It is MAINTAINED, unlike a bare affinity — `_pick` prefers a
+  # recorder there when placing, `ensure_home(budget)` brings back, one recording a pass, what is written
+  # somewhere else, so a server returning from an outage takes its recordings back without anybody running
+  # a procedure. The filters (`labels-subset`, `spread_by`, `requires: resource`) still win: this only
+  # orders what is already eligible. With no home, the pick is the disk with the most room.
   home:       home                                   # the row's field naming the server whose archive holds it
   rebalance:  {dead_band: 0.10}
 snapshot: [cam, retention_days, enabled, labels, home]

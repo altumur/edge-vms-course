@@ -42,7 +42,8 @@ def _recorder(box, name="r-1", server="srv-1", capacity=50):
 def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_out():
     box, ctl, con, rec_con, rec_ctl, w = _box()
     assert REC_SPEC.requires == "resource" and rec_ctl.policy() == {"servers": "distinct"} and ctl.policy() == {"servers": "shared"}   # the recorder is the one that must be where the disks are, one per server; workers are not
-    assert REC_SPEC.near == "vms"                                                                  # and it prefers the server whose worker holds the camera: an affinity, not a filter
+    assert REC_SPEC.near == "none" and REC_SPEC.home == "home"                                      # it follows nothing; it is the one pinned to disks, and its row names which
+    assert SPEC.near == "rec" and SPEC.home == "near"                                               # the camera is the one that can move, so it is the one that follows
     r = _recorder(box); r2 = _recorder(box, "r-2", "srv-2", capacity=1)                            # two servers with archives; the camera's worker is on srv-1
     assert r.name == "r-1" and r.SUB.name == "rec" and box.vars.list("rec/slots/") == ["rec/slots/r-1", "rec/slots/r-2"]
     # the operator records camera 1: a row under rec/, the console's token; placement is the rec controller's pass
@@ -53,7 +54,7 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     except Forbidden:
         pass
     pl = rec_ctl.ensure_placed()[0]
-    assert pl.worker == "r-1" and pl.reason.endswith("on srv-1, whose resource is unknown, beside w-1 holding it")   # the affinity, and the reason says so
+    assert pl.worker == "r-1" and pl.reason.endswith("on srv-1, whose resource is unknown")         # placed by the disks, not by where the camera happens to be
     # the recorder's pass: the pipeline is built from the worker's tee — its shared-memory branch, since the worker is on THIS
     # server (no RTSP hop, no fan-out process on the recording path) — under the RECORDER's epoch
     assert r.reconcile_once() == [("start", "1")]
@@ -82,17 +83,30 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     box.clock.advance(10)
     assert r.reconcile_once() == [("start", "1")] and r.actuator.started["1"]["source"] == "rtsp://srv-2:8554/1" and r.actuator.started["1"]["via"] == "rtsp"
     assert r.actuator.started["1"]["epoch"] == 2 and rec_ctl.where("1") == "r-1" and w2.epochs == {"1": 2}   # the recording did not move; its source did
-    # two more cameras, both held on srv-2 by w-2. The affinity puts the first recording beside w-2 — r-2 reads shared memory
-    # there; r-2 (capacity 1) is then full, so the second goes to r-1 and reads the fan-out — the reason says where it would rather be
+    # two more cameras, both held on srv-2 by w-2. The recordings go where their DISKS are — the operator
+    # named one srv-2 and the other srv-1 — and each camera then comes to its recording, so both recorders
+    # read shared memory. The recorder never chases the camera: it is the one thing here that cannot move.
     con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4"}); con.create_camera({"name": "dock", "source": "driverpack://file/dock.mp4"})
     ctl.ensure_placed(); ctl.move(2, "w-2", "test"); ctl.move(3, "w-2", "test")
     w2.reconcile_once(); w2.heartbeat_once(); w.reconcile_once(); w.heartbeat_once()
-    rec_con.create({"cam": "2"}); rec_con.create({"cam": "3"})
+    rec_con.create({"cam": "2", "home": "srv-2"}); rec_con.create({"cam": "3", "home": "srv-1"})
     pl2, pl3 = rec_ctl.ensure_placed()[-2:]                                                        # (the pass returns every placement, camera 1's first)
     assert (pl2.worker, pl3.worker) == ("r-2", "r-1")
-    assert pl2.reason.endswith("on srv-2, whose resource is unknown, beside w-2 holding it") and pl3.reason.endswith("on srv-1, whose resource is unknown, away from w-2 on srv-2 (no room there)")
-    assert r2.reconcile_once() == [("start", "2")] and r2.actuator.started["2"]["via"] == "shm" and r2.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"
-    assert r.reconcile_once() == [("start", "3")] and r.actuator.started["3"]["via"] == "rtsp" and r.actuator.started["3"]["source"] == "rtsp://srv-2:8554/3"
+    assert pl2.reason.endswith("on srv-2, whose resource is unknown, at home on srv-2")
+    assert pl3.reason.endswith("on srv-1, whose resource is unknown, at home on srv-1")
+    r2.reconcile_once(); r2.heartbeat_once(); r.reconcile_once(); r.heartbeat_once()
+    # and now the cameras come to their recordings — camera 1 back to srv-1, where its recording never moved,
+    # and camera 3 with it; camera 2 is already on srv-2 where r-2 writes it
+    assert ctl.ensure_home(2) == [(1, "w-2", "w-1"), (3, "w-2", "w-1")]
+    assert "it follows rec onto srv-1" in ctl.placement(3).reason
+    w.reconcile_once(); w.heartbeat_once(); w2.reconcile_once(); w2.heartbeat_once()
+    box.clock.advance(10)
+    assert r2.reconcile_once() == [] and r2.actuator.started["2"]["via"] == "shm" and r2.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"
+    assert sorted(r.resubscribe()) == ["1", "3"]                                                   # both sources are on this server again
+    box.clock.advance(10)                                                                          # past the restart's backoff
+    assert r.reconcile_once() == [("start", "1"), ("start", "3")]
+    for cid in ("1", "3"):                                                                         # the network hop is gone: shared memory again
+        assert r.actuator.started[cid]["via"] == "shm" and r.actuator.started[cid]["source"] == f"shm:///run/vms/{cid}.shm"
 
 
 def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someone_does():
