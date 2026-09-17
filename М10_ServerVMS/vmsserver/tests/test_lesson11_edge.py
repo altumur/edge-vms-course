@@ -329,7 +329,7 @@ def test_two_recordings_of_one_camera_are_a_yaml_edit():
     """Not a rehearsal for a change: the change itself, run against the real classes.
 
     The spec below is `rec.subsystem.yaml` with three lines different. Everything it drives —
-    SpecController, RecWorker, the archive tree, the console's timeline — is the shipped code,
+    SpecController, the archive tree, the console's timeline — is the shipped code,
     imported unchanged. If any of it still assumed "a recording is named by its camera", this
     test would not pass, and until the unit-keyed tree it would not have."""
     import yaml
