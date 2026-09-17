@@ -17,7 +17,7 @@ from vms.archive import ArchiveResource
 from vms.config import DET_SPEC, LIVE_SPEC, SPEC
 from vms.console import serve
 from vms.controller import VmsController
-from vms.detector import DetWorker
+from vms.detworker import DetWorker
 from vms.resource import vms_resource, vms_routes
 from vms.worker import FakeActuator, VmsWorker
 from tests.conftest import Box

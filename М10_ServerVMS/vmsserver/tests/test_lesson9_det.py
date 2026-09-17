@@ -14,7 +14,7 @@ from w2cplatform.spec import SpecController
 from w2cplatform.variables import Forbidden
 from vms.config import DET_SPEC, LIVE_SPEC, SPEC
 from vms.controller import VmsController
-from vms.detector import DetWorker, FakeModel
+from vms.detworker import DetWorker, FakeModel
 from vms.worker import FakeActuator, VmsWorker
 from vms.console import serve
 from tests.conftest import Box

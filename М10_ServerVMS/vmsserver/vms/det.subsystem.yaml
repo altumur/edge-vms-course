@@ -1,7 +1,7 @@
 # Detectors, as the platform sees them: the THIRD subsystem. Its unit is one
 # model on one camera — "line-crossing on camera 7" — named by the operator
 # from the camera's page (`7-linecross`); its workers are detector workers
-# (vms/detector.py) on GPU-labelled servers, capacity in STREAMS a GPU can
+# (vms/detworker.py) on GPU-labelled servers, capacity in STREAMS a GPU can
 # decode and infer on; its events are buckets under det/<unit>/e<epoch>/ on
 # the resource, on the camera's timeline like any other subsystem's. Same
 # controller class, same console class, same ACL shape as the VMS.

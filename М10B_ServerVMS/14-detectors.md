@@ -1,7 +1,7 @@
 # Урок 14 — Детекторы
 
 **Модуль:** М10B — ServerVMS (часть вторая)
-**Вы напишете:** `vms/det.subsystem.yaml` — третью подсистему; `vms/detector.py` — `FakeModel`, `DetWorker` (`rtp_source`, `unit_row`, `reconcile_once`, `_stop`, `headroom`, `heartbeat_once`, `run`).
+**Вы напишете:** `vms/det.subsystem.yaml` — третью подсистему; `vms/detworker.py` — `FakeModel`, `DetWorker` (`rtp_source`, `unit_row`, `reconcile_once`, `_stop`, `headroom`, `heartbeat_once`, `run`).
 **Время:** ~70 минут.
 
 ## Зачем этот урок

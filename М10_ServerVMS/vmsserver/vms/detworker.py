@@ -28,7 +28,7 @@ from w2cplatform.variables import Variables
 from .config import DET_SPEC
 
 DET = DET_SPEC.sub
-log = logging.getLogger("vms.detector")
+log = logging.getLogger("vms.detworker")
 
 
 # A model: `observe(now) -> [ (kind, fields) ]` per pass; `close()`. The fake fires one event every `every`th

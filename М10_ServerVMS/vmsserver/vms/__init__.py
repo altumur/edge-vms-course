@@ -6,7 +6,7 @@
     controller.py   vmscontroller — the only writer of vms/*: cameras, assignment, placement
     console.py      the one-box console: the platform's SpecConsole over the VMS spec, plus /timeline, /segment and the WHEP door
     gateway.py      the live gateway — the second subsystem's worker: a camera's fan-out as the unit, viewers as the capacity
-    detector.py     the detector worker — the second subsystem's worker: a model on a camera as the unit, streams as the capacity
+    detworker.py    the detector worker — the second subsystem's worker: a model on a camera as the unit, streams as the capacity
     det.subsystem.yaml    the third subsystem, as a spec
     live.subsystem.yaml   the second subsystem, as a spec
 

@@ -224,7 +224,7 @@ def detcontroller() -> None:
 def detworker() -> None:
     """A detector worker: a worker of the `det` subsystem. Its token writes its slot, its epochs and its
     heartbeat; its events go into det/<unit>/e<epoch>/ on this server's resource."""
-    from .detector import DetWorker
+    from .detworker import DetWorker
     vars_ = open_vars(CONFIG_URL, writer="detworker", acl={"detworker": ["det/epoch/*", "det/slots/*"]})
     d = DetWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")), capacity=int(os.environ.get("CAPACITY", "8")),
                   archive_root=os.environ.get("ARCHIVE", "/data/archive"))
