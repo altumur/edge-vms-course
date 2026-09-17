@@ -622,6 +622,20 @@ class SpecController(Controller):
                     return w, hb.extra.get("server", "?")
         return None
 
+    # Where this unit belongs, for `ensure_home`: the server its `home` field names, or — for a subsystem
+    # that has no `home` of its own but follows another with `near` — the server holding what it follows.
+    #
+    # The second half is what makes a subsystem come home behind the one it follows. `near` alone is
+    # applied once, when a unit is placed, and a recorder that was moved while a server was down keeps
+    # writing where it landed for ever: reading the camera's fan-out over RTSP works, so nothing is broken
+    # and nothing ever moves back. The recording's home is wherever its camera is — it has no server of
+    # its own to name, and does not need one.
+    def home_for(self, row: dict) -> str:
+        if self.spec.home:
+            return str(row.get(self.spec.home, "") or "")
+        near = self.holder_near(row["id"]) if self.spec.near != "none" else None
+        return near[1] if near and near[1] != "?" else ""
+
     # `home: <field>`: the server that field of this unit's row names, or "". Read from the row, so an
     # operator changes a camera's home the way they change its name.
     def home_of(self, uid) -> str:
@@ -795,21 +809,23 @@ class SpecController(Controller):
     # `spread_by` or by its labels stays where it is. A home with no live worker, or no room, is not an
     # error and says nothing — the unit is where it can be, which is the point of a preference.
     def ensure_home(self, budget: int = 1, workers: list[str] | None = None) -> list[tuple]:
-        """Units away from the home their row names, moved back, `budget` a pass."""
-        if not self.spec.home or budget <= 0:
+        """Units away from the home their row names — or, with `near` and no `home`, away
+        from the server holding what they follow — moved back, `budget` a pass."""
+        if budget <= 0 or (not self.spec.home and self.spec.near == "none"):
             return []
         moves, pool = [], self._pool(workers)
         for row in self.units():
             if len(moves) >= budget:
                 break
-            uid, home = row["id"], str(row.get(self.spec.home, "") or "")
+            uid, home = row["id"], self.home_for(row)
             pl = self.placement(uid)
             if not home or pl is None or self.server_of(pl.worker) == home:
                 continue
             best, free = self._best([w for w in self.eligible(row, pool) if self.server_of(w) == home])
             if best is None:
                 continue                                  # home is not back, or has no room: stay put, quietly
-            self.move(uid, best, f"home is {home}; most free capacity ({free}); on {home}")
+            why = "home is" if self.spec.home else f"it follows {self.spec.near} onto"
+            self.move(uid, best, f"{why} {home}; most free capacity ({free}); on {home}")
             moves.append((uid, pl.worker, best))
         return moves
 

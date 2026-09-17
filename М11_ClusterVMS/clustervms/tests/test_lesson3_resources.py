@@ -259,3 +259,70 @@ def test_nothing_is_deleted_on_a_204_alone():
     assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 4     # still here, file and line
     assert all(os.path.isfile(os.path.join(c.servers["srv-b"].archive, s.path))
                for s in Manifest(c.servers["srv-b"].archive, "1").read())
+
+
+def test_the_round_trip_a_server_leaves_comes_back_and_takes_its_footage_with_it():
+    """The scenario end to end, with nothing in it that knows it is a scenario.
+
+    srv-a goes away; the recording continues on srv-b. srv-a comes back; the camera goes
+    home because its row names one, and the recording follows the camera because it has no
+    home of its own and does not need one. The footage written on srv-b stays there — it is
+    playable and nobody is short of room — until srv-b's own disk goes over its mark, and
+    then srv-b sends it to where the recording lives now.
+
+    Four mechanisms, no coordinator, and not one of them mentions an outage."""
+    from cluster.controller import ClusterController
+    from vms.config import REC_SPEC
+    from vms.worker import FakeActuator
+    c = Cluster()
+    c.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75", "min_days": "3"}, cas=0)
+    ctl = ClusterController(c.vars, c.objects, wall=c.wall)
+    rec = SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall)
+    rs = {s: _hb(c, s, free=500_000) for s in c.servers}
+    ctl.create_camera({"source": "driverpack://file/1.mp4", "home": "srv-a"})
+    rec.create({"cam": "1"})
+
+    # at home: the camera on srv-a, the recording beside it because `near: vms`
+    a = c.worker(1, "srv-a"); a.heartbeat_once(); ctl.ensure_placed(); a.reconcile_once(); a.heartbeat_once()
+    ra = c.recorder(1, "srv-a"); ra.heartbeat_once(); rec.ensure_placed(); ra.reconcile_once(); ra.heartbeat_once()
+    assert "at home on srv-a" in ctl.placement(1).reason
+    assert rec.where("1") == "r-1" and "beside w-1 holding it" in rec.placement("1").reason
+
+    # srv-a leaves. Lesson 4 has the failover itself; what matters here is that the work
+    # continues on srv-b — the recording moves because its spec requires a resource and
+    # srv-a's has gone silent.
+    b = c.worker(2, "srv-b"); rb = c.recorder(2, "srv-b")
+    for _ in range(2):                                     # two silences from one server: a fact about the server
+        c.wall.advance(2 * 45 + 3)
+        b.heartbeat_once(); rb.heartbeat_once()
+        rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    ctl.move(1, "w-2", "srv-a gone")                       # the camera: Lesson 4's business
+    assert rec.gone_servers() == {"r-1": "srv-a"}
+    assert [(m[1], m[2]) for m in rec.redistribute()] == [("r-1", "r-2")]
+    b.reconcile_once(); b.heartbeat_once(); rb.reconcile_once(); rb.heartbeat_once()
+    assert rec.where("1") == "r-2"
+    t = c.wall()
+    for i in range(4):                                     # four segments written on srv-b, under its epoch
+        _segment(c.servers["srv-b"], "1", 2, t - 4000 + i * 600, size=50_000)
+
+    # srv-a comes back, and nothing is asked to "recover"
+    for r in rs.values(): r.heartbeat()
+    a.heartbeat_once(); ra.heartbeat_once()
+    assert ctl.ensure_home(1) == [(1, "w-2", "w-1")]       # the camera, because its row names a home
+    a.reconcile_once(); a.heartbeat_once()
+    moves = rec.ensure_home(1)                             # the recording, because it follows the camera
+    assert [(m[1], m[2]) for m in moves] == [("r-2", "r-1")]
+    assert "it follows vms onto srv-a" in rec.placement("1").reason
+
+    # and the footage on srv-b: nothing happens while srv-b has room
+    bres = cluster_resource(c.servers["srv-b"].resource, "srv-b", "http://srv-b", c.vars, c.objects,
+                            wall=c.wall, peers=DirPeers(c))
+    bres.space_probe = lambda root: (1_000_000, 500_000)
+    assert bres.relieve()["space"] == "ok"
+    assert len(Manifest(c.servers["srv-b"].archive, "1").read()) == 4
+
+    bres.space_probe = lambda root: (1_000_000, 100_000)   # until srv-b needs the room
+    rep = bres.relieve()
+    assert rep["rec.evacuated"] == 3 and rep["short"] == 0
+    assert len(Manifest(c.servers["srv-a"].archive, "1").read()) == 3
+    assert [s.epoch for s in Manifest(c.servers["srv-a"].archive, "1").read()] == [2, 2, 2]
