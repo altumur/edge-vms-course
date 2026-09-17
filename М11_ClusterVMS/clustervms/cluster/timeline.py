@@ -23,12 +23,12 @@ class ManifestReader:
     def __init__(self, timeout: float = 3.0):
         self.timeout = timeout
 
-    def read(self, url: str, cam: int) -> list[Segment]:
-        with urllib.request.urlopen(f"{url}/manifest/{cam}", timeout=self.timeout) as r:
+    def read(self, url: str, unit) -> list[Segment]:
+        with urllib.request.urlopen(f"{url}/manifest/{unit}", timeout=self.timeout) as r:
             return [Segment.from_line(l) for l in r.read().decode().splitlines() if l.strip()]
 
 
-def merged_timeline(resources: dict[str, dict], reader, cam: int, t0: float, t1: float,
+def merged_timeline(resources: dict[str, dict], reader, cam, t0: float, t1: float,
                     current_epoch: int | None = None, now: float | None = None, lost_after: float = 45.0) -> dict:
     """`resources` is resources_seen(); returns {segments: [...], unreachable: [server...]}."""
     now = time.time() if now is None else now

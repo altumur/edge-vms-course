@@ -231,9 +231,12 @@ class FakeActuator:
 
 # The live branch's RTP port for a camera on its worker's server: deterministic, so a gateway needs only the
 # heartbeat (server + this) to subscribe, and nobody keeps a port table.
-def live_port(cid: int) -> int:
+def live_port(cid) -> int:
     from .config import LIVE_PORT_BASE
-    return LIVE_PORT_BASE + int(cid)
+    try:                                         # a port is a number, and this is the only place an id must be one:
+        return LIVE_PORT_BASE + int(cid)         # a named unit gets the base port and the fan-out has none to publish
+    except ValueError:
+        return LIVE_PORT_BASE
 
 
 # `WORKER_NAME` if set; else `w-<NOMAD_ALLOC_INDEX>`; else `None` — claim whatever is free, a lapsed slot
@@ -426,8 +429,11 @@ class VmsWorker(Worker):
         assigned = set(self.assignment().units)
         for unit in lost:
             if unit not in assigned:
-                self.actuator("stop", {"id": int(unit)})
-                self.reconciler.actual.pop(int(unit), None)
+                # `lost` names units the way the lease does — as text. The reconciler keys by the row's id,
+                # which the spec parsed (a number for cameras, a name for recordings): match it, never cast.
+                uid = next((k for k in self.reconciler.actual if str(k) == unit), unit)
+                self.actuator("stop", {"id": uid})
+                self.reconciler.actual.pop(uid, None)
                 self.release(unit)
             else:
                 self.fence(f"camera {unit}: a newer epoch was issued to another instance of {self.name}")

@@ -96,7 +96,7 @@ class LiveFront:
     # gateway has not heartbeaten; else the gateway's 201 + SDP answer, with Location rewritten to go back
     # through this console (`/whep/session/<id>?gateway=<g>`).
     def offer(self, cam: str, sdp: str, labels: list[str]):
-        if self.ctl.camera(int(cam)) is None:
+        if self.ctl.camera(cam) is None:
             return 404, {"error": f"no camera {cam}", "detail": f"no camera {cam}"}
         if self.live.unit(cam) is None:
             try:
@@ -229,7 +229,7 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
             send_file(handler, p, "video/mp4")
             return ()                                                     # served in full by send_file
         if path.startswith("/timeline/"):
-            cid = int(path.rsplit("/", 1)[1])
+            cid = path.rsplit("/", 1)[1]                                      # a camera, as text: everything below compares as text
             t0, t1 = float(q.get("from", 0)), float(q.get("to", 1e12))
             ours = [sp for unit in recordings_of(rec_ctl, cid)                    # every recording of this camera…
                     for sp in Manifest(archive.root, unit).timeline(t0, t1)]      # …merged into one timeline

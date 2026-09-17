@@ -7,8 +7,8 @@ package vms
 // It has no controller: it has a policy pass on a timer, a heartbeat, its
 // HTTP, and the event database over its own tree. What the VMS adds:
 //
-//	ArchivePolicy    registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<cam>
-//	ResourceRoutes   GET /manifest/<cam>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
+//	ArchivePolicy    registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<unit>
+//	ResourceRoutes   GET /manifest/<unit>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
 //
 // The platform's part — platform/resources/<server>/heartbeat, GET /events
 // from the EventDatabase, /buckets, /mirrored, PUT /mirror — is not the
@@ -33,12 +33,12 @@ func ResourceRoutes(archive *ArchiveResource) p.Extra {
 		pth := req.URL.Path
 		switch {
 		case strings.HasPrefix(pth, "/manifest/"):
-			cam, err := strconv.Atoi(pth[strings.LastIndex(pth, "/")+1:])
-			if err != nil {
+			unit := pth[strings.LastIndex(pth, "/")+1:] // a UNIT, verbatim: "7" today, "7-backup" the day the spec says so
+			if unit == "" {
 				w.WriteHeader(404)
 				return true
 			}
-			for _, l := range NewManifest(root, strconv.Itoa(cam)).Lines() {
+			for _, l := range NewManifest(root, unit).Lines() {
 				io.WriteString(w, l+"\n")
 			}
 			return true

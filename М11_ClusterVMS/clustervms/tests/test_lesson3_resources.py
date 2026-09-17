@@ -85,3 +85,24 @@ def test_a_worker_with_no_assignment_invents_nothing():
     w.heartbeat_once()
     hb = json.loads(c.objects.get("vms/w-5/heartbeat"))
     assert hb["status"] == [] and hb["headroom"] == 50
+
+
+def test_the_timeline_route_asks_for_a_unit_and_a_unit_is_named():
+    """`/timeline/<id>` names a RECORDING, and a recording is named, not numbered — the
+    day `rec.subsystem.yaml` says `id: name`. Nothing here needs that day to have come:
+    the route reads the id, the heartbeat lists the directory, the manifest is per unit.
+    A route that parses the id as a number answers 500 to the first `7-backup`."""
+    from cluster.console import cluster_routes
+    c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall)
+    t = c.wall()
+    _segment(c.servers["srv-a"], "7-main", 1, t - 1200)          # two recordings of one camera…
+    _segment(c.servers["srv-b"], "7-backup", 1, t - 600)         # …on two servers, each its own tree
+    for s, srv in c.servers.items():
+        cluster_resource(srv.resource, s, f"http://{s}", c.vars, c.objects, wall=c.wall).heartbeat()
+    assert resources_seen(c.objects)["srv-b"]["units"] == {"rec": ["7-backup"]}
+
+    routes = cluster_routes(ctl, DirReader(c))
+    status, body = routes(None, "GET", "/timeline/7-backup", {"from": t - 2000, "to": t})
+    assert status == 200 and [s["server"] for s in body["segments"]] == ["srv-b"]
+    status, body = routes(None, "GET", "/timeline/7-main", {"from": t - 2000, "to": t})
+    assert status == 200 and [s["server"] for s in body["segments"]] == ["srv-a"]

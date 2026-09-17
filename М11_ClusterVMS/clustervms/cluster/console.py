@@ -45,7 +45,7 @@ def cluster_routes(ctl: ClusterController, reader=None):
         if method != "GET":
             return None
         if path.startswith("/timeline/"):
-            cid = int(path.rsplit("/", 1)[1])
+            cid = path.rsplit("/", 1)[1]                                   # the recording's id, verbatim — a recording is named
             cur = current_epoch(ctl.vars, f"rec/epoch/{cid}") or None      # the RECORDING's epoch: footage is the recorder's, fenced by its writer
             return 200, merged_timeline(resources_seen(ctl.objects), reader, cid,
                                         float(q.get("from", 0)), float(q.get("to", 1e12)), cur, ctl.wall())

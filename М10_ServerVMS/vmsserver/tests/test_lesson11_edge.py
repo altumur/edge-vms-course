@@ -347,7 +347,9 @@ def test_two_recordings_of_one_camera_are_a_yaml_edit():
         box.objects.put(spec.sub.heartbeat_key(w),
                         Heartbeat(w, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50}).to_bytes())
 
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"]))
     con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})     # camera 1
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()                     # somebody holds it: the recorder has a source
     rec.create({"name": "1-main", "cam": "1"})
     rec.create({"name": "1-backup", "cam": "1"})
     rec.ensure_placed()
@@ -374,3 +376,62 @@ def test_two_recordings_of_one_camera_are_a_yaml_edit():
     # retention is per recording, because the row is per recording
     rec.update("1-backup", {"retention_days": 1})
     assert rec.unit("1-main")["retention_days"] == 30 and rec.unit("1-backup")["retention_days"] == 1
+
+
+class _NamedRec(RecWorker):
+    """A recorder over the two-copies spec: its units are NAMED, not numbered."""
+    parse_row = staticmethod(lambda items: _named_spec().row(items))
+
+
+def _named_spec():
+    import yaml
+    from w2cplatform.spec import SubsystemSpec
+    return SubsystemSpec.from_dict(yaml.safe_load(TWO_COPIES_YAML))
+
+
+def test_a_named_unit_reaches_the_places_that_still_assumed_a_number():
+    """Three reads and one write kept `int(...)` on a unit id after the tree stopped assuming one.
+
+    Each of them is unreachable while `id: cam` holds — which is exactly why they survived the
+    change and would have failed on the first `1-backup`. Here the two-copies spec is in force,
+    so they are all reachable, and each one answers instead of raising."""
+    from vms.console import vms_routes as console_routes
+    from vms.resource import vms_routes as resource_routes
+
+    box, ctl, con, con_vars = _box()
+    spec = _named_spec()
+    rec = SpecController(spec, box.vars, box.objects, wall=box.wall)
+    for w, server in (("r-1", "srv-1"), ("r-2", "srv-2")):
+        box.objects.put(spec.sub.heartbeat_key(w),
+                        Heartbeat(w, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50}).to_bytes())
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"]))
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})     # camera 1
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()                     # somebody holds it: the recorder has a source
+    rec.create({"name": "1-main", "cam": "1"})
+    rec.create({"name": "1-backup", "cam": "1"})
+    rec.ensure_placed()
+
+    t = box.wall()
+    for unit in ("1-main", "1-backup"):
+        p = segment_path(box.archive, unit, 1, datetime.fromtimestamp(t - 600, timezone.utc))
+        os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"x")
+        Manifest(box.archive, unit).append(Segment(unit, 1, t - 600, t, os.path.relpath(p, box.archive), 1))
+    archive = ArchiveResource(box.spool, box.archive, wall=box.wall)
+
+    # 1. the resource's manifest: what a peer and М11's console read to draw a timeline
+    status, body = resource_routes(archive)("/manifest/1-backup", {})
+    assert status == 200 and '"unit": "1-backup"' in body.decode()
+
+    # 2. the console's timeline: the CAMERA's id, and both of its recordings under it
+    status, spans = console_routes(archive, None, ctl, rec)(None, "GET", "/timeline/1", {})
+    assert status == 200 and len(spans) == 2
+
+    # 3. the lost lease: a reassignment names the unit the way the lease does — as text
+    r1 = _NamedRec("r-1", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-1")
+    r1.reconcile_once()
+    held = sorted(r1.reconciler.actual)
+    assert held and all(not str(u).isdigit() for u in held)                # the point: nothing here is a number
+    rec.move(held[0], "r-2", "operator asked")
+    _NamedRec("r-2", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-2").reconcile_once()
+    assert r1.lease_pass() == [held[0]] and r1.recording_allowed        # released, not fenced — and no ValueError
+    assert held[0] not in r1.reconciler.actual

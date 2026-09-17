@@ -5,8 +5,8 @@ the server exists; on a box it is `python3 -m vms resource`
 no controller: it has a policy pass on a timer, a heartbeat, its HTTP, and
 the event database over its own tree. What the VMS adds is its part:
 
-    ArchivePolicy   registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<cam>
-    vms_routes      GET /manifest/<cam>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
+    ArchivePolicy   registered as the "rec" hook: the recorder's — repair the manifests, retain media by rec/recordings/<unit>
+    vms_routes      GET /manifest/<unit>  the manifest's lines;  GET /segment/<path>  the bytes, Range honoured
 
     platform/resources/<server>/heartbeat   {server, ts, url, usage, units, mirrors} — how the console finds it
     GET <url>/events?from&to&cam&kind&subsystem&unit   the platform's: this resource's EventDatabase
@@ -34,7 +34,7 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 # None.
 #
 # ### `vms_routes(archive) -> extra(path, headers)`
-# The VMS's reads on the resource, plugged into the platform's server: `GET /manifest/<cam>` returns the
+# The VMS's reads on the resource, plugged into the platform's server: `GET /manifest/<unit>` returns the
 # manifest's raw lines; `GET /segment/<path>` the bytes of one promoted segment with `Range` honoured (206 +
 # `Content-Range`), 404 for `..` or a missing file. М11's console proxies `/segment` to this.
 #
@@ -66,8 +66,8 @@ def vms_routes(archive: ArchiveResource):
 
     def extra(path: str, headers):
         if path.startswith("/manifest/"):
-            cam = int(path.rsplit("/", 1)[1])
-            return 200, "".join(l for l in Manifest(root, cam)._lines()).encode()
+            unit = path.rsplit("/", 1)[1]                 # a UNIT, verbatim: "7" today, "7-backup" the day the spec says so
+            return 200, "".join(l for l in Manifest(root, unit)._lines()).encode()
         if path.startswith("/segment/"):
             rel = path[len("/segment/"):]
             p = os.path.join(root, rel)
