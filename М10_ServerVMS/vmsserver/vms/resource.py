@@ -80,7 +80,11 @@ def vms_routes(archive: ArchiveResource, objects=None, server: str = ""):
             units = {u: {"bytes": unit_bytes(archive, u), "days": round(depth_days(archive, u, now), 2),
                          **({"written_on": away[u]} if u in away else {})}
                      for u in archive.units()}
-            return 200, json.dumps({"server": server, "units": units, "foreign": away}).encode(), (("Content-Type", "application/json"),)
+            # `accounted` is what the manifests name. The resource's heartbeat says `usage` — every FILE
+            # under the root — and the gap between the two is what nobody indexes: spool leftovers, a
+            # half-written segment, somebody's tarball on the same disk. Worth seeing side by side.
+            return 200, json.dumps({"server": server, "units": units, "foreign": away,
+                                    "accounted": sum(u["bytes"] for u in units.values())}).encode(), (("Content-Type", "application/json"),)
         if path.startswith("/manifest/"):
             unit = path.rsplit("/", 1)[1]                 # a UNIT, verbatim: "7" today, "7-backup" the day the spec says so
             return 200, "".join(l for l in Manifest(root, unit)._lines()).encode()

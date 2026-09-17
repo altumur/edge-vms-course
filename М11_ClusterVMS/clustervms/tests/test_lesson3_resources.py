@@ -75,8 +75,10 @@ def test_the_resource_policy_needs_neither_worker_nor_controller():
     _segment(srv, 1, 1, t - 3 * 86400); _segment(srv, 1, 1, t - 3600)
     os.remove(os.path.join(srv.archive, Manifest(srv.archive, 1).read()[1].path))   # a file gone behind the manifest's back
     rep = cluster_resource(srv.resource, "srv-a", "http://srv-a", c.vars, c.objects, wall=c.wall).pass_()
-    assert rep == {"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0,
-                   "space": "off", "enabled": False, "mirrored": 0, "peers": []}   # the watermark is a knob, and it is off
+    assert rep == {"rec.added": 0, "rec.dropped": 1, "rec.media_removed": 1, "removed": 0, "usage": 0,
+                   "space": "off", "enabled": False, "mirrored": 0, "peers": []}
+    # `usage` is measured HERE, at the end of the pass — one walk, not one per heartbeat. Zero, because
+    # retention took the last segment a line above. The watermark is a knob, and it is off.
     assert Manifest(srv.archive, 1).read() == []
 
 

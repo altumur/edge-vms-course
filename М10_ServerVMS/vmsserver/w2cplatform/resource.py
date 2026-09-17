@@ -230,6 +230,8 @@ class Resource:
         self.root, self.server, self.url, self.vars, self.objects = root, server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
         self.space_probe = space_probe or disk_space         # a test cannot fill a disk
+        self.last_usage: int | None = None                   # the tree walk's answer, refreshed by `pass_`
+        self.usage_at = 0.0                                  # …and when it was taken: a stale number must say so
         self.hooks: dict[str, object] = {}         # subsystem -> object with .pass_(now) -> dict: its own policy on ITS part of the tree
         self.database = None                       # an eventdatabase.EventDatabase over this tree, if the job runs one: served as GET /events
         os.makedirs(root, exist_ok=True)
@@ -252,13 +254,23 @@ class Resource:
                 out += [b for b in buckets_under(self.root, sub, unit, self.bucket_seconds) if b.end <= self.wall()]
         return out
 
-    # Total bytes under `root`, for the heartbeat.
+    # Total bytes under `root` — every file, not only the ones some subsystem accounts for. A walk, and
+    # therefore NOT something to do on a timer: at fifty cameras and ten-minute segments a month of
+    # archive is a quarter of a million files, and walking them touches every inode in the tree. Measured
+    # once per policy pass (`pass_`), published from the cache with the time it was taken (`usage_at`).
+    # What decides anything is `space()` — one `statvfs`, cheap enough for every heartbeat.
     def usage(self) -> int:
         total = 0
         for d, _, files in os.walk(self.root):
             for f in files:
                 total += os.path.getsize(os.path.join(d, f))
         return total
+
+    # The cached number, measured now if it never was: the first heartbeat of a process pays for it once.
+    def usage_cached(self) -> int:
+        if self.last_usage is None:
+            self.last_usage, self.usage_at = self.usage(), self.wall()
+        return self.last_usage
 
     # (total, free) of the disk, and how full it is. `free` is what a peer reads before sending anything
     # here: an evacuation onto a disk that is itself tight only moves the problem.
@@ -267,11 +279,12 @@ class Resource:
         return {"total": total, "free": free, "used": total - free,
                 "full": (total - free) / total if total else 0.0}
 
-    # Writes `{server, ts, url, usage, space, units, mirrors: {server: n copies}}` to
+    # Writes `{server, ts, url, usage, usage_at, space, units, mirrors: {server: n copies}}` to
     # `platform/resources/<server>/heartbeat` and returns it. `units` is how the index discovers subsystems;
     # `mirrors` is how `restore` and the index find who holds copies.
     def heartbeat(self) -> dict:
-        hb = {"server": self.server, "ts": self.wall(), "url": self.url, "usage": self.usage(),
+        hb = {"server": self.server, "ts": self.wall(), "url": self.url,
+              "usage": self.usage_cached(), "usage_at": self.usage_at,
               "space": self.space(), "units": self.units(),
               "mirrors": {s: len(mirrored_buckets(self.root, s, self.bucket_seconds)) for s in mirrored_servers(self.root)}}
         self.objects.put(f"{RESOURCES}/{self.server}/heartbeat", json.dumps(hb).encode())
@@ -385,6 +398,8 @@ class Resource:
         for sub, h in self.hooks.items():                    # a subsystem's own pass first: it may index or drop lines
             out.update({f"{sub}.{k}": v for k, v in h.pass_(self.wall()).items()})
         out["removed"] = self.retain()
+        self.last_usage, self.usage_at = self.usage(), self.wall()    # the one walk of the pass, not one per heartbeat
+        out["usage"] = self.last_usage
         out.update(self.relieve())
         out.update(self.mirror())
         return out

@@ -273,3 +273,36 @@ def test_the_watermark_asks_and_never_deletes():
     res.hooks = {"other": Bucketsonly()}
     rep = res.relieve()
     assert rep["short"] == rep["need"] > 0                     # nobody could give anything: said, not hidden
+
+
+def test_the_tree_is_walked_once_a_pass_and_never_on_a_heartbeat():
+    """Lesson 21's other half. `usage` answers "how much do we hold" and can only be
+    answered by walking; `space` answers "how much is left" and is one syscall. The
+    first is measured with the policy pass and published from the cache with the time
+    it was taken; the second is live in every heartbeat.
+
+    At fifty cameras and ten-minute segments a month of archive is a quarter of a
+    million files. Walking them every ten seconds does not merely cost a second — it
+    touches every inode in the tree, so the cache holds the archive's metadata instead
+    of the video the machine exists to serve."""
+    import tempfile
+    from w2cplatform.resource import Resource
+
+    box = Box()
+    res = Resource(tempfile.mkdtemp(prefix="usage-"), "srv-1", "http://srv-1", box.vars, box.objects,
+                   wall=box.wall, space_probe=lambda root: (1_000_000, 400_000))
+    walks = []
+    res.usage = lambda: (walks.append(box.wall()), 4_100_000_000)[1]
+
+    hb = res.heartbeat()                                   # the first one of a process pays for it once
+    assert len(walks) == 1 and hb["usage"] == 4_100_000_000 and hb["usage_at"] == box.wall()
+    box.wall.advance(10)
+    for _ in range(59):                                    # ten minutes of heartbeats, one per ten seconds
+        hb = res.heartbeat()
+    assert len(walks) == 1                                 # not one more walk
+    assert hb["usage_at"] < hb["ts"]                       # and the number says how old it is
+    assert hb["space"]["free"] == 400_000                  # while `space` is measured every time
+
+    res.pass_()
+    assert len(walks) == 2 and res.usage_at == box.wall()  # the pass is where the walk belongs
+    assert res.heartbeat()["usage_at"] == box.wall()
