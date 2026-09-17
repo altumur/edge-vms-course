@@ -61,7 +61,7 @@ def recorder() -> None:
     """the only writer of footage: subscribes to the worker's fan-out, writes rec/<cam>/e<epoch>/ on THIS server's
     archive, promotes closed segments from the spool on every pass."""
     from vms.archive import ArchiveResource
-    from cluster.recorder import ClusterRecorder
+    from cluster.recworker import ClusterRecorder
     try:
         from gstvms.actuator import GstRecActuator
         act = GstRecActuator(spool, archive, int(os.environ.get("SEGMENT_SECONDS", "600")))

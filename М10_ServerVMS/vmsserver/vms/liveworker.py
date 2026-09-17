@@ -39,7 +39,7 @@ from w2cplatform.variables import Variables
 from .config import LIVE_SPEC
 
 LIVE = LIVE_SPEC.sub
-log = logging.getLogger("vms.gateway")
+log = logging.getLogger("vms.liveworker")
 
 
 # One WebRTC peer for one viewer. `answer(offer) -> sdp`; `close()`. The fake answers any offer with a minimal
@@ -70,7 +70,7 @@ class Upstream:
                 "server": self.server, "source": self.url, "epoch": self.epoch}
 
 
-class LiveGateway(Worker):
+class LiveWorker(Worker):
     """`name` is a slot (`g-1`); `url` is where the console proxies WHEP to; `capacity` is viewers."""
 
     def __init__(self, name: str | None, vars_: Variables, objects, ctl: SpecController | None = None, url: str = "",

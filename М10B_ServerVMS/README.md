@@ -31,7 +31,7 @@
 | 10 | [`recworker`](10-recworker.md) | `rec.subsystem.yaml` и `RecWorker`: `source` из heartbeat, `resubscribe` при переезде держателя, `promote_closed`; `requires: resource`, `servers: distinct`, `near: vms`. |
 | 11 | [Процесс ресурса](11-the-resource-process.md) | `vms_routes` (`/manifest`, `/segment` с Range) и `vms_resource` — `Resource` из М10A с политикой регистратора и базой событий; цикл процесса. |
 | 12 | [Консоль VMS](12-the-vms-console.md) | `/timeline/<id>`, `/segment/<path>`, дверь WHEP; `LiveFront`; дерево монтирования на четыре подсистемы. |
-| 13 | [Живое видео](13-live-video.md) | `live.subsystem.yaml`, `LiveGateway`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
+| 13 | [Живое видео](13-live-video.md) | `live.subsystem.yaml`, `LiveWorker`, `webrtc.py`; единица — раздача камеры, ёмкость — зрители; юнит, создаваемый первым зрителем и удаляемый после последнего. |
 | 14 | [Детекторы](14-detectors.md) | `det.subsystem.yaml`, `DetWorker`, `FakeModel`; подсистема, чей выход — события, и почему события не подсистема. |
 | 15 | [Архив, которого мы не писали](15-the-archive-we-did-not-write.md) | Держать **устройство**, а не канал: NVR с тридцатью двумя каналами и камера с картой за одним соединением; `playback_url` и покрытие в heartbeat; admission control по сессиям устройства; обнаружение каналов, не нарушающее ACL; маршрутизация чтения в консоли по источнику интервала. |
 | 16 | [Дозапись из края](16-backfill-from-the-edge.md) | Свести два покрытия — цикл сверки урока 2, применённый ко времени; бюджет и окно; только дыры; `source: edge`; и почему дозаписанное уже наше — манифест, эпоха, срок хранения как у всех. |

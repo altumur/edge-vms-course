@@ -1,7 +1,7 @@
 # Live video, as the platform sees it: the SECOND subsystem. Its unit is a camera's
 # live fan-out — "camera 7 is being watched, from gateway g-2" — one per camera,
 # created by the console on the first viewer and deleted by the gateway a grace
-# period after the last one leaves. Its workers are gateways (vms/gateway.py):
+# period after the last one leaves. Its workers are gateways (vms/liveworker.py):
 # stateless, count = N by demand, capacity in VIEWERS, not cameras. Same
 # controller class, same console class, same ACL shape as the VMS; nothing
 # about video in the platform.

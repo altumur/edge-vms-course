@@ -11,7 +11,7 @@ from w2cplatform.spec import SpecController
 from w2cplatform.variables import Forbidden
 from vms.config import LIVE_SPEC, SPEC
 from vms.controller import VmsController
-from vms.gateway import LiveGateway
+from vms.liveworker import LiveWorker
 from vms.config import live_url
 from vms.worker import FakeActuator, VmsWorker
 from vms.console import serve
@@ -36,7 +36,7 @@ def _box():
 
 
 def _gateway(box, name, capacity=100, labels="", url=""):
-    g = LiveGateway(name, box.vars.as_writer("liveworker", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects,
+    g = LiveWorker(name, box.vars.as_writer("liveworker", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects,
                     ctl=SpecController(LIVE_SPEC, box.vars.as_writer("liveworker", ["live/epoch/*", "live/slots/*", "live/streams/*"]), box.objects, wall=box.wall),
                     capacity=capacity, clock=box.clock, wall=box.wall, server="srv-1", env={"LABELS": labels})
     g.serve("127.0.0.1", 0); g.heartbeat_once()

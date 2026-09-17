@@ -1,7 +1,7 @@
 # Урок 13 — Живое видео
 
 **Модуль:** М10B — ServerVMS (часть вторая)
-**Вы напишете:** `vms/live.subsystem.yaml` — вторую подсистему, чья ёмкость в зрителях; `vms/gateway.py` — `FakePeer`, `Upstream`, `LiveGateway` (`rtp_source`, `reconcile_once`, `_drop`, `offer`, `hangup`, `headroom`, `heartbeat_once`, сервер WHEP, `run`); и `gstvms/webrtc.py` — `GstPeer` с настоящим медиапутём.
+**Вы напишете:** `vms/live.subsystem.yaml` — вторую подсистему, чья ёмкость в зрителях; `vms/liveworker.py` — `FakePeer`, `Upstream`, `LiveWorker` (`rtp_source`, `reconcile_once`, `_drop`, `offer`, `hangup`, `headroom`, `heartbeat_once`, сервер WHEP, `run`); и `gstvms/webrtc.py` — `GstPeer` с настоящим медиапутём.
 **Время:** ~90 минут.
 
 ## Зачем этот урок
@@ -348,7 +348,7 @@ class GstPeer:
 ## Результат
 
 ```python
-gw = LiveGateway("g-1", vars_, objects, ctl=live_ctl, url="http://box-a:8082")
+gw = LiveWorker("g-1", vars_, objects, ctl=live_ctl, url="http://box-a:8082")
 gw.reconcile_once()                   # подписался на камеру 7
 gw.subscriptions                      # 1
 

@@ -23,7 +23,7 @@ from vms.archive import ArchiveResource, Manifest, Segment, segment_path, subtra
 from vms.config import DET_SPEC, LIVE_SPEC, REC_SPEC, SPEC, device_of, channel_of
 from vms.console import device_spans, serve
 from vms.controller import VmsController
-from vms.recorder import RecWorker
+from vms.recworker import RecWorker
 from vms.worker import FakeActuator, FakeDevice, VmsWorker
 from tests.conftest import Box
 

@@ -14,7 +14,7 @@ from w2cplatform.variables import Forbidden
 from vms.archive import ArchiveResource, Manifest, segment_path
 from vms.config import DET_SPEC, LIVE_SPEC, REC_SPEC, SPEC, live_shm, live_url
 from vms.controller import VmsController
-from vms.recorder import RecWorker
+from vms.recworker import RecWorker
 from vms.worker import FakeActuator, VmsWorker
 from tests.conftest import Box
 

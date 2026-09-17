@@ -36,7 +36,7 @@ vmsserver-go/
     device.go                  Device and FakeDevice: N channels, an archive of its own, a session budget — what DriverPack connects to
     playback.go                the holder's second surface: GET /playback/<cam>?from&to and /devices — HTTP, because a browser must seek it
     backfill.go                the recorder closing OUR gaps from the device's archive: OurCoverage, Gaps, InWindow, Backfill(budget), Fetch
-    recorder.go                RecWorker: VmsWorker over rec/recordings/*; Source from the VMS heartbeat — shm:// on the same server, rtsp://
+    recworker.go               RecWorker: VmsWorker over rec/recordings/*; Source from the VMS heartbeat — shm:// on the same server, rtsp://
                                elsewhere; Resubscribe when the camera's holder moves; PromoteClosed; rec_recordings_running, rec_segments_backfilled
     controller.go              VmsController: the SpecController in the VMS's words — CreateCamera / Cameras / Placement with int ids
     console.go                 the one-box console: the platform's SpecConsole over the VMS spec plus VmsRoutes — /timeline/<id> (ours, and the device's

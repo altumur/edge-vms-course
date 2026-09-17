@@ -16,7 +16,7 @@ disks under the old epoch, and the timeline names it unavailable — not lost.
 """
 from __future__ import annotations
 
-from vms.recorder import REC, RecWorker  # noqa: F401
+from vms.recworker import REC, RecWorker  # noqa: F401
 from vms.worker import FakeActuator
 
 

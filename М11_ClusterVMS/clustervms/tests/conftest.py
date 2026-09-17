@@ -11,7 +11,7 @@ import cluster  # noqa: E402,F401  — puts М10's vmsserver on sys.path
 
 from cluster.objectstore import FsObjectStore  # noqa: E402
 from cluster.variables import FakeVariables  # noqa: E402
-from cluster.recorder import ClusterRecorder  # noqa: E402
+from cluster.recworker import ClusterRecorder  # noqa: E402
 from cluster.worker import ClusterWorker  # noqa: E402
 from vms.archive import ArchiveResource  # noqa: E402
 from vms.worker import FakeActuator  # noqa: E402

@@ -21,7 +21,7 @@ vmsserver/
     archive.py                 Lesson 3  the archive's two trees: rec/<cam>/ (the recorder's media: spool → promote → manifest, media only) and vms/<cam>/ (the worker's event buckets); ArchivePolicy (repair, media retention by the recording row) registered on the platform's resource as the rec hook
     worker.py                  Lesson 4  vmsworker: holds N cameras against an assignment — one connection, one fan-out (live_url) each, events into the resource, no footage; an epoch per camera; a lease; the heartbeat with server, labels and capacity — on a box or in an allocation
     rec.subsystem.yaml         Lesson 5  the FOURTH subsystem, as a spec: recordings named by camera, retention_days, requires: resource, servers: distinct — the only one placed on the archive; near: vms, the affinity
-    recorder.py                Lesson 5  RecWorker: VmsWorker over rec/recordings/*, fed by the worker's tee from the VMS heartbeat — shared memory on the same server, RTSP from another; writes rec/<cam>/e<epoch>/ on its server's archive; re-subscribes when the camera's holder moves; promotes closed segments
+    recworker.py               Lesson 5  RecWorker: VmsWorker over rec/recordings/*, fed by the worker's tee from the VMS heartbeat — shared memory on the same server, RTSP from another; writes rec/<cam>/e<epoch>/ on its server's archive; re-subscribes when the camera's holder moves; promotes closed segments
     vms.subsystem.yaml         Lesson 6  the VMS's controller, as a spec: cameras numbered, seven operator fields, vms/retention/<cam> derived, labels-subset placement, requires: resource (for its events), the snapshot
     controller.py              Lesson 6  vmscontroller: the platform's SpecController run from the spec, in the VMS's words (create_camera, cameras)
     console.py                 Lesson 7  the console, its own process with its own token (the operator's rows, never placement): SpecConsole plus the VMS's media routes —
@@ -29,7 +29,7 @@ vmsserver/
     live.subsystem.yaml        Lesson 8  the SECOND subsystem, as a spec: live fan-outs named by camera, placed on gateways by viewer headroom, labels for where viewers are
     det.subsystem.yaml         Lesson 9  the THIRD subsystem, as a spec: one model on one camera, named by the operator, placed on GPU-labelled workers by stream headroom
     detector.py                Lesson 9  DetWorker: runs a Model against the camera's fan-out, writes what it saw into det/<unit>/e<epoch>/ on the resource under its own epoch
-    gateway.py                 Lesson 8  LiveGateway, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
+    liveworker.py              Lesson 8  LiveWorker, a worker whose unit is a camera's fan-out and whose capacity is viewers: one subscription to the worker's
                                RTSP fan-out (live_url) per camera, N webrtcbin peers behind it, WHEP (POST /whep/<cam>, DELETE /whep/session/<id>), demand-created and demand-deleted units
     resource.py                Lesson 10  the resource process: the platform's Resource with the recorder's ArchivePolicy registered and an EventDatabase attached; /manifest and /segment plugged in — the same function М11 runs as the resource job
     config.py                  the schema's Python view over the spec: row() and items()

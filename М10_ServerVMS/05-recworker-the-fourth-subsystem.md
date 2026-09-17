@@ -63,7 +63,7 @@ ctl.policy()      -> {"servers": "shared"}         the worker's: several workers
 
 ## Step 2 — The recorder is a worker fed by a worker
 
-`vms/recorder.py`'s `RecWorker` *is* `VmsWorker` over the `rec` rows — the same reconciler, the same slot claimed by CAS (`r-1`), the same epoch per unit and lease, the same heartbeat with capacity and headroom. What differs is what a pipeline needs:
+`vms/recworker.py`'s `RecWorker` *is* `VmsWorker` over the `rec` rows — the same reconciler, the same slot claimed by CAS (`r-1`), the same epoch per unit and lease, the same heartbeat with capacity and headroom. What differs is what a pipeline needs:
 
 ```python
 def source(self, cam):                         # where the camera's stream is: the VMS heartbeat, never a call to the worker

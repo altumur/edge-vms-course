@@ -37,7 +37,7 @@ shape is generic by running a subsystem that counts seconds through it.
 # `<name>/epoch/<unit>` the workers take by CAS; an event log on the resource (`events.py`); and a slot
 # prefix `<name>/slots/<worker>` — identity by claim. It depends on `variables.py`, `objects.py` and
 # `epoch.py` and nothing else. `spec.SpecController` extends `Controller`; `vms.worker.VmsWorker` and the
-# gateway (`vms/gateway.py`) and the detector (`vms/detector.py`) extend `Worker`. The file's own docstring settles who
+# gateway (`vms/liveworker.py`) and the detector (`vms/detector.py`) extend `Worker`. The file's own docstring settles who
 # decides how many workers there are: not the controller. The scheduler runs `count` of them; the platform's
 # part is to give those interchangeable processes stable names — the slots — so assignments survive a
 # reschedule. A slot released on an orderly stop is redistributed by the controller; a slot that merely

@@ -142,7 +142,7 @@ def worker() -> None:
 # - `RecWorker(...)`: promotes what the last instance closed but did not promote, then runs — the worker's
 #   loop, plus a re-subscription when a camera's holder moves, plus promotion on every pass.
 def recorder() -> None:
-    from .recorder import RecWorker
+    from .recworker import RecWorker
     vars_ = open_vars(CONFIG_URL, writer="recworker", acl={"recworker": ["rec/epoch/*", "rec/slots/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
     spool, archive = os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive")
@@ -237,7 +237,7 @@ def gateway() -> None:
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
     from w2cplatform.spec import SpecController
     from .config import LIVE_SPEC
-    from .gateway import LiveGateway
+    from .liveworker import LiveWorker
     vars_ = open_vars(CONFIG_URL, writer="liveworker",
                           acl={"liveworker": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
@@ -248,7 +248,7 @@ def gateway() -> None:
         peer = GstPeer
     except ImportError:
         logging.warning("no GStreamer webrtcbin: the fake peer answers SDP and carries no media")
-    gw = LiveGateway(None, vars_, objects, ctl=SpecController(LIVE_SPEC, vars_, objects), url=os.environ.get("GATEWAY_URL", f"http://{host}:{port}"),
+    gw = LiveWorker(None, vars_, objects, ctl=SpecController(LIVE_SPEC, vars_, objects), url=os.environ.get("GATEWAY_URL", f"http://{host}:{port}"),
                      capacity=int(os.environ.get("CAPACITY", "100")), peer_factory=peer)
     srv = gw.serve(host, port)
     logging.info("gateway %s (instance %s) on %s", gw.name, gw.instance, srv.server_address)
