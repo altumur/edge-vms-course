@@ -224,3 +224,52 @@ def test_a_subscriber_is_not_handed_a_holder_that_has_gone_silent():
     assert heartbeats(box.objects, "vms/")["w-1"].status[0]["phase"] == "running"   # its LAST word still says so
     assert holders(box.objects, "vms/", box.wall()) == {}                            # …and it is not reachable
     assert holder_of(box.objects, "vms/", 1, box.wall(), phase="running", field="live_url") is None
+
+
+def test_the_watermark_asks_and_never_deletes():
+    """Lesson 21. The resource measures the DISK (a test cannot fill one, so the probe
+    is a seam), and over the high mark it says how many bytes to free — down to the LOW
+    mark, or the next write puts it straight back over. What to give up is the
+    subsystem's to decide: the platform calls `free` and touches nothing itself.
+
+    The subsystem here keeps no video and no buckets — it counts. Nothing in this test
+    knows what a camera is, which is the point of the door being a method name."""
+    import tempfile
+    from w2cplatform.resource import SPACE_KEY, Resource
+
+    class Counter:
+        """A subsystem hook: a pass that does nothing, and a `free` that gives up ticks."""
+        def __init__(self): self.asked, self.ticks = [], 10 * [50_000]
+
+        def pass_(self, now): return {"ticks": len(self.ticks)}
+
+        def free(self, need, now, min_days=3.0):
+            self.asked.append(need)
+            freed = 0
+            while self.ticks and freed < need:                 # one tick at a time, like a segment
+                freed += self.ticks.pop(0)
+            return {"freed": freed, "dropped": 10 - len(self.ticks)}
+
+    box = Box()
+    hook = Counter()
+    res = Resource(tempfile.mkdtemp(prefix="space-"), "srv-1", "http://srv-1", box.vars, box.objects,
+                   wall=box.wall, space_probe=lambda root: (1_000_000, 500_000))
+    res.register("counter", hook)
+
+    assert res.relieve() == {"space": "off"}                   # a knob, and it is off until an operator says otherwise
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+    assert res.relieve() == {"space": "ok", "full": 0.5} and hook.asked == []
+    assert res.heartbeat()["space"] == {"total": 1_000_000, "free": 500_000, "used": 500_000, "full": 0.5}
+
+    res.space_probe = lambda root: (1_000_000, 100_000)        # 90 % full
+    rep = res.relieve()
+    assert hook.asked == [150_000]                             # to the LOW mark, not to the high one
+    assert rep["space"] == "over" and rep["need"] == 150_000 and rep["freed"] == 150_000 and rep["short"] == 0
+    assert rep["counter.dropped"] == 3 and len(hook.ticks) == 7   # three ticks of fifty kB, and not one more
+
+    # and a subsystem with no `free` is simply not asked: `retain` by days is its whole policy
+    class Bucketsonly:
+        def pass_(self, now): return {}
+    res.hooks = {"other": Bucketsonly()}
+    rep = res.relieve()
+    assert rep["short"] == rep["need"] > 0                     # nobody could give anything: said, not hidden
