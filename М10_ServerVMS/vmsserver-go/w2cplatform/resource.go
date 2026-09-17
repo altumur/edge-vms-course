@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -28,12 +29,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
 	MirrorDir = ".mirror"
 	MirrorKey = "platform/mirror"
+	SpaceKey  = "platform/space"
 	Resources = "platform/resources"
 )
 
@@ -42,9 +45,57 @@ type ResourceHeartbeat struct {
 	Server  string              `json:"server"`
 	Ts      float64             `json:"ts"`
 	URL     string              `json:"url"`
-	Usage   int64               `json:"usage"`
+	Schema  int                 `json:"schema"` // what this build understands
+	Build   string              `json:"build"`
+	Usage   int64               `json:"usage"`    // every FILE under the root, measured once a pass
+	UsageAt float64             `json:"usage_at"` // …and when: a stale number must say so
+	Space   DiskFree            `json:"space"`    // the disk, live in every heartbeat: what a peer reads before sending anything here
 	Units   map[string][]string `json:"units"`
 	Mirrors map[string]int      `json:"mirrors"`
+}
+
+// DiskFree is the volume under the root, not the tree on it.
+type DiskFree struct {
+	Total int64   `json:"total"`
+	Free  int64   `json:"free"`
+	Used  int64   `json:"used"`
+	Full  float64 `json:"full"`
+}
+
+// DiskSpace: (total, free) bytes of the filesystem root is on. f_bavail and not f_bfree, because reserved
+// blocks are not ours to spend. A test cannot fill a disk, so the probe is a seam (Resource.SpaceProbe).
+func DiskSpace(root string) (int64, int64) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(root, &st); err != nil {
+		return 0, 0
+	}
+	return int64(st.Blocks) * int64(st.Bsize), int64(st.Bavail) * int64(st.Bsize)
+}
+
+// SpaceSettings is the watermark. high and low are USED fractions: over high the resource starts freeing
+// and stops at low, and the gap between them is the whole point — one mark alone gives a saw, a file
+// freed and a file written, for ever. Choose the gap in HOURS OF INGEST, not in percent. min_days is the
+// floor no unit is cut below; everything on the floor and still no room is a shortfall, said out loud.
+type SpaceSettings struct {
+	Enabled bool
+	High    float64
+	Low     float64
+	MinDays float64
+}
+
+func GetSpaceSettings(vars Variables) SpaceSettings {
+	items, _, _ := vars.Get(SpaceKey)
+	out := SpaceSettings{Enabled: items != nil && items["enabled"] == "true", High: 0.85, Low: 0.75, MinDays: 3}
+	if v, ok := items["high"]; ok {
+		out.High = ToFloat(v)
+	}
+	if v, ok := items["low"]; ok {
+		out.Low = ToFloat(v)
+	}
+	if v, ok := items["min_days"]; ok {
+		out.MinDays = ToFloat(v)
+	}
+	return out
 }
 
 type MirrorSettings struct {
@@ -233,6 +284,13 @@ type Hook interface {
 	Pass(now float64) map[string]any
 }
 
+// Freer is the door a subsystem may add to its hook: the resource says how many bytes, the subsystem
+// decides which. A subsystem that keeps only buckets does not implement it — retention by days is its
+// whole policy — and is simply not asked.
+type Freer interface {
+	Free(need int64, now, minDays float64) map[string]any
+}
+
 // Resource is one server's resource: its tree, its heartbeat, its policy pass.
 type Resource struct {
 	Root, Server, URL string
@@ -244,6 +302,10 @@ type Resource struct {
 	LostAfter         float64
 	Hooks             map[string]Hook
 	Database          *EventDatabase // the event database over this tree, if the job runs one: served as GET /events
+	SpaceProbe        func(root string) (int64, int64)
+	lastUsage         int64
+	haveUsage         bool
+	usageAt           float64
 }
 
 func NewResource(root, server, url string, vars Variables, objects ObjectStore, bucketSeconds int, wall Clock, peers PeerClient) *Resource {
@@ -256,8 +318,85 @@ func NewResource(root, server, url string, vars Variables, objects ObjectStore, 
 	if peers == nil {
 		peers = NewHTTPPeerClient()
 	}
+	mustSchema(vars) // a build older than the store does not run at all
 	os.MkdirAll(root, 0o755)
-	return &Resource{root, server, url, vars, objects, bucketSeconds, wall, peers, 45, map[string]Hook{}, nil}
+	return &Resource{Root: root, Server: server, URL: url, Vars: vars, Objects: objects,
+		BucketSeconds: bucketSeconds, Wall: wall, Peers: peers, LostAfter: 45,
+		Hooks: map[string]Hook{}, SpaceProbe: DiskSpace}
+}
+
+// Space is the disk, and how full it is. Free is what a peer reads before sending anything here: an
+// evacuation onto a disk that is itself tight only moves the problem.
+func (r *Resource) Space() DiskFree {
+	total, free := r.SpaceProbe(r.Root)
+	out := DiskFree{Total: total, Free: free, Used: total - free}
+	if total > 0 {
+		out.Full = float64(total-free) / float64(total)
+	}
+	return out
+}
+
+// UsageCached is the tree walk's answer, measured now if it never was: the first heartbeat of a process
+// pays for it once, and Pass refreshes it after that. Walking a quarter of a million files every ten
+// seconds does not merely cost a second — it touches every inode in the tree, so the cache holds the
+// archive's metadata instead of the video the machine exists to serve.
+func (r *Resource) UsageCached() int64 {
+	if !r.haveUsage {
+		r.lastUsage, r.usageAt, r.haveUsage = r.Usage(), r.Wall(), true
+	}
+	return r.lastUsage
+}
+
+// Relieve: over the high mark, ask each subsystem to free bytes down to the LOW one — freeing just enough
+// to slip under high means being back over it in a minute. Retention by days is a PROMISE to the
+// operator; this is what happens when the promise cannot be kept. Nothing here deletes a subsystem's file.
+//
+// Slowness resolves itself: a hook that can only start something (evacuating footage to the server that
+// now writes it, say) returns what it managed and is asked again on the next pass — which is why there is
+// no third, "critical" mark and no separate schedule.
+func (r *Resource) Relieve() map[string]any {
+	knob := GetSpaceSettings(r.Vars)
+	if !knob.Enabled {
+		return map[string]any{"space": "off"}
+	}
+	sp := r.Space()
+	if sp.Total == 0 || float64(sp.Used) <= float64(sp.Total)*knob.High {
+		return map[string]any{"space": "ok", "full": round3(sp.Full)}
+	}
+	need := int64(float64(sp.Used) - float64(sp.Total)*knob.Low)
+	var freed int64
+	out := map[string]any{}
+	for _, sub := range hookNames(r.Hooks) {
+		free, ok := r.Hooks[sub].(Freer)
+		if !ok {
+			continue
+		}
+		rep := free.Free(need-freed, r.Wall(), knob.MinDays)
+		freed += int64(ToFloat(rep["freed"]))
+		for k, v := range rep {
+			out[sub+"."+k] = v
+		}
+		if freed >= need {
+			break
+		}
+	}
+	out["space"], out["full"], out["need"], out["freed"] = "over", round3(sp.Full), need, freed
+	out["short"] = need - freed
+	if freed >= need {
+		out["short"] = int64(0)
+	}
+	return out
+}
+
+func round3(f float64) float64 { return math.Round(f*1000) / 1000 }
+
+func hookNames(m map[string]Hook) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r *Resource) Register(subsystem string, h Hook) { r.Hooks[subsystem] = h }
@@ -297,7 +436,8 @@ func (r *Resource) Heartbeat() (ResourceHeartbeat, error) {
 	for _, s := range MirroredServers(r.Root) {
 		mirrors[s] = len(MirroredBuckets(r.Root, s, r.BucketSeconds))
 	}
-	hb := ResourceHeartbeat{r.Server, r.Wall(), r.URL, r.Usage(), r.Units(), mirrors}
+	hb := ResourceHeartbeat{Server: r.Server, Ts: r.Wall(), URL: r.URL, Schema: Schema, Build: Build,
+		Usage: r.UsageCached(), UsageAt: r.usageAt, Space: r.Space(), Units: r.Units(), Mirrors: mirrors}
 	raw, _ := json.Marshal(hb)
 	return hb, r.Objects.Put(Resources+"/"+r.Server+"/heartbeat", raw)
 }
@@ -438,6 +578,11 @@ func (r *Resource) Pass() map[string]any {
 		}
 	}
 	out["removed"] = r.Retain()
+	r.lastUsage, r.usageAt, r.haveUsage = r.Usage(), r.Wall(), true // the one walk of the pass, not one per heartbeat
+	out["usage"] = r.lastUsage
+	for k, v := range r.Relieve() { // the promise first, the watermark only for what the promise left behind
+		out[k] = v
+	}
 	m := r.Mirror()
 	out["enabled"], out["mirrored"], out["peers"] = m.Enabled, m.Mirrored, m.Peers
 	return out

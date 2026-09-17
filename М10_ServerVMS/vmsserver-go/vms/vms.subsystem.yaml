@@ -25,6 +25,11 @@ placement:
   constraint: labels-subset                     # the camera's labels ⊆ the worker's server's labels
   requires:   resource                          # the worker's server must have a resource that answers (for its events): not placed on while it is silent, moved off
   tie_break:  most-free-capacity
+  # The camera has no home of its own: it goes where its RECORDING is. The anchor of the pair is the
+  # recording, because it writes to a disk and a disk does not move; the fan-out can be read from anywhere
+  # over RTSP, so the camera is the one that can follow.
+  near:       rec                               # an affinity: the recorder holding this camera's recording
+  home:       near                              # …and, unlike a bare affinity, maintained: EnsureHome follows it back
   rebalance:  {dead_band: 0.10}
 snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 console:

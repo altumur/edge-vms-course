@@ -401,3 +401,160 @@ func TestATornLastLineCostsTheLineAndNotTheBucket(t *testing.T) {
 		t.Fatal("a missing bucket is empty, not an error")
 	}
 }
+
+// -- the watermark and the schema: what an upgrade needs of the platform ---------------------------
+
+// counterHook is a subsystem that keeps no video and no buckets — it counts. Nothing in these tests knows
+// what a camera is, which is the point of the door being a method name.
+type counterHook struct {
+	asked []int64
+	ticks []int64
+}
+
+func (c *counterHook) Pass(now float64) map[string]any { return map[string]any{"ticks": len(c.ticks)} }
+
+func (c *counterHook) Free(need int64, now, minDays float64) map[string]any {
+	c.asked = append(c.asked, need)
+	var freed int64
+	for len(c.ticks) > 0 && freed < need { // one tick at a time, like a segment
+		freed += c.ticks[0]
+		c.ticks = c.ticks[1:]
+	}
+	return map[string]any{"freed": freed, "dropped": 10 - len(c.ticks)}
+}
+
+type bucketsOnly struct{}
+
+func (bucketsOnly) Pass(now float64) map[string]any { return map[string]any{} }
+
+func TestTheWatermarkAsksAndNeverDeletes(t *testing.T) {
+	// The resource measures the DISK (a test cannot fill one, so the probe is a seam), and over the high
+	// mark it says how many bytes to free — down to the LOW mark, or the next write puts it straight back
+	// over. What to give up is the subsystem's to decide: the platform calls Free and touches nothing.
+	box := testbox.NewBox()
+	dir, _ := os.MkdirTemp("", "space-")
+	hook := &counterHook{ticks: make([]int64, 10)}
+	for i := range hook.ticks {
+		hook.ticks[i] = 50_000
+	}
+	res := p.NewResource(dir, "srv-1", "http://srv-1", box.Vars, box.Objects, 600, box.Wall.Now, nil)
+	res.SpaceProbe = func(string) (int64, int64) { return 1_000_000, 500_000 }
+	res.Register("counter", hook)
+
+	if !reflect.DeepEqual(res.Relieve(), map[string]any{"space": "off"}) { // a knob, off until an operator says so
+		t.Fatal(res.Relieve())
+	}
+	box.Vars.Put(p.SpaceKey, p.Items{"enabled": "true", "high": "0.85", "low": "0.75"}, p.NoCAS)
+	if !reflect.DeepEqual(res.Relieve(), map[string]any{"space": "ok", "full": 0.5}) {
+		t.Fatal(res.Relieve())
+	}
+	if len(hook.asked) != 0 {
+		t.Fatal(hook.asked)
+	}
+	hb, _ := res.Heartbeat()
+	if hb.Space.Free != 500_000 || hb.Schema != p.Schema || hb.Build != p.Build {
+		t.Fatal(hb.Space, hb.Schema, hb.Build)
+	}
+
+	res.SpaceProbe = func(string) (int64, int64) { return 1_000_000, 100_000 } // 90 % full
+	rep := res.Relieve()
+	if len(hook.asked) != 1 || hook.asked[0] != 150_000 { // to the LOW mark, not to the high one
+		t.Fatal(hook.asked)
+	}
+	if rep["space"] != "over" || rep["need"] != int64(150_000) || rep["freed"] != int64(150_000) || rep["short"] != int64(0) {
+		t.Fatal(rep)
+	}
+	if rep["counter.dropped"] != 3 || len(hook.ticks) != 7 { // three ticks of fifty kB, and not one more
+		t.Fatal(rep, len(hook.ticks))
+	}
+
+	// a subsystem with no Free is simply not asked: retention by days is its whole policy
+	res2 := p.NewResource(dir, "srv-1", "http://srv-1", box.Vars, box.Objects, 600, box.Wall.Now, nil)
+	res2.SpaceProbe = func(string) (int64, int64) { return 1_000_000, 100_000 }
+	res2.Register("other", bucketsOnly{})
+	rep = res2.Relieve()
+	if rep["short"] != rep["need"] || rep["freed"] != int64(0) { // nobody could give anything: said, not hidden
+		t.Fatal(rep)
+	}
+}
+
+func TestTheTreeIsWalkedOnceAPassAndNeverOnAHeartbeat(t *testing.T) {
+	// `usage` answers "how much do we hold" and can only be answered by walking; `space` answers "how much
+	// is left" and is one syscall. The first is measured with the policy pass and published from the cache
+	// with the time it was taken; the second is live in every heartbeat.
+	//
+	// At fifty cameras and ten-minute segments a month of archive is a quarter of a million files. Walking
+	// them every ten seconds does not merely cost a second — it touches every inode in the tree, so the
+	// cache holds the archive's metadata instead of the video the machine exists to serve.
+	box := testbox.NewBox()
+	dir, _ := os.MkdirTemp("", "usage-")
+	os.WriteFile(filepath.Join(dir, "a"), make([]byte, 4096), 0o644)
+	res := p.NewResource(dir, "srv-1", "http://srv-1", box.Vars, box.Objects, 600, box.Wall.Now, nil)
+	res.SpaceProbe = func(string) (int64, int64) { return 1_000_000, 400_000 }
+
+	hb, _ := res.Heartbeat() // the first one of a process pays for it once
+	if hb.Usage != 4096 || hb.UsageAt != box.Wall.Now() {
+		t.Fatal(hb.Usage, hb.UsageAt)
+	}
+	os.WriteFile(filepath.Join(dir, "b"), make([]byte, 4096), 0o644) // the tree grows…
+	box.Wall.Advance(10)
+	for i := 0; i < 59; i++ { // …ten minutes of heartbeats, one per ten seconds
+		hb, _ = res.Heartbeat()
+	}
+	if hb.Usage != 4096 || hb.UsageAt >= hb.Ts { // not one more walk, and the number says how old it is
+		t.Fatal(hb.Usage, hb.UsageAt, hb.Ts)
+	}
+	if hb.Space.Free != 400_000 { // while `space` is measured every time
+		t.Fatal(hb.Space)
+	}
+	res.Pass() // the pass is where the walk belongs
+	hb, _ = res.Heartbeat()
+	if hb.Usage != 8192 || hb.UsageAt != box.Wall.Now() {
+		t.Fatal(hb.Usage, hb.UsageAt)
+	}
+}
+
+func TestTheSchemaIsRaisedAfterTheUpgradeAndNeverDuringIt(t *testing.T) {
+	// A rolling upgrade means old and new processes read the same rows for a while. Adding a field is
+	// free; changing what one MEANS is a new schema number — and the direction of every check here is what
+	// keeps the upgrade rolling. A NEWER process against an older store is fine: it understands the old
+	// layout, and that is the whole of an upgrade. An OLDER process against a newer store refuses to start.
+	box := testbox.NewBox()
+	ctl := p.NewController(p.Subsystem{Name: "vms"}, box.Vars, box.Objects, box.Wall.Now)
+	if p.SchemaVersion(box.Vars) != p.Schema { // absent: a fresh install is whatever this build is
+		t.Fatal(p.SchemaVersion(box.Vars))
+	}
+	_, idx, _ := box.Vars.Get(p.SchemaKey)
+	box.Vars.Put(p.SchemaKey, p.Items{"version": strconv.Itoa(p.Schema + 1)}, idx) // somebody upgraded the store
+	if err := p.CheckSchema(box.Vars); err == nil || !strings.Contains(err.Error(), "understands") {
+		t.Fatal(err)
+	}
+	func() { // a build older than the store does not run at all
+		defer func() {
+			if recover() == nil {
+				t.Error("an old build started against a newer store")
+			}
+		}()
+		p.NewController(p.Subsystem{Name: "vms"}, box.Vars, box.Objects, box.Wall.Now)
+	}()
+	_, idx, _ = box.Vars.Get(p.SchemaKey)
+	box.Vars.Put(p.SchemaKey, p.Items{"version": strconv.Itoa(p.Schema)}, idx)
+
+	// raising is refused while anything live understands less: you cannot raise the store out from under a
+	// machine you forgot to upgrade
+	box.Objects.Put("vms/w-2/heartbeat", p.Heartbeat{Worker: "w-2", Ts: box.Wall.Now(),
+		Extra: map[string]any{"server": "srv-2", "schema": p.Schema, "build": "old"}}.ToBytes())
+	err := ctl.SetSchema(p.Schema + 1)
+	if err == nil || !strings.Contains(err.Error(), "still running") || !strings.Contains(err.Error(), "vms/w-2") {
+		t.Fatal(err)
+	}
+	box.Wall.Advance(60) // w-2 is gone; w-1 is new and says so
+	box.Objects.Put("vms/w-1/heartbeat", p.Heartbeat{Worker: "w-1", Ts: box.Wall.Now(),
+		Extra: map[string]any{"server": "srv-1", "schema": p.Schema + 1}}.ToBytes())
+	if err := ctl.SetSchema(p.Schema + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctl.SetSchema(p.Schema); err == nil || !strings.Contains(err.Error(), "does not go back") {
+		t.Fatal(err)
+	}
+}

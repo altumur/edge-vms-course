@@ -49,6 +49,7 @@ type RecWorker struct {
 	Window         [2]int // {0,0}: any hour
 	KeepDays       float64
 	Settle         float64
+	SpaceProbe     func(root string) (int64, int64) // the disk under the archive; a test cannot fill one
 	Stitch         float64
 	BackfillBudget int // ranges per pass; 0 = only what an operator asks for
 	Backfilled     int
@@ -74,8 +75,9 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 		return nil, err
 	}
 	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[string]bool{}, Sources: map[string]string{},
-		KeepDays: 30, Settle: 900, Stitch: 2}
+		KeepDays: 30, Settle: 900, Stitch: 2, SpaceProbe: p.DiskSpace}
 	w.Enrich, w.StatusExtra, w.BeforePass, w.AfterPump, w.StatusFix = r.enrich, r.statusExtra, func() { r.Resubscribe() }, r.afterPump, r.statusFix
+	w.HeartbeatFix = r.heartbeatFix
 	for _, pth := range archive.ClosedInSpool(r.GraceSeconds, w.Wall()) { // what the last instance closed but did not promote
 		archive.Promote(pth, 0, "live")
 		r.Promoted++
@@ -137,6 +139,12 @@ func (r *RecWorker) statusExtra(cam Camera) map[string]any {
 		out["why"] = "camera held by nobody"
 	}
 	return out
+}
+
+// heartbeatFix: how deep the spool is — closed segments this recorder has not promoted yet. No grace: the
+// question the drain route asks is "is anything unwritten", and a segment closed a second ago counts.
+func (r *RecWorker) heartbeatFix(extra map[string]any) {
+	extra["spool"] = len(r.Archive.ClosedInSpool(0, r.Wall()))
 }
 
 func (r *RecWorker) statusFix(st []map[string]any) {

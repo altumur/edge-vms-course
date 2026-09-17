@@ -193,6 +193,109 @@ func SlotNumber(name string) int {
 // return the new ones, or nil to leave the row as it is.
 type Mutate func(items Items) Items
 
+// Schema is what layout of the store this build understands. A rolling upgrade means old and new
+// processes read and write the same rows for a while, so adding a field is free and changing what one
+// MEANS is not: that is a new number here, and a step the operator takes once everything is new.
+const Schema = 1
+
+// SchemaKey holds the layout the store is in; DrainKey names the server going away for a while. Both are
+// the platform's rows, not a subsystem's: a machine carries several.
+const (
+	SchemaKey = "platform/schema"
+	DrainKey  = "platform/drain"
+)
+
+// Build is what a person reads on /schema; the machine reads Schema.
+var Build = envOr("BUILD", "dev")
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+// ErrSchemaTooNew: this build does not understand the layout the store is already in, or the operator
+// asked to raise the version while something older is still running.
+type ErrSchemaTooNew struct{ Msg string }
+
+func (e *ErrSchemaTooNew) Error() string { return e.Msg }
+
+// ErrDrainRefused: a second server asked to drain while one already is.
+type ErrDrainRefused struct{ Msg string }
+
+func (e *ErrDrainRefused) Error() string { return e.Msg }
+
+// SchemaVersion is the store's layout version — absent means "whatever this build is", a fresh install.
+func SchemaVersion(vars Variables) int {
+	items, _, _ := vars.Get(SchemaKey)
+	if v, ok := items["version"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return Schema
+}
+
+// CheckSchema: a build older than the store does not run at all. Note which direction is checked — a
+// NEWER process against an older store is fine and is the whole of a rolling upgrade: it understands the
+// old layout. The version is raised afterwards, once, by the operator; never by the first new process to
+// start, which would lock out every machine not yet upgraded and turn a rolling upgrade into an outage.
+func CheckSchema(vars Variables) error {
+	if have := SchemaVersion(vars); have > Schema {
+		return &ErrSchemaTooNew{fmt.Sprintf("store is at schema %d; this build understands %d", have, Schema)}
+	}
+	return nil
+}
+
+// mustSchema is CheckSchema at construction. A process that cannot understand the store does not run: in
+// Go that is a panic, which is the same restart loop the operator sees, and not a quiet read-modify-write
+// that drops the fields this build never heard of.
+func mustSchema(vars Variables) {
+	if err := CheckSchema(vars); err != nil {
+		panic(err)
+	}
+}
+
+// ProcessBuild is one process as its heartbeat reports it.
+type ProcessBuild struct {
+	Schema int
+	Build  string
+	Ts     float64
+	Live   bool
+}
+
+// Builds: every process that heartbeats, with the schema it understands. The keys are
+// <subsystem>/<worker>/heartbeat and platform/resources/<server>/heartbeat; nothing else ends that way,
+// so one scan answers "what is running in this cluster" across every subsystem at once.
+func Builds(objects ObjectStore, now, lostAfter float64) map[string]ProcessBuild {
+	out := map[string]ProcessBuild{}
+	keys, _ := objects.List("")
+	for _, key := range keys {
+		if !strings.HasSuffix(key, "/heartbeat") {
+			continue
+		}
+		raw, _ := objects.Get(key)
+		if len(raw) == 0 {
+			continue
+		}
+		var d map[string]any
+		if json.Unmarshal(raw, &d) != nil {
+			continue
+		}
+		b := ProcessBuild{Schema: Schema, Build: "?", Ts: ToFloat(d["ts"])}
+		if v, ok := d["schema"]; ok {
+			b.Schema = int(ToFloat(v))
+		}
+		if v, ok := d["build"].(string); ok {
+			b.Build = v
+		}
+		b.Live = now-b.Ts <= lostAfter
+		out[strings.TrimSuffix(key, "/heartbeat")] = b
+	}
+	return out
+}
+
 // ErrRow is returned by a Mutate that found the row in a state it refuses
 // (a deleted row); it carries through Write unchanged.
 type ErrRow struct{ Msg string }
@@ -209,6 +312,7 @@ type Controller struct {
 }
 
 func NewController(sub Subsystem, vars Variables, objects ObjectStore, wall Clock) *Controller {
+	mustSchema(vars) // a build older than the store does not run at all
 	if wall == nil {
 		wall = Wall()
 	}
@@ -372,6 +476,82 @@ func (c *Controller) ReleasedSlots() []string {
 	return out
 }
 
+// Draining is the server being drained right now, or "".
+func Draining(vars Variables) string {
+	items, _, _ := vars.Get(DrainKey)
+	return items["server"]
+}
+
+func (c *Controller) Draining() string { return Draining(c.Vars) }
+
+// Drain is an operator's statement that a server is about to stop. Refused while another one is draining:
+// a rolling upgrade is one machine at a time, and the row holding ONE name is the whole of that mutual
+// exclusion — written by CAS, so two operators cannot drain two machines by accident.
+//
+// Why it is needed at all, when a stopped process is noticed anyway: being noticed is the SLOW path. A
+// recorder's units move when its slot has lapsed AND its server's resource is silent — two independent
+// silences, about a minute and a half of not recording. A planned stop is not a silence.
+func (c *Controller) Drain(server string) error {
+	var refused error
+	_, err := c.Write(DrainKey, func(it Items) Items {
+		if have := it["server"]; have != "" && have != server {
+			refused = &ErrDrainRefused{have + " is already draining; one server at a time"}
+			return nil
+		}
+		return Items{"server": server, "at": Str(c.Wall())}
+	})
+	if refused != nil {
+		return refused
+	}
+	return err
+}
+
+// Undrain: the server is back. Its workers become placeable again, and EnsureHome starts bringing back
+// what its rows name — one unit a pass.
+func (c *Controller) Undrain() error {
+	_, err := c.Write(DrainKey, func(Items) Items { return Items{"server": "", "at": Str(c.Wall())} })
+	return err
+}
+
+// SetSchema is the operator's one-way step, taken once every machine is new. Refused while anything LIVE
+// says it understands less — which is checkable, because every process publishes the number in its
+// heartbeat. That is the guard that makes the whole scheme safe: you cannot raise the store out from
+// under a machine you forgot to upgrade.
+func (c *Controller) SetSchema(version int) error {
+	now := c.Wall()
+	behind, least := []string{}, version
+	for n, b := range Builds(c.Objects, now, 45) {
+		if b.Live && b.Schema < version {
+			behind = append(behind, n)
+			if b.Schema < least {
+				least = b.Schema
+			}
+		}
+	}
+	if len(behind) > 0 {
+		sort.Strings(behind)
+		return &ErrSchemaTooNew{fmt.Sprintf("still running: %s — at schema %d", strings.Join(behind, ", "), least)}
+	}
+	var refused error
+	_, err := c.Write(SchemaKey, func(it Items) Items {
+		have := Schema
+		if v, ok := it["version"]; ok {
+			if n, e := strconv.Atoi(v); e == nil {
+				have = n
+			}
+		}
+		if version < have {
+			refused = &ErrSchemaTooNew{fmt.Sprintf("schema does not go back: %d -> %d", have, version)}
+			return nil
+		}
+		return Items{"version": strconv.Itoa(version), "at": Str(now)}
+	})
+	if refused != nil {
+		return refused
+	}
+	return err
+}
+
 // Retire is an operator's statement that a slot is gone for good. The
 // controller never decides this on its own from a silence.
 func (c *Controller) Retire(worker string) (Slot, error) {
@@ -412,6 +592,7 @@ type WorkerOptions struct {
 }
 
 func NewWorker(sub Subsystem, vars Variables, objects ObjectStore, o WorkerOptions) *Worker {
+	mustSchema(vars) // a build older than the store does not run at all
 	w := &Worker{Sub: sub, Vars: vars, Objects: objects, Clock: o.Clock, Wall: o.Wall,
 		LeaseTTL: o.LeaseTTL, LeaseMargin: o.LeaseMargin, Epochs: map[string]int{}, Leases: map[string]*Lease{},
 		Instance: o.Instance, SlotTTL: o.SlotTTL, Name: o.Name}
@@ -601,6 +782,18 @@ func (w *Worker) Conflicts() int {
 func (w *Worker) HeartbeatWith(status []map[string]any, extra map[string]any) error {
 	if status == nil {
 		status = []map[string]any{}
+	}
+	// schema and build are on EVERY heartbeat, from here, so no subsystem has to remember them: the first
+	// says what layout this process understands (what SetSchema is checked against), the second is for the
+	// person looking at a half-upgraded cluster.
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if _, ok := extra["schema"]; !ok {
+		extra["schema"] = Schema
+	}
+	if _, ok := extra["build"]; !ok {
+		extra["build"] = Build
 	}
 	return w.Objects.Put(w.Sub.HeartbeatKey(w.Name), Heartbeat{w.Name, w.Wall(), status, extra}.ToBytes())
 }

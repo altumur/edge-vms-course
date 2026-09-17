@@ -241,6 +241,10 @@ type VmsWorker struct {
 	BeforePass  func()
 	AfterPump   func()
 	StatusFix   func(st []map[string]any)
+	// HeartbeatFix: what this subsystem's worker adds to its OWN heartbeat, beside what every worker says.
+	// The recorder publishes how deep its spool is, and the drain route reads it — a machine whose units
+	// have all left is still not safe to stop while something it recorded is unwritten.
+	HeartbeatFix func(extra map[string]any)
 }
 
 func slotFromEnv(env Env, nameEnv, prefix string) string { return p.SlotName(env, nameEnv, prefix) }
@@ -636,11 +640,15 @@ func (w *VmsWorker) Headroom() int {
 }
 
 func (w *VmsWorker) HeartbeatExtra() map[string]any {
-	return map[string]any{"server": w.Server, "instance": w.Instance, "alloc": w.Alloc, "labels": strings.Join(w.Labels, ","),
+	out := map[string]any{"server": w.Server, "instance": w.Instance, "alloc": w.Alloc, "labels": strings.Join(w.Labels, ","),
 		"assignment_rev": w.AssignmentRev, "fenced": !w.RecordingAllowed, "conflicts": w.Conflicts(), "passes": w.Passes,
 		"capacity": w.Capacity, "headroom": w.Headroom(), "started": w.StartedWall,
 		"previous_hb": w.PreviousHb, "previous_instance": w.PreviousInstance,
 		"archive": w.ArchiveRoot, "devices": w.DeviceStatus()} // the resource its events (a recorder: its footage) go to — on a cluster Nomad's meta.archive, through $ARCHIVE
+	if w.HeartbeatFix != nil {
+		w.HeartbeatFix(out)
+	}
+	return out
 }
 
 func (w *VmsWorker) HeartbeatOnce() error {

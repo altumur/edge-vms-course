@@ -420,6 +420,40 @@ func (c *SpecConsole) WhereScanned(uid string) string {
 // the label the scheduler placed by), its resource's state (the fact), its
 // workers with load and capacity, and whether the controller would place
 // there now, with the reason when it would not.
+// DrainState: what ONE subsystem can say about a machine that is about to stop — how many of ITS units
+// are still assigned there, whether anything it holds would be stranded by the stop, and, for a subsystem
+// whose workers keep something unwritten, how deep that is. The Mount composes these into one answer,
+// because an upgrade is a question about a server and a server carries several subsystems.
+//
+// `safe` is the whole point of the route: an upgrade script polls a CONDITION instead of sleeping and
+// hoping. Nothing here decides anything; it reports.
+func (c *SpecConsole) DrainState(server string) map[string]any {
+	now := c.O.Wall()
+	if server == "" {
+		server = c.Ctl.Draining()
+	}
+	if server == "" {
+		return map[string]any{"draining": "", "subsystem": c.Spec.Name}
+	}
+	hbs := Heartbeats(c.Ctl.Objects, c.Spec.Name+"/")
+	here := []string{}
+	units, pending := 0, 0
+	for w, hb := range hbs {
+		if c.Ctl.ServerOf(w) != server {
+			continue
+		}
+		here = append(here, w)
+		units += len(c.Ctl.Assignment(w).Units)
+		if now-hb.Ts <= c.O.LostAfter {
+			pending += hb.ExtraInt("spool", 0)
+		}
+	}
+	sort.Strings(here)
+	return map[string]any{"draining": server, "subsystem": c.Spec.Name, "workers": here,
+		"units": units, "spool": pending, "would_strand": c.Ctl.WouldStrand(server, nil),
+		"safe": units == 0 && pending == 0}
+}
+
 func (c *SpecConsole) Servers() map[string]any {
 	type srv struct {
 		archive string
@@ -467,9 +501,12 @@ func (c *SpecConsole) Servers() map[string]any {
 		sort.Slice(s.workers, func(i, j int) bool { return s.workers[i]["worker"].(string) < s.workers[j]["worker"].(string) })
 		res := c.Ctl.ResourceState(name, c.O.LostAfter)
 		req := c.Spec.Requires == "resource"
-		placeable := !(req && res == "silent")
+		drains := name == c.Ctl.Draining()
+		placeable := !(req && res == "silent") && !drains
 		var why any
-		if !placeable {
+		if drains {
+			why = "server " + name + " draining"
+		} else if !placeable {
 			why = "resource on " + name + " silent"
 		}
 		var archive any
@@ -479,7 +516,8 @@ func (c *SpecConsole) Servers() map[string]any {
 		if s.workers == nil {
 			s.workers = []map[string]any{}
 		}
-		out[name] = map[string]any{"archive": archive, "resource": res, "workers": s.workers, "requires_resource": req, "placeable": placeable, "why": why}
+		out[name] = map[string]any{"archive": archive, "resource": res, "workers": s.workers, "requires_resource": req,
+			"draining": drains, "placeable": placeable, "why": why}
 	}
 	return map[string]any{"policy": c.Ctl.Policy(), "servers": out}
 }
@@ -799,6 +837,10 @@ func (c *SpecConsole) Serve(addr string) (*http.Server, net.Listener, error) {
 // `/rec/spec`, `/rec/recordings`, `/rec/metrics` — the same class over that
 // subsystem's spec with the console's token. `/mounts` names what the
 // process fronts. A new subsystem is a YAML, a worker, and a path.
+//
+// Two routes live on the Mount itself and not on any subsystem, because both are questions about the
+// whole process and not about one kind of unit: `/drain` — one machine is about to stop, is it safe yet —
+// and `/schema` — the store's layout, and whether every live process is new enough to raise it.
 type Mount struct {
 	Root   *SpecConsole
 	Mounts map[string]*SpecConsole
@@ -825,6 +867,107 @@ func (m *Mount) Describe() map[string]any {
 	return map[string]any{"root": m.Root.Spec.Name, "mounts": mounts}
 }
 
+// SchemaRoute — `GET /schema`: what layout the store is in, what every live process understands, and
+// whether the version can be raised; `PUT /schema?version=2`: raise it, once every machine is new.
+//
+// The two halves of an upgrade read side by side here: `/drain` is about one machine at a time, `/schema`
+// is about the moment all of them are done. Raising early is the mistake the guard exists for — it would
+// lock out whatever was not upgraded, which is exactly what a rolling upgrade is trying to avoid.
+func (m *Mount) SchemaRoute(method string, q map[string]string) (int, map[string]any) {
+	ctl := m.Root.Ctl
+	switch method {
+	case "PUT":
+		v, err := strconv.Atoi(q["version"])
+		if err != nil {
+			return 400, map[string]any{"error": "a version is a number", "detail": "a version is a number"}
+		}
+		if err := ctl.SetSchema(v); err != nil {
+			var tooNew *ErrSchemaTooNew
+			if errors.As(err, &tooNew) {
+				return 409, map[string]any{"error": err.Error(), "detail": err.Error()}
+			}
+			return 400, map[string]any{"error": err.Error(), "detail": err.Error()}
+		}
+	case "GET":
+	default:
+		return 404, map[string]any{}
+	}
+	running := Builds(ctl.Objects, ctl.Wall(), 45)
+	canRaise, builds := Schema, map[string]bool{}
+	procs := map[string]any{}
+	for n, b := range running {
+		procs[n] = map[string]any{"schema": b.Schema, "build": b.Build, "ts": b.Ts, "live": b.Live}
+		if !b.Live {
+			continue
+		}
+		builds[b.Build] = true
+		if b.Schema < canRaise {
+			canRaise = b.Schema
+		}
+	}
+	names := make([]string, 0, len(builds))
+	for b := range builds {
+		names = append(names, b)
+	}
+	sort.Strings(names)
+	return 200, map[string]any{"version": SchemaVersion(ctl.Vars), "understood": Schema,
+		"builds": names, "can_raise_to": canRaise, "processes": procs}
+}
+
+// DrainRoute — `GET /drain`: is it safe to stop the machine yet; `POST /drain?server=srv-a`: say it is
+// going to stop; `DELETE /drain`: it is back. The only route on the Mount itself rather than on a
+// subsystem, because a server carries several and the answer is `safe` only when every one of them says so.
+//
+// An upgrade script is then three lines and no `sleep`: POST, poll until `safe`, stop the machine. And
+// after the reboot, DELETE — and EnsureHome refills it one unit a pass, which is why the script should
+// wait for the work to come back before draining the NEXT machine. Otherwise ten servers' worth of units
+// drift onto whichever two were upgraded last.
+func (m *Mount) DrainRoute(method string, q map[string]string) (int, map[string]any) {
+	ctl := m.Root.Ctl
+	switch method {
+	case "POST":
+		server := q["server"]
+		if server == "" {
+			return 400, map[string]any{"error": "a drain names a server", "detail": "a drain names a server"}
+		}
+		if err := ctl.Drain(server); err != nil {
+			var refused *ErrDrainRefused
+			if errors.As(err, &refused) {
+				return 409, map[string]any{"error": err.Error(), "detail": err.Error()}
+			}
+			return 400, map[string]any{"error": err.Error(), "detail": err.Error()}
+		}
+	case "DELETE":
+		if err := ctl.Undrain(); err != nil {
+			return 400, map[string]any{"error": err.Error(), "detail": err.Error()}
+		}
+	case "GET":
+	default:
+		return 404, map[string]any{}
+	}
+	consoles := []*SpecConsole{m.Root}
+	for _, n := range m.names {
+		consoles = append(consoles, m.Mounts[n])
+	}
+	subsystems, strand := map[string]any{}, map[string]any{}
+	safe := true
+	for _, c := range consoles {
+		part := c.DrainState("")
+		subsystems[Str(part["subsystem"])] = part
+		if ok, have := part["safe"].(bool); have && !ok {
+			safe = false
+		}
+		if ws, have := part["would_strand"].([]string); have && len(ws) > 0 {
+			strand[Str(part["subsystem"])] = ws
+		}
+	}
+	server := ctl.Draining()
+	if server == "" {
+		return 200, map[string]any{"draining": "", "safe": true, "subsystems": subsystems}
+	}
+	return 200, map[string]any{"draining": server, "safe": safe, "would_strand": strand, "subsystems": subsystems}
+}
+
 func (m *Mount) Handler() http.Handler {
 	root := m.Root.Handler()
 	handlers := map[string]http.Handler{}
@@ -834,6 +977,21 @@ func (m *Mount) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/mounts" {
 			SendJSON(w, 200, m.Describe())
+			return
+		}
+		if req.URL.Path == "/drain" || req.URL.Path == "/schema" {
+			q := map[string]string{}
+			for k, v := range req.URL.Query() {
+				if len(v) > 0 {
+					q[k] = v[0]
+				}
+			}
+			route := m.DrainRoute
+			if req.URL.Path == "/schema" {
+				route = m.SchemaRoute
+			}
+			status, body := route(req.Method, q)
+			SendJSON(w, status, body)
 			return
 		}
 		parts := strings.SplitN(req.URL.Path, "/", 3)

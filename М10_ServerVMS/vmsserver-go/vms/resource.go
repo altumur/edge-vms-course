@@ -15,23 +15,61 @@ package vms
 // VMS's, and the names say so.
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	p "vmsserver/w2cplatform"
 )
 
 // ResourceRoutes: the VMS's reads on the resource, plugged into the platform's server.
 func ResourceRoutes(archive *ArchiveResource) p.Extra {
+	return ResourceRoutesWith(archive, nil, "")
+}
+
+// ResourceRoutesWith adds the two answers that need to know whose server this is: PUT /segment — a
+// segment another resource is giving up — and GET /space, which says what is here, how deep it goes, and
+// what of it another server writes now.
+func ResourceRoutesWith(archive *ArchiveResource, objects p.ObjectStore, server string) p.Extra {
 	root := archive.Root
 	return func(w http.ResponseWriter, req *http.Request) bool {
 		pth := req.URL.Path
+		if req.Method == "PUT" && strings.HasPrefix(pth, "/segment/") {
+			return putSegment(w, req, root)
+		}
 		switch {
+		case pth == "/space":
+			// What the archive holds and what of it is not ours — the state the watermark acts on,
+			// readable whether or not it is acting. `accounted` is what the manifests name; the
+			// heartbeat's `usage` is every FILE under the root, and the gap between them is whatever
+			// nobody indexes. Worth seeing side by side.
+			now := archive.Wall()
+			away := map[string]string{}
+			if objects != nil && server != "" {
+				away = Foreign(archive, objects, server, now, 45)
+			}
+			units, accounted := map[string]map[string]any{}, int64(0)
+			for _, u := range archive.Units() {
+				b := UnitBytes(archive, u)
+				accounted += b
+				row := map[string]any{"bytes": b, "days": math.Round(DepthDays(archive, u, now)*100) / 100}
+				if s, ok := away[u]; ok {
+					row["written_on"] = s
+				}
+				units[u] = row
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"server": server, "units": units,
+				"foreign": away, "accounted": accounted})
+			return true
 		case strings.HasPrefix(pth, "/manifest/"):
 			unit := pth[strings.LastIndex(pth, "/")+1:] // a UNIT, verbatim: "7" today, "7-backup" the day the spec says so
 			if unit == "" {
@@ -84,12 +122,89 @@ func ResourceRoutes(archive *ArchiveResource) p.Extra {
 // NewVmsResource: the platform's resource for this server with the VMS
 // registered on it, and the event database over its tree (created; the
 // process calls Database.Start() after Restore()).
+// putSegment: the VMS's one write on the resource, a segment another resource is giving up.
+//
+// It arrives as bytes plus its manifest line in X-Segment, and lands at the SAME relative path —
+// rec/<unit>/e<epoch>/<stamp>.mp4 says nothing about a server, which is why footage can change hands at
+// all. The epoch travels with it: it says who WROTE the segment, never where it lies.
+//
+// Idempotent on purpose: a path already in our manifest is accepted again and the line is not doubled, so
+// the sender may retry a batch it is unsure of. Written tmp + rename, the file first and the line after —
+// the order Promote uses, for the same reason.
+func putSegment(w http.ResponseWriter, req *http.Request, root string) bool {
+	rel := strings.TrimPrefix(req.URL.Path, "/segment/")
+	if strings.Contains(rel, "..") || !strings.HasPrefix(rel, Sub+"/") || !strings.HasSuffix(rel, ".mp4") {
+		w.WriteHeader(400)
+		return true
+	}
+	seg, err := SegmentFromLine(req.Header.Get("X-Segment"))
+	if err != nil || seg.Path != rel {
+		w.WriteHeader(400)
+		return true
+	}
+	dest := filepath.Join(root, rel)
+	os.MkdirAll(filepath.Dir(dest), 0o755)
+	data, err := io.ReadAll(req.Body)
+	if err != nil {
+		w.WriteHeader(400)
+		return true
+	}
+	if os.WriteFile(dest+".tmp", data, 0o644) != nil || os.Rename(dest+".tmp", dest) != nil {
+		w.WriteHeader(500)
+		return true
+	}
+	man := NewManifest(root, seg.Unit)
+	for _, s := range man.Read() {
+		if s.Path == rel { // a retried segment does not get a second line
+			w.WriteHeader(204)
+			return true
+		}
+	}
+	man.Append(seg)
+	w.WriteHeader(204)
+	return true
+}
+
 func NewVmsResource(archive *ArchiveResource, server, url string, vars p.Variables, objects p.ObjectStore, wall p.Clock, peers p.PeerClient) *p.Resource {
 	if wall == nil {
 		wall = archive.Wall
 	}
 	r := p.NewResource(archive.Root, server, url, vars, objects, archive.BucketSeconds, wall, peers)
-	r.Register("rec", &ArchivePolicy{Res: archive, Vars: vars}) // footage is the recorder's: rec/<cam>/…, rec/recordings/<cam>
+	r.Register("rec", &ArchivePolicy{Res: archive, Vars: vars, Objects: objects,
+		Peers: NewHTTPSegmentPeer(), Server: server}) // footage is the recorder's: rec/<cam>/…, rec/recordings/<cam>
 	r.Database = p.NewEventDatabase(archive.Root, server, wall, archive.BucketSeconds)
 	return r
+}
+
+// HTTPSegmentPeer is how one archive hands a segment to another over the routes above.
+type HTTPSegmentPeer struct{ Client *http.Client }
+
+func NewHTTPSegmentPeer() *HTTPSegmentPeer {
+	return &HTTPSegmentPeer{&http.Client{Timeout: 30 * time.Second}}
+}
+
+func (c *HTTPSegmentPeer) PutSegment(url, rel string, data []byte, line string) error {
+	req, _ := http.NewRequest("PUT", url+"/segment/"+rel, bytes.NewReader(data))
+	req.Header.Set("X-Segment", line)
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 201 && resp.StatusCode != 204 {
+		return fmt.Errorf("PUT segment %s: %d", rel, resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *HTTPSegmentPeer) Manifest(url, unit string) ([]byte, error) {
+	resp, err := c.Client.Get(url + "/manifest/" + unit)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GET manifest %s: %d", unit, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }

@@ -509,6 +509,37 @@ func (a *ArchiveResource) Usage() int64 {
 type ArchivePolicy struct {
 	Res  *ArchiveResource
 	Vars p.Variables
+	// Only Free needs these: the peers' heartbeats say who writes what and who has room, and the client
+	// carries the bytes. Absent, the policy still repairs and retains — an archive on a box with no
+	// neighbours has nowhere to evacuate to and does not pretend otherwise.
+	Objects p.ObjectStore
+	Peers   SegmentPeer
+	Server  string
+}
+
+// Free is the resource's watermark answered in the recorder's own terms: evacuate what is not ours, then
+// cut above the floor, then report the shortfall. The order is in space.go, and so is why.
+func (ap *ArchivePolicy) Free(need int64, now, minDays float64) map[string]any {
+	var freed int64
+	out := map[string]any{}
+	if ap.Objects != nil && ap.Peers != nil && ap.Server != "" {
+		rep := Evacuate(ap.Res, ap.Objects, ap.Peers, ap.Vars, ap.Server, need, now, 45, 0)
+		freed += rep.Freed
+		out["evacuated"] = rep.Moved
+		if rep.Skipped != nil {
+			out["skipped"] = rep.Skipped
+		}
+	}
+	if freed < need {
+		cut, removed := Cut(ap.Res, need-freed, now, minDays)
+		freed += cut
+		out["cut"] = removed
+	}
+	if short := need - freed; short > 0 { // everything on the floor: said out loud, not cut into
+		out["shortfall"] = short
+	}
+	out["freed"] = freed
+	return out
 }
 
 func (ap *ArchivePolicy) Pass(now float64) map[string]any {

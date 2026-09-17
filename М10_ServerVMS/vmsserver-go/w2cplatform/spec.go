@@ -186,7 +186,12 @@ type SubsystemSpec struct {
 	// is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
 	// is, and a second copy on the same server is not a second copy. Unplaceable while no other server
 	// qualifies, and that is the honest answer — /unplaceable says so rather than quietly co-locating.
-	SpreadBy     string
+	SpreadBy string
+	// home: <field> — the server named in that field of the unit's own row is where it prefers to run;
+	// home: near — wherever the subsystem this one follows is. A PREFERENCE and not a label: a label is a
+	// filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
+	// because the home being down is exactly when the work has to continue somewhere else.
+	Home         string
 	TieBreak     string
 	DeadBand     float64
 	Snapshot     []string
@@ -273,6 +278,9 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	if sb, ok := pl["spread_by"].(string); ok {
 		s.SpreadBy = sb
 	}
+	if hm, ok := pl["home"].(string); ok {
+		s.Home = hm
+	}
 	if tb, ok := pl["tie_break"].(string); ok {
 		s.TieBreak = tb
 	}
@@ -291,6 +299,16 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if _, ok := Constraints[s.Constraint]; !ok {
 		return nil, fmt.Errorf("spec: unknown constraint %q", s.Constraint)
+	}
+	// Following nothing cannot say it follows, and a home that names no field is a typo — let both fail
+	// at start rather than turn quietly into "there is no home".
+	if s.Home == "near" && (s.Near == "none" || s.Near == "") {
+		return nil, fmt.Errorf("spec %s: home: near needs a near to follow", s.Name)
+	}
+	if s.Home != "" && s.Home != "near" {
+		if _, ok := s.Fields[s.Home]; !ok {
+			return nil, fmt.Errorf("spec %s: home names no field: %q", s.Name, s.Home)
+		}
 	}
 	return s, nil
 }
@@ -312,7 +330,8 @@ func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
 // ACLConsole: the operator's rows — what a console (one per server, any of them) may write; never placement.
 func (s *SubsystemSpec) ACLConsole() []string {
 	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*", // idem: a retried POST answered the same by ANY instance
-		s.Name + "/policy"} // the administrator's knobs: servers shared | distinct
+		s.Name + "/policy", // the administrator's knobs: servers shared | distinct
+		DrainKey}           // "this machine is about to stop": the operator's, and the same row for every subsystem
 	for _, d := range s.Derived {
 		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")
 	}
@@ -913,9 +932,52 @@ func (c *SpecController) seen(workers []string) []string {
 
 // pool: the given list, or the workers seen heartbeating in the last 45 s;
 // minus those whose resource is silent when the spec requires one; sorted.
+// OnDraining: workers on the server being drained. The third kind of "not here" beside a released slot
+// and a silent resource — and the only one the operator says BEFORE it is true, which is the whole point
+// of an upgrade: being noticed is the slow path, and a planned stop is not a silence.
+func (c *SpecController) OnDraining(workers []string) []string {
+	server := Draining(c.Vars)
+	if server == "" {
+		return nil
+	}
+	out := []string{}
+	for _, w := range workers {
+		if c.ServerOf(w) == server {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// WouldStrand is the dry run: which units nothing else could serve if this server went away — asked
+// BEFORE it does, with the machinery that will answer for real afterwards. Fifty cameras leaving a
+// machine have to land somewhere, and "somewhere" is a fact about headroom and labels, not a hope.
+func (c *SpecController) WouldStrand(server string, workers []string) []string {
+	var left []string
+	for _, w := range c.pool(workers) {
+		if c.ServerOf(w) != server {
+			left = append(left, w)
+		}
+	}
+	out := []string{}
+	for _, row := range c.Units() {
+		uid := row.ID()
+		if pl := c.Placement(uid); pl != nil && c.ServerOf(pl.Worker) != server {
+			continue // it is not on that server: not its business
+		}
+		if len(c.Eligible(row, left)) == 0 {
+			out = append(out, uid)
+		}
+	}
+	return out
+}
+
 func (c *SpecController) pool(workers []string) []string {
 	all := c.seen(workers)
 	gone := map[string]bool{}
+	for _, w := range c.OnDraining(all) { // an operator said this machine is about to stop
+		gone[w] = true
+	}
 	for _, w := range c.WithoutResource(all) {
 		gone[w] = true
 	}
@@ -968,9 +1030,66 @@ func (c *SpecController) HolderNear(uid string) (worker, server string) {
 // pick: the affinity, then the tie-break — the best worker on the holder's server if one has room, else the
 // best anywhere; the note says which ("beside w-1 holding it" / "away from w-1 on srv-1 (no room there)") so
 // the reason tells the operator whether the unit reads its holder's shared memory or its RTSP fan-out.
+// HomeFor is where a unit belongs, for EnsureHome. home is either the name of a field on the row — the
+// server an operator named — or the literal "near", meaning "wherever the thing I follow is".
+//
+// Exactly one of a following pair may say home: near, and that is not a detail. Two subsystems that each
+// follow the other have no anchor: every pass moves each towards where the other WAS, and they swap
+// places instead of meeting. The anchor is the one with a real home — for the VMS, the recording,
+// because it writes to a disk and a disk does not move.
+func (c *SpecController) HomeFor(row Row) string {
+	if c.Spec.Home == "near" {
+		if _, server := c.HolderNear(row.ID()); server != "" && server != "?" {
+			return server
+		}
+		return ""
+	}
+	if c.Spec.Home == "" {
+		return ""
+	}
+	return Str(row[c.Spec.Home])
+}
+
+// HomeOf is the same, addressed by id — what pick needs before a unit is placed anywhere. The "near"
+// form is resolved by pick, which already has the holder.
+func (c *SpecController) HomeOf(uid string) string {
+	if c.Spec.Home == "" || c.Spec.Home == "near" {
+		return ""
+	}
+	if row := c.Unit(uid); row != nil {
+		return Str(row[c.Spec.Home])
+	}
+	return ""
+}
+
+// pick, with the two affinities in order — home first, then near — over a pool the FILTERS have already
+// cut (Eligible: the constraint and spread_by). The note says which it was, so the reason tells the
+// operator both where the unit reads its source from and whether it is where it belongs.
+//
+// Home before near, because they disagree exactly when a server is down: near would pin a unit to
+// whichever server picked it up, and nothing would ever come back.
 func (c *SpecController) pick(pool []string, uid string) (best string, free int, note string) {
 	holder, server := c.HolderNear(uid)
-	if holder != "" {
+	follows := c.Spec.Home == "near"
+	home := c.HomeOf(uid)
+	if follows && holder != "" {
+		home = server
+	}
+	if home != "" {
+		var atHome []string
+		for _, w := range pool {
+			if c.ServerOf(w) == home {
+				atHome = append(atHome, w)
+			}
+		}
+		if b, f := c.best(atHome); b != "" {
+			if follows {
+				return b, f, ", beside " + holder + " holding it"
+			}
+			return b, f, ", at home on " + home
+		}
+	}
+	if holder != "" && !follows {
 		var beside []string
 		for _, w := range pool {
 			if c.ServerOf(w) == server {
@@ -978,14 +1097,66 @@ func (c *SpecController) pick(pool []string, uid string) (best string, free int,
 			}
 		}
 		if b, f := c.best(beside); b != "" {
-			return b, f, ", beside " + holder + " holding it"
+			note := ", beside " + holder + " holding it"
+			if home != "" {
+				note += " (home " + home + " has no room)"
+			}
+			return b, f, note
 		}
 	}
 	best, free = c.best(pool)
-	if best != "" && holder != "" {
-		return best, free, ", away from " + holder + " on " + server + " (no room there)"
+	if best != "" && holder != "" && c.ServerOf(best) != server {
+		note = ", away from " + holder + " on " + server + " (no room there)"
 	}
-	return best, free, ""
+	if best != "" && home != "" && !follows && c.ServerOf(best) != home {
+		note += "; away from home " + home
+	}
+	return best, free, note
+}
+
+// EnsureHome: units away from the home their row names — or, with near and no home of their own, away
+// from the server holding what they follow — moved back, budget a pass. It is the other half of home:
+// pick decides where a unit GOES, this is what happens to one already placed somewhere else when its
+// home comes back.
+//
+// Three things worth naming. budget: every move is a new epoch and a seam in the recording, so the
+// controller calls it with one. Eligible first: the filters still beat the preference, and a preference
+// that could overrule a filter would put a unit on a server that cannot reach it. And silence when the
+// home is not back or has no room — the unit is where it can be, which is the point of a preference.
+func (c *SpecController) EnsureHome(budget int, workers []string) []Move {
+	moves := []Move{}
+	if budget <= 0 || c.Spec.Home == "" {
+		return moves
+	}
+	pool := c.pool(workers)
+	for _, row := range c.Units() {
+		if len(moves) >= budget {
+			break
+		}
+		uid, home := row.ID(), c.HomeFor(row)
+		pl := c.Placement(uid)
+		if home == "" || pl == nil || c.ServerOf(pl.Worker) == home {
+			continue
+		}
+		var atHome []string
+		for _, w := range c.Eligible(row, pool) {
+			if c.ServerOf(w) == home {
+				atHome = append(atHome, w)
+			}
+		}
+		best, free := c.best(atHome)
+		if best == "" {
+			continue // home is not back, or has no room: stay put, quietly
+		}
+		why := "home is"
+		if c.Spec.Home == "near" {
+			why = "it follows " + c.Spec.Near + " onto"
+		}
+		if _, err := c.MoveTo(uid, best, fmt.Sprintf("%s %s; most free capacity (%d); on %s", why, home, free, home)); err == nil {
+			moves = append(moves, Move{uid, pl.Worker, best})
+		}
+	}
+	return moves
 }
 
 func (c *SpecController) best(pool []string) (string, int) {
@@ -1123,6 +1294,11 @@ func (c *SpecController) Redistribute(workers []string) []Move {
 	for _, w := range c.WithoutResource(c.seen(workers)) {
 		if len(c.Assignment(w).Units) > 0 {
 			gones = append(gones, gone{w, "resource on " + c.ServerOf(w) + " silent"})
+		}
+	}
+	for _, w := range c.OnDraining(c.seen(workers)) { // an operator said this machine is about to stop
+		if len(c.Assignment(w).Units) > 0 {
+			gones = append(gones, gone{w, "server " + c.ServerOf(w) + " draining"})
 		}
 	}
 	gs := c.GoneServers(45) // the server is gone: its slot lapsed and its resource silent

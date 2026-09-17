@@ -105,6 +105,9 @@ func (r *RecWorker) Backfill(budget int, now float64, force bool) []Filled {
 	if !force && !r.InWindow(now) {
 		return []Filled{}
 	}
+	if r.UnderPressure() {
+		return []Filled{}
+	}
 	done := []Filled{}
 	for _, row := range r.Rows {
 		if len(done) >= budget {
@@ -160,3 +163,16 @@ func (r *RecWorker) Fetch(unit, cam, url string, t0, t1 float64) Filled {
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+// UnderPressure: the disk is over its high mark, the resource is freeing space this minute, and backfill
+// exists to bring more in. Without this the two chase each other for ever on a full disk — the same trap
+// KeepDays closes in time, closed here in space. Not a force override either: an operator asking for a
+// range cannot be given one the resource is about to delete.
+func (r *RecWorker) UnderPressure() bool {
+	knob := p.GetSpaceSettings(r.Vars)
+	if !knob.Enabled {
+		return false
+	}
+	total, free := r.SpaceProbe(r.Archive.Root)
+	return total > 0 && float64(total-free) > float64(total)*knob.High
+}
