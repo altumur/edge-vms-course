@@ -144,12 +144,12 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     r1, r2 = c.recorder(1, "srv-a"), c.recorder(2, "srv-b"); r1.heartbeat_once(); r2.heartbeat_once()
     SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1"})           # the operator: record camera 1
     pl = rec.ensure_placed()[0]
-    assert pl.worker == "r-1" and pl.reason.endswith("beside w-1 holding it") and r1.reconcile_once() == [("start", 1)]   # the affinity: beside the camera's worker
-    assert r1.actuator.started[1]["source"] == live_shm(1) and r1.actuator.started[1]["via"] == "shm" and r1.actuator.started[1]["epoch"] == 1   # so it reads the worker's tee, not RTSP
+    assert pl.worker == "r-1" and pl.reason.endswith("beside w-1 holding it") and r1.reconcile_once() == [("start", "1")]   # the affinity: beside the camera's worker (a recording's unit id is a name, not a number)
+    assert r1.actuator.started["1"]["source"] == live_shm(1) and r1.actuator.started["1"]["via"] == "shm" and r1.actuator.started["1"]["epoch"] == 1   # so it reads the worker's tee, not RTSP
     r1.heartbeat_once()
     t = c.wall(); srv_a = c.servers["srv-a"]
-    p = segment_path(srv_a.archive, 1, 1, datetime.fromtimestamp(t - 600, timezone.utc)); os.makedirs(os.path.dirname(p), exist_ok=True)
-    open(p, "wb").write(b"x" * 1000); Manifest(srv_a.archive, 1).append(Segment(1, 1, t - 600, t, os.path.relpath(p, srv_a.archive), 1000))
+    p = segment_path(srv_a.archive, "1", 1, datetime.fromtimestamp(t - 600, timezone.utc)); os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(b"x" * 1000); Manifest(srv_a.archive, "1").append(Segment("1", 1, t - 600, t, os.path.relpath(p, srv_a.archive), 1000))
     rs["srv-a"].heartbeat()
     assert resources_seen(c.objects)["srv-a"]["units"] == {"rec": ["1"]}                       # footage: the recorder's tree
     # srv-a dies: w-1 and r-1 both silent, and so is srv-a's resource. Nomad's replacement w-1 comes up on srv-b
@@ -163,7 +163,7 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     assert rec.gone_servers() == {"r-1": "srv-a"}
     assert [(m[1], m[2]) for m in rec.redistribute()] == [("r-1", "r-2")]
     assert rec.placement("1").reason.startswith("server srv-a gone: slot r-1 lapsed and its resource silent; ") and rec.placement("1").reason.endswith("; on srv-b, beside w-1 holding it")
-    assert r2.reconcile_once() == [("start", 1)] and r2.actuator.started[1]["source"] == live_shm(1) and r2.actuator.started[1]["epoch"] == 2   # w-1 came back on srv-b too: shared memory again
+    assert r2.reconcile_once() == [("start", "1")] and r2.actuator.started["1"]["source"] == live_shm(1) and r2.actuator.started["1"]["epoch"] == 2   # w-1 came back on srv-b too: shared memory again
     r2.heartbeat_once()
     assert rec.workers_seen()["r-2"].status[0]["via"] == "shm" and rec.where("1") == "r-2"
     assert live_url("srv-b", 1) == "rtsp://srv-b:8554/1"                                        # what r-2 would read had w-1 landed on srv-c

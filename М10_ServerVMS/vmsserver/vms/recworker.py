@@ -72,8 +72,8 @@ class RecWorker(VmsWorker):
         self.backfill_budget = 0                    # ranges per pass; 0 = only what an operator asks for
         self.backfilled = 0
         self.promoted = 0
-        self.waiting: set[int] = set()
-        self.sources: dict[int, str] = {}                                     # what each running pipeline subscribed to
+        self.waiting: set[str] = set()                                        # units with nobody holding their camera
+        self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
         for p in self.archive.closed_in_spool(grace_seconds, self.wall()):     # what the last instance closed but did not promote
             self.archive.promote(p); self.promoted += 1
 
@@ -96,7 +96,10 @@ class RecWorker(VmsWorker):
     # recorder's epoch. No source (the camera is held by nobody yet) means "cannot start now": the
     # reconciler backs off and retries, and the status says `waiting`.
     def enrich(self, cam: dict) -> dict | None:
-        src = self.source(cam["id"])
+        # Two identities, and this is the one method where both are used in three lines: `cam["cam"]` is
+        # WHOSE fan-out to subscribe to, `cam["id"]` is WHICH recording is subscribing. `id: cam` makes
+        # them equal today; nothing here would change if it stopped.
+        src = self.source(cam["cam"])
         if src is None:
             self.waiting.add(cam["id"])
             return None
@@ -106,8 +109,8 @@ class RecWorker(VmsWorker):
                     spool=self.archive.spool, archive=self.archive.root)
 
     def status_extra(self, cam: dict) -> dict:
-        src = self.source(cam["id"])
-        out = {"cam": str(cam["id"]), "source": src[1] if src else None, "via": (None if src is None else "shm" if src[1].startswith("shm://") else "rtsp")}
+        src = self.source(cam["cam"])
+        out = {"cam": str(cam["cam"]), "source": src[1] if src else None, "via": (None if src is None else "shm" if src[1].startswith("shm://") else "rtsp")}
         if cam["id"] in self.waiting and cam["id"] not in self.reconciler.actual:
             out["why"] = "camera held by nobody"
         return out
@@ -158,17 +161,17 @@ class RecWorker(VmsWorker):
     # The card exists because the camera kept recording while we could not, so replication is not "copy
     # everything" — it is the difference between two coverages. Desired: continuous. Actual: the manifest.
     # The difference is the work. Lesson 2's loop, over time instead of pipelines.
-    def our_coverage(self, cam) -> list[tuple[float, float]]:
-        return self.archive.coverage(str(cam), self.stitch)
+    def our_coverage(self, unit) -> list[tuple[float, float]]:
+        return self.archive.coverage(str(unit), self.stitch)
 
     # What the device has and we do not, bounded at both ends. Not older than our own retention — otherwise
     # backfill and retention chase each other round the clock, for ever. Not fresher than `settle` — the
     # last minutes are being written right now, are in no manifest yet, and we would be fetching what we
     # are recording.
-    def gaps(self, cam, coverage: dict, now: float) -> list[tuple[float, float]]:
+    def gaps(self, unit, coverage: dict, now: float) -> list[tuple[float, float]]:
         want = (max(float(coverage["from"]), now - self.keep_days * 86400),
                 min(float(coverage["to"]), now - self.settle))
-        return [] if want[1] <= want[0] else subtract(want, self.our_coverage(cam))
+        return [] if want[1] <= want[0] else subtract(want, self.our_coverage(unit))
 
     # Local time, and the one place in the course where that is right: "at night" is night where the camera
     # is, not where the server is. `(22, 6)` wraps midnight — without that branch it would never arrive.
@@ -197,25 +200,25 @@ class RecWorker(VmsWorker):
         for row in self.rows:
             if len(done) >= budget:
                 break
-            src = self.device_source(row["cam"])
+            src = self.device_source(row["cam"])            # the DEVICE is the camera's
             if src is None:
                 continue
             url, cov = src
-            for (t0, t1) in self.gaps(row["cam"], cov, now)[:budget - len(done)]:
-                done.append(self.fetch(row["cam"], url, t0, t1))
+            for (t0, t1) in self.gaps(row["id"], cov, now)[:budget - len(done)]:   # the GAPS are this recording's
+                done.append(self.fetch(row["id"], row["cam"], url, t0, t1))
         return done
 
     # One range: fetch it, and promote what came back as OURS — `source: edge`, our epoch, our manifest,
     # our retention. The overlap is checked a second time here because live recording may have reached the
     # same minutes while we were fetching; a segment that would land on top of one we already have is
     # dropped rather than written.
-    def fetch(self, cam, url: str, t0: float, t1: float) -> dict:
-        unit = str(cam)
+    def fetch(self, unit, cam, url: str, t0: float, t1: float) -> dict:
+        unit = str(unit)
         if not self.may_write(unit):
-            return {"cam": unit, "from": t0, "to": t1, "skipped": "no lease"}
+            return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "skipped": "no lease"}
         paths = self.actuator.record_range(unit, f"{url}?from={t0}&to={t1}", self.epochs.get(unit, 0),
                                            t0, t1, self.archive.spool)
-        have, kept = self.our_coverage(cam), 0
+        have, kept = self.our_coverage(unit), 0
         for p in paths:
             parsed = parse(p, self.archive.spool)
             span = (parsed[2].timestamp(), os.path.getmtime(p)) if parsed else (t0, t1)
@@ -223,7 +226,7 @@ class RecWorker(VmsWorker):
                 os.remove(p); continue                   # live recording got there while we were fetching
             self.archive.promote(p, source="edge"); kept += 1
         self.backfilled += kept
-        return {"cam": unit, "from": t0, "to": t1, "segments": kept}
+        return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "segments": kept}
 
     def metrics_text(self) -> str:
         return (f"# TYPE rec_recordings_running gauge\nrec_recordings_running {len(self.reconciler.actual)}\n"

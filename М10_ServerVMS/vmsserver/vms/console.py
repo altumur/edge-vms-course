@@ -182,7 +182,18 @@ def device_spans(objects, cam, ours: list[dict], t0: float, t1: float, now: floa
              "fenced": False, "device": True} for a, b in subtract(want, have)]
 
 
-def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, ctl=None):
+# A camera's footage lives under the units that record it, and the archive is keyed by unit (Lesson 7).
+# With `id: cam` there is exactly one such unit and its name is the camera's number — so this returns
+# `["7"]` for camera 7 and the answer is the one the console always gave. The day a camera has two
+# recordings it returns both, and the timeline below merges them without another line changing.
+def recordings_of(rec_ctl, cam) -> list[str]:
+    if rec_ctl is None:
+        return [str(cam)]                      # no rec controller mounted: the old assumption, said out loud
+    units = [str(r["id"]) for r in rec_ctl.units() if str(r.get("cam", r["id"])) == str(cam)]
+    return units or [str(cam)]                 # nothing declared: the camera's own name, so old footage still shows
+
+
+def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, ctl=None, rec_ctl=None):
     """What the VMS adds to the generic console: the media — playback from the
     archive we wrote and from the one we did not, and the WHEP door to the live
     gateways. Returns None when a route is not ours, so the console answers 404."""
@@ -220,7 +231,8 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
         if path.startswith("/timeline/"):
             cid = int(path.rsplit("/", 1)[1])
             t0, t1 = float(q.get("from", 0)), float(q.get("to", 1e12))
-            ours = Manifest(archive.root, cid).timeline(t0, t1)
+            ours = [sp for unit in recordings_of(rec_ctl, cid)                    # every recording of this camera…
+                    for sp in Manifest(archive.root, unit).timeline(t0, t1)]      # …merged into one timeline
             extra = device_spans(ctl.objects, cid, ours, t0, t1, con_wall()) if ctl is not None else []
             return 200, sorted(ours + extra,
                                key=lambda d: (d["start"], d["epoch"]))
@@ -240,7 +252,9 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
     `mounts` adds the rest by name."""
     live = LiveFront(ctl, live_ctl) if live_ctl is not None else None
     index = index or MergedIndex(ctl.objects, wall=wall or time.time)   # no database here: the resource process's, asked over HTTP
-    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall, extra=vms_routes(archive, live, ctl), media=archive is not None, index=index)
+    rec_ctl = (mounts or {}).get("rec")                                  # the console fronts it anyway: the page's Record toggle
+    root = SpecConsole(ctl, marks_root=archive.root if archive else None, wall=wall,
+                       extra=vms_routes(archive, live, ctl, rec_ctl), media=archive is not None, index=index)
     m = Mount(root)
     if live_ctl is not None:
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))

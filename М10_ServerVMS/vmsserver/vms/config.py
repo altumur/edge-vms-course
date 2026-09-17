@@ -111,9 +111,14 @@ def live_url(server: str, cid) -> str:
 # `REC_SPEC.row(items)` with `id` as the camera number: the recorder's reconciler wants an int id like the
 # worker's, and a recording is named by its camera.
 def rec_row(items: dict) -> dict:
-    r = REC_SPEC.row(items)
-    r["id"] = int(r["cam"])
-    return r
+    """The recorder's row, with `id` left exactly as the spec made it.
+
+    It used to read `r["id"] = int(r["cam"])` — and that one line was the whole of "a recording is named
+    by its camera", hidden in a parser rather than declared in the YAML. With it gone the two identities
+    are separate everywhere: `id` is WHICH RECORDING (its epoch, its slot, its tree), `cam` is WHOSE
+    FAN-OUT to subscribe to. `id: cam` in the spec still makes them the same string today — the difference
+    is that now that is the spec's statement and nothing else's."""
+    return REC_SPEC.row(items)
 OPERATOR_FIELDS = tuple(SPEC.fields)
 FORBIDDEN_FIELDS = PLATFORM_FIELDS
 

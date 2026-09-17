@@ -56,8 +56,8 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     assert pl.worker == "r-1" and pl.reason.endswith("on srv-1, whose resource is unknown, beside w-1 holding it")   # the affinity, and the reason says so
     # the recorder's pass: the pipeline is built from the worker's tee — its shared-memory branch, since the worker is on THIS
     # server (no RTSP hop, no fan-out process on the recording path) — under the RECORDER's epoch
-    assert r.reconcile_once() == [("start", 1)]
-    started = r.actuator.started[1]
+    assert r.reconcile_once() == [("start", "1")]
+    started = r.actuator.started["1"]
     assert started["source"] == live_shm(1) == "shm:///run/vms/1.shm" and started["via"] == "shm" and started["source_server"] == "srv-1"
     assert live_url("srv-1", 1) == "rtsp://srv-1:8554/1"                                           # what a recorder on another server would read
     assert started["epoch"] == 1 and box.vars.get("rec/epoch/1")[0] == {"epoch": "1"} and w.epochs == {"1": 1}   # two epochs, two writers, one camera
@@ -78,10 +78,10 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     # server — same recorder, same disks, same tree; a new pipeline is a new epoch (e1 before the move, e2 after, both here)
     w2 = VmsWorker("w-2", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall, server="srv-2", archive_root=box.archive)
     ctl.move(1, "w-2", "test"); w2.reconcile_once(); w2.heartbeat_once(); w.reconcile_once(); w.heartbeat_once()
-    assert r.resubscribe() == [1] and r.actuator.calls[-1] == ("stop", 1)
+    assert r.resubscribe() == ["1"] and r.actuator.calls[-1] == ("stop", "1")
     box.clock.advance(10)
-    assert r.reconcile_once() == [("start", 1)] and r.actuator.started[1]["source"] == "rtsp://srv-2:8554/1" and r.actuator.started[1]["via"] == "rtsp"
-    assert r.actuator.started[1]["epoch"] == 2 and rec_ctl.where("1") == "r-1" and w2.epochs == {"1": 2}   # the recording did not move; its source did
+    assert r.reconcile_once() == [("start", "1")] and r.actuator.started["1"]["source"] == "rtsp://srv-2:8554/1" and r.actuator.started["1"]["via"] == "rtsp"
+    assert r.actuator.started["1"]["epoch"] == 2 and rec_ctl.where("1") == "r-1" and w2.epochs == {"1": 2}   # the recording did not move; its source did
     # two more cameras, both held on srv-2 by w-2. The affinity puts the first recording beside w-2 — r-2 reads shared memory
     # there; r-2 (capacity 1) is then full, so the second goes to r-1 and reads the fan-out — the reason says where it would rather be
     con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4"}); con.create_camera({"name": "dock", "source": "driverpack://file/dock.mp4"})
@@ -91,8 +91,8 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     pl2, pl3 = rec_ctl.ensure_placed()[-2:]                                                        # (the pass returns every placement, camera 1's first)
     assert (pl2.worker, pl3.worker) == ("r-2", "r-1")
     assert pl2.reason.endswith("on srv-2, whose resource is unknown, beside w-2 holding it") and pl3.reason.endswith("on srv-1, whose resource is unknown, away from w-2 on srv-2 (no room there)")
-    assert r2.reconcile_once() == [("start", 2)] and r2.actuator.started[2]["via"] == "shm" and r2.actuator.started[2]["source"] == "shm:///run/vms/2.shm"
-    assert r.reconcile_once() == [("start", 3)] and r.actuator.started[3]["via"] == "rtsp" and r.actuator.started[3]["source"] == "rtsp://srv-2:8554/3"
+    assert r2.reconcile_once() == [("start", "2")] and r2.actuator.started["2"]["via"] == "shm" and r2.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"
+    assert r.reconcile_once() == [("start", "3")] and r.actuator.started["3"]["via"] == "rtsp" and r.actuator.started["3"]["source"] == "rtsp://srv-2:8554/3"
 
 
 def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someone_does():
@@ -100,13 +100,13 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4"})                    # camera 2: created, not placed yet
     r = _recorder(box)
     rec_con.create({"cam": "2"}); rec_ctl.ensure_placed()
-    assert r.reconcile_once() == [("failed", 2)]                                                   # no fan-out to subscribe to
+    assert r.reconcile_once() == [("failed", "2")]                                                   # no fan-out to subscribe to
     r.heartbeat_once()
     st = rec_ctl.workers_seen()["r-1"].status[0]
     assert st["phase"] == "waiting" and st["why"] == "camera held by nobody" and st["source"] is None
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()                                   # the worker takes it
     box.clock.advance(10)
-    assert r.reconcile_once() == [("start", 2)] and r.actuator.started[2]["source"] == "shm:///run/vms/2.shm"   # held here: the tee's shared memory
+    assert r.reconcile_once() == [("start", "2")] and r.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"   # held here: the tee's shared memory
     # a camera with no recording is watched, not recorded: it is held (live, detection, events), and has no rec/ tree
     assert rec_ctl.units() == [{"id": "2", "cam": "2", "retention_days": 30, "enabled": True, "labels": [], "revision": 1}]
     assert [c["id"] for c in ctl.cameras()] == [1, 2] and subsystems_under(box.archive) == {}
@@ -114,4 +114,4 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     assert subsystems_under(box.archive) == {"vms": ["1"]}
     # stop recording: the row goes, the placement is taken back on the next pass, the footage stays until retention
     rec_con.delete("2"); rec_ctl.unplace_deleted()
-    assert rec_ctl.assignment("r-1").units == [] and r.reconcile_once() == [("stop", 2)]
+    assert rec_ctl.assignment("r-1").units == [] and r.reconcile_once() == [("stop", "2")]

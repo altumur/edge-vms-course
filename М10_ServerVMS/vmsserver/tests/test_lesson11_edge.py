@@ -294,3 +294,83 @@ def test_spread_by_keeps_two_copies_off_one_server():
     admin.create({"name": "7-third", "cam": "7"})
     admin.ensure_placed()
     assert admin.placement("7-third") is None and "7-third" in [u["id"] for u in admin.unplaceable()]
+
+
+# The claim this file is here to check: two recordings of one camera, on two servers, cost a YAML edit
+# and nothing else. Three lines change — `id`, the `cam` field, `spread_by` — and no Python at all.
+TWO_COPIES_YAML = """
+name: rec
+unit:
+  rows: recordings
+  id: name                                           # was: cam — the unit is now named, not numbered
+  fields:
+    name:           {type: string, required: true}   # "7-main", "7-backup"
+    cam:            {type: string, required: true}   # whose fan-out this recording subscribes to
+    retention_days: {type: int,    default: 30}
+    enabled:        {type: bool,   default: true}
+    labels:         {type: list}
+placement:
+  capacity:   {from: capacity, fallback: 50}
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   none
+  servers:    shared
+  tie_break:  most-free-capacity
+  near:       vms
+  spread_by:  cam                                    # new: two copies of one camera go on different servers
+  rebalance:  {dead_band: 0.10}
+snapshot: [name, cam, retention_days, enabled, labels]
+console:
+  running: recordings_running
+"""
+
+
+def test_two_recordings_of_one_camera_are_a_yaml_edit():
+    """Not a rehearsal for a change: the change itself, run against the real classes.
+
+    The spec below is `rec.subsystem.yaml` with three lines different. Everything it drives —
+    SpecController, RecWorker, the archive tree, the console's timeline — is the shipped code,
+    imported unchanged. If any of it still assumed "a recording is named by its camera", this
+    test would not pass, and until the unit-keyed tree it would not have."""
+    import yaml
+    from w2cplatform.contract import Heartbeat
+    from w2cplatform.spec import SubsystemSpec
+    from vms.archive import Manifest, Segment, segment_path
+    from vms.console import recordings_of
+
+    box, ctl, con, con_vars = _box()
+    spec = SubsystemSpec.from_dict(yaml.safe_load(TWO_COPIES_YAML))
+    assert spec.id == "name" and spec.spread_by == "cam"
+
+    rec = SpecController(spec, box.vars, box.objects, wall=box.wall)
+    for w, server in (("r-1", "srv-1"), ("r-2", "srv-2")):
+        box.objects.put(spec.sub.heartbeat_key(w),
+                        Heartbeat(w, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50}).to_bytes())
+
+    con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})     # camera 1
+    rec.create({"name": "1-main", "cam": "1"})
+    rec.create({"name": "1-backup", "cam": "1"})
+    rec.ensure_placed()
+
+    main, backup = rec.placement("1-main"), rec.placement("1-backup")
+    assert main and backup and rec.server_of(main.worker) != rec.server_of(backup.worker)   # the point of the exercise
+
+    # each copy writes its own tree, under its own name, with its own retention
+    t = box.wall()
+    for unit in ("1-main", "1-backup"):
+        p = segment_path(box.archive, unit, 1, datetime.fromtimestamp(t - 600, timezone.utc))
+        os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"x")
+        Manifest(box.archive, unit).append(Segment(unit, 1, t - 600, t, os.path.relpath(p, box.archive), 1))
+
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    assert arch.units() == ["1-backup", "1-main"]                                  # two directories, not one
+    assert len(arch.coverage("1-main")) == 1 and len(arch.coverage("1-backup")) == 1
+
+    # and the camera's timeline is both of them: the console resolves camera -> recordings
+    assert sorted(recordings_of(rec, 1)) == ["1-backup", "1-main"]
+    spans = [sp for unit in recordings_of(rec, 1) for sp in Manifest(box.archive, unit).timeline(0, 1e12)]
+    assert len(spans) == 2
+
+    # retention is per recording, because the row is per recording
+    rec.update("1-backup", {"retention_days": 1})
+    assert rec.unit("1-main")["retention_days"] == 30 and rec.unit("1-backup")["retention_days"] == 1
