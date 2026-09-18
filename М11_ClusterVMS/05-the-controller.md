@@ -73,10 +73,12 @@ Why not consistent hashing, since it is what a distributed-systems course teache
 ## Step 5 — The one object that leaves the cluster
 
 ```python
-ctl.publish_snapshot()   -> vms/snapshot  {cluster: "north", ts, cameras: [{…row, worker: "w-1", server: "srv-b"}]}
+ctl.publish_snapshot()   -> vms/snapshot/w-1  {cluster: "north", worker: "w-1", ts, cameras: [{…row, worker: "w-1", server: "srv-b"}]}
+                         -> vms/snapshot/w-2  {…}                  ONE OBJECT PER WORKER (М10A Lesson 25)
+                         -> vms/snapshot/unplaced  {…}             the rows no worker holds
 ```
 
-`test_the_snapshot_is_the_only_thing_that_leaves_the_cluster`. It is a *copy*: the rows themselves stay in raft with one writer, and М12's read model is built from this object and the workers' heartbeats, never from the Variables. Its `ts` is what the domain's console shows as the age on every row from this cluster — Lesson 3's point that the RPO moved up a level and became a display age. The controller publishes it every five seconds beside `ensure_placed()` and `redistribute()`; those three calls are the whole of its loop.
+`test_the_snapshot_is_the_only_thing_that_leaves_the_cluster`. It is sharded by the worker holding the unit, exactly as the heartbeats are, and for the reason М10A Lesson 25 measures: `OBJECTS=variables://objects` here, and a Nomad Variable caps the whole object at 64 KiB, which one object for 600 cameras does not fit under. It is a *copy*: the rows themselves stay in raft with one writer, and М12's read model is built from these objects and the workers' heartbeats, never from the Variables. Its `ts` is what the domain's console shows as the age on every row from this cluster — Lesson 3's point that the RPO moved up a level and became a display age. The controller publishes it every five seconds beside `ensure_placed()` and `redistribute()`; those three calls are the whole of its loop.
 
 ## Step 6 — The console
 

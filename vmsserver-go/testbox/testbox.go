@@ -4,6 +4,7 @@
 package testbox
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -52,4 +53,28 @@ func NewBox() *Box {
 	vars, _ := p.NewFileVariables(filepath.Join(root, "config"))
 	objects, _ := p.NewFsObjectStore(filepath.Join(root, "objects"))
 	return &Box{root, vars, objects, filepath.Join(root, "spool"), filepath.Join(root, "archive"), NewClock(1000), NewClock(1_757_500_000)}
+}
+
+// PublishedSnapshot is the snapshot as a READER sees it: list `<sub>/snapshot/`, get each shard, merge.
+// One object per worker is the published shape, so a test that reads one key is testing a shape the
+// platform no longer has.
+func (b *Box) PublishedSnapshot(sub, rows string) (map[string]any, []byte) {
+	out := []any{}
+	all := []byte{}
+	keys, _ := b.Objects.List(sub + "/snapshot/")
+	for _, key := range keys {
+		raw, _ := b.Objects.Get(key)
+		if raw == nil {
+			continue
+		}
+		all = append(all, raw...)
+		var shard map[string]any
+		if err := json.Unmarshal(raw, &shard); err != nil {
+			continue
+		}
+		if rs, ok := shard[rows].([]any); ok {
+			out = append(out, rs...)
+		}
+	}
+	return map[string]any{rows: out}, all
 }

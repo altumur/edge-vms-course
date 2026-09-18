@@ -1,6 +1,7 @@
 """Lesson 1 — what a cluster cannot know: lookup across clusters from the
 snapshots the clusters publish, incompleteness as a result, placement by
 reachability, CAS against two placers, a dead cluster is not a trigger."""
+import json
 import threading
 from domain.federation import DomainDirectory
 from domain.placement import CameraSite, ClusterPlacer, Refused
@@ -9,8 +10,10 @@ from tests.conftest import Clock, Running, make_domain, snapshot
 
 def test_where_across_three_clusters_from_what_the_clusters_publish():
     """Each cluster's controller placed its cameras on its workers and published
-    one snapshot; the domain read three objects and nothing else. The domain
-    asks by the ref it gave the cluster — every cluster has its own id 1."""
+    its snapshot — one object per worker. The domain read those objects and
+    nothing else: north has two workers, so north is two objects, and that is
+    the whole point of the shape. The domain asks by the ref it gave the
+    cluster — every cluster has its own id 1."""
     fed, links = make_domain({"north": ("vlan:a",), "south": ("vlan:b",), "cloud": ("vlan:c",)}, "north")
     wall = Clock()
     n = Running(fed.clusters["north"], wall, workers=(("w-0", "srv-1"), ("w-1", "srv-2"))); n.create(1, 2)
@@ -23,7 +26,9 @@ def test_where_across_three_clusters_from_what_the_clusters_publish():
     assert fed.clusters["south"].snapshot()["cameras"][0]["id"] == 1                  # the cluster's id; the domain never asks by it
     holdings, down = d.holdings()
     assert down == [] and holdings["south"] == {"w-0": ["7"]} and holdings["cloud"] == {"w-0": ["50"]}
-    assert fed.clusters["north"].objects.list("vms/snapshot") == ["vms/snapshot"]           # one object per cluster is what the domain reads
+    # ONE OBJECT PER WORKER — the heartbeat's shape, and for the same reason: north runs two workers,
+    # so north publishes two objects. The cluster that grows publishes more of them, not a bigger one.
+    assert fed.clusters["north"].objects.list("vms/snapshot/") == ["vms/snapshot/w-0", "vms/snapshot/w-1"]
     assert d.ages() == {"cloud": 0.0, "north": 0.0, "south": 0.0}                     # the snapshot's age is the domain's RPO, shown
 
 
@@ -59,6 +64,23 @@ def test_two_clusters_claiming_a_camera_is_a_fault_not_a_tie():
         DomainDirectory(fed).where(7); raise AssertionError("must raise")
     except RuntimeError as e:
         assert "placement failure" in str(e)
+
+
+def test_a_camera_caught_mid_move_is_read_once_from_the_newer_shard():
+    """Two shards of ONE cluster can both name a camera for the length of a move:
+    the domain reads the shards one at a time, and the writer is between two puts.
+    That is not the fault `where()` raises on — two CLUSTERS claiming a camera is.
+    The newer shard wins, and the age of the whole is the age of the STALEST shard,
+    because a directory is only as fresh as its oldest part."""
+    fed, _ = make_domain({"north": ()}, "north")
+    c = fed.clusters["north"]
+    c.objects.put("vms/snapshot/w-0", json.dumps({"cluster": "north", "worker": "w-0", "ts": 1000.0,
+        "cameras": [{"id": 1, "ref": "7", "name": "cam7", "worker": "w-0", "server": "srv-1"}]}).encode())
+    c.objects.put("vms/snapshot/w-1", json.dumps({"cluster": "north", "worker": "w-1", "ts": 1005.0,
+        "cameras": [{"id": 1, "ref": "7", "name": "cam7", "worker": "w-1", "server": "srv-2"}]}).encode())
+    a = DomainDirectory(fed, wall=lambda: 1010.0).where(7)
+    assert a.found and (a.worker, a.server) == ("w-1", "srv-2")          # the newer shard, not a raise
+    assert DomainDirectory(fed, wall=lambda: 1010.0).ages()["north"] == 10.0   # 1010 − 1000: the stalest shard
 
 
 def test_placement_is_by_reachability_then_headroom():

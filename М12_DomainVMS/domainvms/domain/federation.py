@@ -7,11 +7,15 @@ partial, stale by a bounded amount, sometimes incomplete — and the honest
 response to "where is camera 7" when a cluster is unreachable is "not found
 in the clusters I could reach", never a short list rendered as complete.
 
-What a cluster publishes for the domain to read (М11 Lesson 5): ONE object,
-`vms/snapshot` — its controller's copy of every camera row with the worker
-and server it is placed on, carrying a timestamp — and its workers'
-heartbeats. The domain never reads a cluster's Variables: the rows stay in
-raft with one writer, and what leaves is a copy with an age.
+What a cluster publishes for the domain to read (М11 Lesson 5): one object
+PER WORKER under `vms/snapshot/` — the controller's copy of the camera rows
+placed on that worker, with the server, carrying a timestamp — plus
+`vms/snapshot/unplaced` for the rows nobody holds, and the workers' own
+heartbeats. Same shape as the heartbeats, and for the same reason: an object
+store has a ceiling, and the one object the snapshot used to be was the only
+thing in the platform that grew with the whole cluster. The domain never
+reads a cluster's Variables: the rows stay in raft with one writer, and what
+leaves is a copy with an age.
 
 `Cluster` is the domain's handle on one region; `Federation` is the list;
 `DomainDirectory` merges the snapshots with the incompleteness kept as a
@@ -26,7 +30,7 @@ from dataclasses import dataclass, field
 from cluster.objectstore import ObjectStore
 from cluster.variables import Variables
 
-SNAPSHOT = "vms/snapshot"
+SNAPSHOT = "vms/snapshot/"           # a PREFIX: one object per worker, the shape the heartbeats already have
 
 
 class Unreachable(Exception):
@@ -43,9 +47,33 @@ class Cluster:
     is_domain_cluster: bool = False       # the one that hosts the domain services — a stated decision
 
     def snapshot(self) -> dict | None:
-        """The controller's copy of the cluster's cameras and placement, with its age."""
-        raw = self.objects.get(SNAPSHOT)
-        return json.loads(raw) if raw else None
+        """The cluster's cameras and placement, merged from one object per worker.
+
+        Read exactly the way `heartbeats()` below is read — a listing and a get per
+        object — because the cluster now publishes it in exactly that shape. There is
+        no single instant at which the whole cluster was in the state this returns:
+        each shard carries its own `ts`, and the merge keeps the OLDEST as the age of
+        the whole, because a directory is only as fresh as its stalest part.
+
+        A camera can appear in two shards for the length of a move. The newer shard
+        wins; reporting it twice would make `where()` raise on what is not a fault."""
+        keys = self.objects.list(SNAPSHOT)
+        if not keys:
+            return None
+        best: dict[str, tuple[float, dict]] = {}
+        oldest = None
+        for key in keys:
+            raw = self.objects.get(key)
+            if not raw:
+                continue
+            shard = json.loads(raw)
+            ts = float(shard.get("ts", 0))
+            oldest = ts if oldest is None else min(oldest, ts)
+            for row in shard.get("cameras", []):
+                uid = str(row.get("id"))
+                if uid not in best or ts > best[uid][0]:
+                    best[uid] = (ts, row)
+        return {"cluster": self.name, "ts": oldest or 0, "cameras": [r for _, r in best.values()]}
 
     def heartbeats(self) -> dict[str, dict]:
         """worker -> its last heartbeat (М10's shape: status, server, epoch per camera)."""

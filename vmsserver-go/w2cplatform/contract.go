@@ -34,6 +34,30 @@ func (s Subsystem) Config(parts ...string) string {
 }
 func (s Subsystem) Assignment(worker string) string   { return s.Name + "/workers/" + worker }
 func (s Subsystem) HeartbeatKey(worker string) string { return s.Name + "/" + worker + "/heartbeat" }
+
+// SnapshotKey is `<name>/snapshot/<worker>` — one object per worker, the same shape HeartbeatKey already
+// has. The snapshot used to be ONE object for the whole cluster, and it was the only place in the platform
+// where data grew in a single object: an object store has a ceiling (Nomad Variables: 64 KiB on the whole
+// object), and 600 cameras — the cluster's own design maximum — did not fit under it. Sharded by the worker
+// that holds the unit, it grows the way the cluster grows: more units means more workers means more
+// objects, each the size of one worker's assignment.
+//
+// `unplaced` is the shard for the units no worker holds, so no worker may be called that. The key space is
+// shared, and a reserved name needs a rule that reserves it — not a hope. (Nor can the unplaced rows go in
+// `<name>/snapshot` itself: a store backed by a filesystem cannot have both a file and a directory under
+// that one name.)
+func (s Subsystem) SnapshotKey(worker string) (string, error) {
+	if worker == Unplaced {
+		return "", fmt.Errorf("a worker may not be called %q: that key is the shard for the units no worker holds", Unplaced)
+	}
+	if worker == "" {
+		worker = Unplaced
+	}
+	return s.Name + "/snapshot/" + worker, nil
+}
+
+// SnapshotPrefix is what a reader lists to find every shard.
+func (s Subsystem) SnapshotPrefix() string { return s.Name + "/snapshot/" }
 func (s Subsystem) EpochKey(unit string) string       { return s.Name + "/epoch/" + unit }
 func (s Subsystem) SlotKey(worker string) string      { return s.Name + "/slots/" + worker }
 func (s Subsystem) ACLController() []string           { return []string{s.Name + "/*"} }
@@ -204,6 +228,10 @@ const (
 	SchemaKey = "platform/schema"
 	DrainKey  = "platform/drain"
 )
+
+// Unplaced is the snapshot shard for the units no worker holds. Reserved inside `<name>/snapshot/`, which
+// is otherwise the worker name space — see Subsystem.SnapshotKey.
+const Unplaced = "unplaced"
 
 // Build is what a person reads on /schema; the machine reads Schema.
 var Build = envOr("BUILD", "dev")

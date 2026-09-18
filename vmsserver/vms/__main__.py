@@ -180,7 +180,8 @@ def reccontroller() -> None:
 # - Each pass: `ensure_placed()` (deleted rows unplaced first, then every unplaced camera onto the workers
 #   it currently sees by their heartbeats), `redistribute()` (only the cameras of a *released* slot —
 #   scale-in — move; a merely silent slot is a crash and is left for the scheduler), `publish_snapshot()`
-#   (`vms/snapshot` in the object store). Any exception is logged and the loop continues; `stop.wait(5)`
+#   (one object per worker under `vms/snapshot/` in the object store). Any exception is logged and the
+#   loop continues; `stop.wait(5)`
 #   between passes. No port, no state: the process can be restarted at any moment, and two of them agree by
 #   CAS.
 def _controller_loop(ctl) -> None:

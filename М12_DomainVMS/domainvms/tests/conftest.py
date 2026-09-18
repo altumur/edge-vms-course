@@ -110,9 +110,15 @@ class Running:
 
 
 def snapshot(cluster: Cluster, cameras: dict[int, tuple[str, str]], ts: float) -> None:
-    """A cluster's snapshot written by hand: {camera: (worker, server)}."""
-    cluster.objects.put("vms/snapshot", json.dumps({"cluster": cluster.name, "ts": ts,
-        "cameras": [{"id": i + 1, "ref": str(c), "name": f"cam{c}", "worker": w, "server": s} for i, (c, (w, s)) in enumerate(cameras.items())]}).encode())
+    """A cluster's snapshot written by hand — ONE OBJECT PER WORKER, which is the
+    shape М10's controller publishes: {camera: (worker, server)}."""
+    shards: dict[str, list] = {}
+    for i, (c, (w, s)) in enumerate(cameras.items()):
+        shards.setdefault(w or "unplaced", []).append(
+            {"id": i + 1, "ref": str(c), "name": f"cam{c}", "worker": w or None, "server": s})
+    for name, rows in shards.items():
+        cluster.objects.put(f"vms/snapshot/{name}", json.dumps(
+            {"cluster": cluster.name, "worker": rows[0]["worker"], "ts": ts, "cameras": rows}).encode())
 
 
 def heartbeat(cluster: Cluster, worker: str, cams: list[int], ts: float, server: str = "srv-1", epoch: int = 1,

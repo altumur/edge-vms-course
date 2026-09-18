@@ -6,7 +6,7 @@ vocabulary over it (camera, not unit) and nothing else.
     placement     which worker runs a camera — by the workers' own capacity, under the label constraint,
                   stored with a reason naming the server; adding a worker moves nothing; rebalance only when asked
     assignment    vms/workers/<worker> — what each worker reads
-    the snapshot  vms/snapshot — cameras and placement as one object for the layer above (М12)
+    the snapshot  vms/snapshot/<worker> — cameras and placement, one object per worker, for М12
 
 It holds nothing. Two instances are harmless. It is never on the recovery
 path. On one box it is a cluster of one: the snapshot still says which
@@ -26,7 +26,8 @@ server, and it is the hostname.
 # operator edit and controller-owned fields refused; placement is by the workers' own reported capacity
 # under the `labels-subset` constraint, stored with a reason naming the server, adding a worker moves
 # nothing, rebalance only when asked; the assignment `vms/workers/<worker>` is what each worker reads; the
-# snapshot `vms/snapshot` is cameras and placement as one object for the layer above (М12). It holds
+# snapshot `vms/snapshot/<worker>` is cameras and placement, one object per worker, for the layer above
+# (М12) — the heartbeat's shape, so it stays small however large the cluster gets. It holds
 # nothing, two instances are harmless, and it is never on the recovery path. Used by `__main__.controller`
 # (with the controller's token), `__main__.console` and `vms/console.py` (with the console's token), and
 # every Lesson 4/5 test.

@@ -13,7 +13,7 @@ from vms.console import serve
 from vms.controller import VmsController
 from w2cplatform.secrets import SECRET_MASK, is_secret_field, mask_secrets
 from w2cplatform.spec import Refused, SubsystemSpec
-from tests.conftest import Box
+from tests.conftest import Box, published_snapshot
 
 
 def test_the_rule_is_a_suffix_and_masking_is_a_copy():
@@ -32,7 +32,7 @@ def test_the_rule_is_a_suffix_and_masking_is_a_copy():
 
 
 def test_a_spec_may_not_put_a_secret_in_the_snapshot():
-    """`vms/snapshot` is what leaves the cluster for М12's directory. So this is refused at LOAD time,
+    """`vms/snapshot/*` is what leaves the cluster for М12's directory. So this is refused at LOAD time,
     which is a different thing from being watched for at review time: a subsystem written a year from now
     cannot make the mistake, and nobody has to remember the rule to be protected by it."""
     base = {"name": "x", "unit": {"fields": {"host": {"type": "string"}, "api_secret": {"type": "string"}}}}
@@ -138,8 +138,8 @@ def test_neither_half_of_the_credential_leaves_the_cluster():
     con.create_camera({"name": "gate", "source": "driverpack://acme/10.0.0.5",
                        "cred_username": "admin", "cred_secret": "Hunter2"})
     ctl.publish_snapshot()
-    snap = json.loads(box.objects.get("vms/snapshot"))
-    row = snap["cameras"][0] if isinstance(snap, dict) and "cameras" in snap else snap[0]
+    snap = published_snapshot(box.objects, "vms")     # every shard, the way М12 reads them
+    row = snap["cameras"][0]
     assert "cred_secret" not in row and "cred_username" not in row
     assert "Hunter2" not in json.dumps(snap) and "admin" not in json.dumps(snap)
     # what the snapshot IS for — М12 reads these three and nothing else about a row

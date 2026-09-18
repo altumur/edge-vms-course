@@ -77,7 +77,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .secrets import is_secret_field
-from .contract import DRAIN_KEY, Controller, Subsystem, slot_number
+from .contract import DRAIN_KEY, UNPLACED, Controller, Subsystem, slot_number
 from .objects import ObjectStore
 from .variables import Variables
 
@@ -210,7 +210,7 @@ class SubsystemSpec:
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=list(d.get("snapshot", []) or [n for n in fields if not is_secret_field(n)]),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
-        # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot` is what М12's directory
+        # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
         # the default ("every field") is a convenience and not a decision.
         leaks = [n for n in spec.snapshot if is_secret_field(n)]
@@ -930,22 +930,49 @@ class SpecController(Controller):
                 rows.append({**s, "worker": w, "server": hb.extra.get("server", "?"), "age": round(age, 1), "worker_state": state})
         return sorted(rows, key=lambda r: _unit_key(str(r["id"])))
 
-    # Units and placement as one object for the layer above: `{cluster, ts, <rows>: [{id, <snapshot fields>,
-    # revision, worker, server}]}`. A copy with an age — never the rows themselves, which do not leave raft.
-    def snapshot(self) -> dict:
-        """Units and placement as one object: what the layer above reads. A copy
-        with an age — never the rows themselves, which do not leave raft."""
+    # Units and placement for the layer above, ONE OBJECT PER WORKER: `<name>/snapshot/<worker>` holding
+    # `{cluster, worker, ts, <rows>: [{id, <snapshot fields>, revision, worker, server}]}`, plus
+    # `<name>/snapshot/unplaced` for the units nobody holds. A copy with an age — never the rows
+    # themselves, which do not leave raft.
+    #
+    # The shape is the heartbeat's, and that is the point. Every other object in the platform is already
+    # sharded by its writer — one heartbeat per worker, one resource heartbeat per server — and stays small
+    # whatever the cluster does. The snapshot was the exception: one object for every unit in the cluster,
+    # under a store with a ceiling. See `Subsystem.snapshot_key` for the arithmetic that made this a defect
+    # rather than a preference.
+    def snapshot_shards(self) -> dict[str, dict]:
+        """The snapshot as one object per worker, keyed by shard name."""
         keep = ["id"] + [f for f in self.spec.snapshot if f != "id"] + ["revision"]
-        units = []
+        now, out = self.wall(), {}
         for r in self.units():
             w = self.where(r["id"])
-            units.append({**{k: r[k] for k in keep if k in r}, "worker": w, "server": self.server_of(w or "")})
+            self.sub.snapshot_key(w)              # refuses a worker named `unplaced` before it shadows the shard
+            sh = out.setdefault(w or UNPLACED, {"cluster": self.cluster, "worker": w, "ts": now, self.spec.rows: []})
+            sh[self.spec.rows].append({**{k: r[k] for k in keep if k in r}, "worker": w,
+                                       "server": self.server_of(w or "")})
+        return out
+
+    # The shards merged back, for a reader inside this process. What М12 does over the wire is the same
+    # merge, out of `objects.list(snapshot_prefix())` — see `Cluster.snapshot` there.
+    def snapshot(self) -> dict:
+        """Every shard merged: what the layer above ends up seeing."""
+        shards = self.snapshot_shards()
+        units = [u for sh in shards.values() for u in sh[self.spec.rows]]
         return {"cluster": self.cluster, "ts": self.wall(), self.spec.rows: units}
 
-    # Writes the snapshot JSON to the object store at `<name>/snapshot`.
+    # Writes one object per worker under `<name>/snapshot/`.
     def publish_snapshot(self) -> None:
         import json
-        self.objects.put(self.sub.config("snapshot"), json.dumps(self.snapshot()).encode())
+        shards = self.snapshot_shards()
+        prefix = self.sub.snapshot_prefix()
+        # A worker that is GONE — scaled in, or its units moved away — keeps its last shard forever: nothing
+        # in the platform deletes an object. Its units would go on being reported to М12 from a worker that
+        # no longer exists. So every shard already in the store that this pass did not fill is written EMPTY.
+        for key in self.objects.list(prefix):
+            shards.setdefault(key[len(prefix):], {"cluster": self.cluster, "worker": None, "ts": self.wall(),
+                                                  self.spec.rows: []})
+        for name, shard in shards.items():
+            self.objects.put(prefix + name, json.dumps(shard).encode())
 
     # Per worker: `started − previous_hb` from the heartbeat's own fields — the gap between the last
     # heartbeat of the previous instance and this instance's start, measured from what the workers wrote,

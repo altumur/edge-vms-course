@@ -8,7 +8,9 @@ here; MinIO or S3 in М11. An object appears whole or not at all."""
 # **Role in the module.** Lesson 1's second store. Where `variables.py` holds small rows that must be
 # consistent and CAS-able, the object store holds things that are large or written often and are never
 # queried by key: worker heartbeats (`<sub>/<worker>/heartbeat`), resource heartbeats
-# (`platform/resources/<server>/heartbeat`) and the controller's snapshot (`<sub>/snapshot`). Its one
+# (`platform/resources/<server>/heartbeat`) and the controller's snapshot, one object per worker under
+# `<sub>/snapshot/`. Every one of them is sharded by the writer it describes, and that is why each stays
+# small however large the cluster gets: a store has a ceiling (Nomad Variables: 64 KiB on the object). Its one
 # promise is that an object appears whole or not at all. The `ObjectStore` Protocol is the interface
 # `Controller`, `Worker`, `Resource` and `SpecController` type against; `FsObjectStore` is the one-box
 # implementation and М11 replaces it with MinIO behind the same three methods.

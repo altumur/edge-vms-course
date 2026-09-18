@@ -15,7 +15,7 @@ from vms.liveworker import LiveWorker
 from vms.config import live_url
 from vms.worker import FakeActuator, VmsWorker
 from vms.console import serve
-from tests.conftest import Box
+from tests.conftest import Box, published_snapshot
 
 OFFER = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\na=rtpmap:96 H264/90000\r\n"
 
@@ -176,7 +176,7 @@ def test_the_two_subsystems_share_the_platform_and_see_nothing_of_each_other():
             "live/epoch/1", "live/placement/1", "live/slots/g-1", "live/streams/1", "live/workers/g-1"]
         assert not any("live" in p for p in box.vars.list("vms/"))                        # the VMS's rows carry nothing about viewers
         live_ctl.publish_snapshot()                                                      # the live controller publishes its own snapshot
-        snap = json.loads(box.objects.get("live/snapshot"))
+        snap = published_snapshot(box.objects, "live", rows="streams")
         assert snap["streams"][0]["cam"] == "1" and snap["streams"][0]["worker"] == "g-1"
     finally:
         srv.shutdown(); srv.server_close()

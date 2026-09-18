@@ -113,12 +113,26 @@ def test_a_worker_runs_where_a_resource_answers_and_leaves_when_it_stops():
 
 def test_the_snapshot_is_the_only_thing_that_leaves_the_cluster():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall, cluster="north")
-    _three_workers(c, ctl)
-    ctl.create_camera({"source": "driverpack://file/1.mp4", "name": "gate"}); ctl.ensure_placed()
+    ws = _three_workers(c, ctl)
+    for i in range(3):
+        ctl.create_camera({"source": f"driverpack://file/{i}.mp4", "name": "gate" if i == 0 else f"cam{i}"})
+    ctl.ensure_placed()
     ctl.publish_snapshot()
-    snap = json.loads(c.objects.get("vms/snapshot"))
-    assert snap["cluster"] == "north" and snap["cameras"][0]["name"] == "gate" and snap["cameras"][0]["server"] in ("srv-a", "srv-b", "srv-c")
-    assert snap["ts"] == c.wall()                                          # a copy, with an age — the domain's RPO is this
+    # ONE OBJECT PER WORKER, the shape the heartbeats already have. Three cameras spread over three
+    # workers is three objects — a cluster that grows publishes MORE of them, never a bigger one. That is
+    # the whole difference from the single object this used to be, which grew with the cluster under a
+    # store that caps an object at 64 KiB.
+    keys = c.objects.list("vms/snapshot/")
+    assert keys == ["vms/snapshot/" + w for w in sorted(ws)]
+    held = [json.loads(c.objects.get(k)) for k in keys]
+    rows = [r for sh in held for r in sh["cameras"]]
+    assert len(rows) == 3                                                  # every camera, once
+    gate = next(r for r in rows if r["name"] == "gate")
+    assert gate["server"] in ("srv-a", "srv-b", "srv-c")
+    # each shard says whose it is, and every row in it agrees
+    assert all(all(r["worker"] == sh["worker"] for r in sh["cameras"]) for sh in held)
+    assert all(sh["cluster"] == "north" for sh in held)
+    assert all(sh["ts"] == c.wall() for sh in held)                        # a copy, with an age — the domain's RPO is this
 
 
 def test_the_console_over_http():

@@ -2,6 +2,7 @@
 archive, a clock. No GStreamer — the actuator is the fake."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -27,6 +28,18 @@ class Box:
         self.spool = os.path.join(self.root, "spool")
         self.archive = os.path.join(self.root, "archive")
         self.clock, self.wall = Clock(), Clock(1_757_500_000.0)
+
+
+def published_snapshot(objects, sub: str, rows: str = "cameras") -> dict:
+    """The snapshot as a READER sees it: list `<sub>/snapshot/`, get each shard, merge.
+    One object per worker is the published shape, so a test that reads one key is
+    testing a shape the platform no longer has."""
+    out = []
+    for key in objects.list(f"{sub}/snapshot/"):
+        raw = objects.get(key)
+        if raw:
+            out.extend(json.loads(raw).get(rows, []))
+    return {rows: out}
 
 
 def cam(i, revision=1, enabled=True, **kw):

@@ -952,8 +952,16 @@ func (c *SpecController) ReadModel(lostAfter float64) []map[string]any {
 
 // Snapshot: units and placement as one object — what the layer above reads.
 // A copy with an age; never the rows themselves, which do not leave raft.
-func (c *SpecController) Snapshot() map[string]any {
-	units := []map[string]any{}
+// SnapshotShards is the snapshot as ONE OBJECT PER WORKER, keyed by shard name: `<name>/snapshot/<worker>`
+// holding that worker's rows, plus `<name>/snapshot/unplaced` for the rows nobody holds.
+//
+// The shape is the heartbeat's, and that is the point. Every other object in the platform is already
+// sharded by its writer — one heartbeat per worker, one resource heartbeat per server — and stays small
+// whatever the cluster does. The snapshot was the exception: one object for every unit in the cluster,
+// under a store with a ceiling. See Subsystem.SnapshotKey for why that made it a defect, not a preference.
+func (c *SpecController) SnapshotShards() (map[string]map[string]any, error) {
+	now := c.Wall()
+	out := map[string]map[string]any{}
 	for _, r := range c.Units() {
 		m := map[string]any{"id": r["id"], "revision": r["revision"]}
 		for _, f := range c.Spec.Snapshot {
@@ -968,14 +976,65 @@ func (c *SpecController) Snapshot() map[string]any {
 			m["worker"] = nil
 		}
 		m["server"] = c.ServerOf(w)
-		units = append(units, m)
+		// refuses a worker named `unplaced` before it shadows the shard
+		if _, err := c.Sub.SnapshotKey(w); err != nil {
+			return nil, err
+		}
+		name := w
+		if name == "" {
+			name = Unplaced
+		}
+		sh, ok := out[name]
+		if !ok {
+			sh = map[string]any{"cluster": c.Cluster, "worker": m["worker"], "ts": now, c.Spec.Rows: []map[string]any{}}
+			out[name] = sh
+		}
+		sh[c.Spec.Rows] = append(sh[c.Spec.Rows].([]map[string]any), m)
+	}
+	return out, nil
+}
+
+// Snapshot is every shard merged, for a reader inside this process. What М12 does over the wire is the
+// same merge, out of a listing of SnapshotPrefix().
+func (c *SpecController) Snapshot() map[string]any {
+	shards, err := c.SnapshotShards()
+	units := []map[string]any{}
+	if err == nil {
+		for _, sh := range shards {
+			units = append(units, sh[c.Spec.Rows].([]map[string]any)...)
+		}
 	}
 	return map[string]any{"cluster": c.Cluster, "ts": c.Wall(), c.Spec.Rows: units}
 }
 
+// PublishSnapshot writes one object per worker under `<name>/snapshot/`.
 func (c *SpecController) PublishSnapshot() error {
-	raw, _ := json.Marshal(c.Snapshot())
-	return c.Objects.Put(c.Sub.Config("snapshot"), raw)
+	shards, err := c.SnapshotShards()
+	if err != nil {
+		return err
+	}
+	prefix := c.Sub.SnapshotPrefix()
+	// A worker that is GONE — scaled in, or its units moved away — keeps its last shard forever: nothing in
+	// the platform deletes an object. Its units would go on being reported to М12 from a worker that no
+	// longer exists. So every shard already in the store that this pass did not fill is written EMPTY.
+	existing, err := c.Objects.List(prefix)
+	if err != nil {
+		return err
+	}
+	for _, key := range existing {
+		name := strings.TrimPrefix(key, prefix)
+		if _, ok := shards[name]; !ok {
+			shards[name] = map[string]any{"cluster": c.Cluster, "worker": nil, "ts": c.Wall(),
+				c.Spec.Rows: []map[string]any{}}
+		}
+	}
+	for name, shard := range shards {
+		raw, _ := json.Marshal(shard)
+		if err := c.Objects.Put(prefix+name, raw); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // FailoverSeconds per worker: the gap between the heartbeat before its

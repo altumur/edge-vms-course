@@ -4,8 +4,9 @@ Not a fan-out to N consoles (waits for the slowest, breaks on the first
 dead one). Not status in Variables (raft is not for frequent, large data).
 The read model reads what each cluster's WORKERS already publish beside
 their heartbeat — `vms/<worker>/heartbeat`, carrying the worker's status
-per camera, its server, its epochs — plus each cluster's `vms/snapshot`
-for the rows a worker is not yet running. It holds them in memory and
+per camera, its server, its epochs — plus each cluster's `vms/snapshot/*`
+(one object per worker, the same shape) for the rows a worker is not yet
+running. It holds them in memory and
 serves the list, search and pagination from there. No call to any worker
 or controller on any request. It is a cache that admits to being one: a
 restart is one pass over the objects.

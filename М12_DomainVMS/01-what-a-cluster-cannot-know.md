@@ -14,7 +14,7 @@ The lesson is built around the property that makes those three questions a diffe
 
 ## Prerequisites
 
-- **М11 Lesson 5** — the cluster directory: one scan of `vms/workers/*`, and why it is current inside one raft; and the one object a cluster publishes for a layer above — `vms/snapshot`. This lesson aggregates several of those snapshots.
+- **М11 Lesson 5** — the cluster directory: one scan of `vms/workers/*`, and why it is current inside one raft; and what a cluster publishes for a layer above — `vms/snapshot/<worker>`, one object per worker. This lesson aggregates several clusters' worth of those.
 - **М11 Lesson 2** — Variables belong to a region, and the three-stores rule.
 - **М11 Lesson 4** — the epoch is per camera, issued by check-and-set from the cluster's raft. This lesson shows why per-cluster raft is precisely the right scope for it.
 - **М9 Lesson 5** — `revision` as a monotonic integer. The convergence token here is that idea, one scope up.
@@ -67,7 +67,7 @@ class Cluster:
 
 ## Step 3 — The directory of directories
 
-`DomainDirectory` reads one object per cluster — `vms/snapshot`, the controller's copy of every camera row with the worker and server it is placed on and a timestamp (М11 Lesson 5) — and merges. The rows themselves stay in each cluster's raft with one writer; what leaves is a copy with an age, and `ages()` shows it. The merge is ten lines; the part that matters is the return type:
+`DomainDirectory` reads each cluster's `vms/snapshot/*` — one object per worker, the controller's copy of the camera rows placed on it with the server and a timestamp (М11 Lesson 5, М10A Lesson 25) — and merges. The shards are read the way the heartbeats beside them are read, a listing and a get per object; the age of a cluster's answer is the age of its *stalest* shard, because a directory is only as fresh as its oldest part. The rows themselves stay in each cluster's raft with one writer; what leaves is a copy with an age, and `ages()` shows it. The merge is ten lines; the part that matters is the return type:
 
 ```python
 @dataclass

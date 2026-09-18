@@ -1,7 +1,6 @@
 package vms_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -60,8 +59,8 @@ func TestTheConsoleNeverHandsOutTheDeviceSecret(t *testing.T) {
 // Two different reasons, and they are worth keeping apart. The SECRET is out of the snapshot because the
 // snapshot leaves the cluster — the spec refuses a spec that names it there, so this is a rule, not a
 // choice. The LOGIN is out because nothing above the cluster READS it: М12's directory takes exactly
-// `ref`, `worker` and `server` from each row and has never looked at a credential. The snapshot is one
-// object under a 64 KiB cap, so a field with no consumer is paid for by every camera in the cluster.
+// `ref`, `worker` and `server` from each row and has never looked at a credential. A shard of the snapshot
+// is under a 64 KiB cap, so a field with no consumer is paid for by every camera on the worker.
 // "Not a secret" is a reason not to hide it — never a reason to publish it.
 func TestNeitherHalfOfTheCredentialLeavesTheCluster(t *testing.T) {
 	for _, f := range vms.Spec.Snapshot {
@@ -80,8 +79,8 @@ func TestNeitherHalfOfTheCredentialLeavesTheCluster(t *testing.T) {
 	if err := ctl.PublishSnapshot(); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := box.Objects.Get("vms/snapshot")
-	if raw == nil {
+	snap, raw := box.PublishedSnapshot("vms", "cameras")   // every shard, the way М12 reads them
+	if len(raw) == 0 {
 		t.Fatal("no snapshot was published")
 	}
 	if strings.Contains(string(raw), "Hunter2") {
@@ -89,10 +88,6 @@ func TestNeitherHalfOfTheCredentialLeavesTheCluster(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "admin") {
 		t.Fatal("the login left the cluster and nothing up there reads it:", string(raw))
-	}
-	var snap map[string]any
-	if err := json.Unmarshal(raw, &snap); err != nil {
-		t.Fatal(err)
 	}
 	// what the snapshot IS for — М12 reads these and nothing else about a row
 	row := snap["cameras"].([]any)[0].(map[string]any)
