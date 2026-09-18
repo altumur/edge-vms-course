@@ -90,12 +90,12 @@ def test_fifty_viewers_one_subscription_and_the_worker_unchanged():
     try:
         g = _gateway(box, "g-1", capacity=60)
         _whep(base, 1); live_ctl.ensure_placed(); g.reconcile_once(); g.heartbeat_once()
-        before = box.objects.get("vms/w-1/heartbeat")
+        before = box.objects.get("vms/heartbeats/w-1")
         sessions = [_whep(base, 1)[2] for _ in range(50)]
         assert all(s.startswith("/whep/session/") for s in sessions) and len(g.sessions) == 50
         assert g.subscriptions == 1 and len(g.upstreams) == 1                            # fifty browsers, one tee subscription
         assert g.headroom() == 10                                                        # capacity is viewers: what the autoscaler moves N on
-        assert box.objects.get("vms/w-1/heartbeat") == before                            # the worker never learned a viewer exists
+        assert box.objects.get("vms/heartbeats/w-1") == before                            # the worker never learned a viewer exists
         # full: the sixty-first viewer is refused by the gateway, through the console
         for _ in range(10):
             _whep(base, 1)

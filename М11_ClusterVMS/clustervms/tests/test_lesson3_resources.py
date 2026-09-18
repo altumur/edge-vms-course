@@ -86,7 +86,7 @@ def test_a_worker_with_no_assignment_invents_nothing():
     c = Cluster(); w = c.worker(5, "srv-c")
     assert w.reconcile_once() == [] and w.name == "w-5"
     w.heartbeat_once()
-    hb = json.loads(c.objects.get("vms/w-5/heartbeat"))
+    hb = json.loads(c.objects.get("vms/heartbeats/w-5"))
     assert hb["status"] == [] and hb["headroom"] == 50
 
 
@@ -144,7 +144,7 @@ class DirPeers:
 def _writer(c: Cluster, server: str, unit: str, now: float):
     """A recorder on `server` saying in its heartbeat that it holds `unit` — the only fact
     `foreign` needs, and the same one the console reads to find a camera's holder."""
-    c.objects.put(f"rec/r-{server}/heartbeat", json.dumps(
+    c.objects.put(f"rec/heartbeats/r-{server}", json.dumps(
         {"worker": f"r-{server}", "ts": now, "status": [{"id": unit, "phase": "running"}], "server": server}).encode())
 
 

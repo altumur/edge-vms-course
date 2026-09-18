@@ -973,12 +973,20 @@ func (c *SpecController) PutBlob(data []byte) (string, error) {
 
 // Blob is what a worker calls with the digest it read from its row. A nil result is a real state — the row
 // travelled and the object did not — and the caller must not start on it.
+//
+// The bytes are CHECKED against the digest before they are handed over. Not belt-and-braces: the key says
+// what the bytes are, and nothing but this makes that true. An ACL says who may write the key, which is a
+// different claim and a weaker one.
 func (c *SpecController) Blob(d string) ([]byte, error) {
 	key, err := c.Sub.BlobKey(d)
 	if err != nil {
 		return nil, err
 	}
-	return c.Objects.Get(key)
+	data, err := c.Objects.Get(key)
+	if err != nil || data == nil {
+		return data, err
+	}
+	return Verify(d, data)
 }
 
 // BlobsReferenced is every digest any row currently names: what a sweep would keep. There is no sweep —

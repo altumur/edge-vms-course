@@ -15,13 +15,15 @@ from vms.controller import VmsController as ClusterController  # noqa: F401
 from w2cplatform.contract import Heartbeat
 
 
-def heartbeats(objects, prefix: str = "vms/") -> dict[str, Heartbeat]:
-    """Every worker's last heartbeat, whatever its age — the console's read model."""
+def heartbeats(objects, sub: str = "vms") -> dict[str, Heartbeat]:
+    """Every worker's last heartbeat, whatever its age — the console's read model.
+
+    One prefix and no filter: `<sub>/heartbeats/` holds heartbeats and nothing else
+    (М10A Lesson 27)."""
     out = {}
-    for key in objects.list(prefix):
-        if key.endswith("/heartbeat"):
-            raw = objects.get(key)
-            if raw:
-                hb = Heartbeat.from_bytes(raw)
-                out[hb.worker] = hb
+    for key in objects.list(sub.rstrip("/") + "/heartbeats/"):
+        raw = objects.get(key)
+        if raw:
+            hb = Heartbeat.from_bytes(raw)
+            out[hb.worker] = hb
     return out

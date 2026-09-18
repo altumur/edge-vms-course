@@ -86,7 +86,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .secrets import mask_secrets
-from .contract import SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew, builds, schema_version
+from .contract import HEARTBEATS, SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew, builds, schema_version
 from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
@@ -117,20 +117,25 @@ def send_file(handler, path: str, content_type: str) -> None:
 
 # Every worker's last heartbeat under `prefix`, whatever its age — the read model's and `/metrics`' source.
 # Same scan as `Controller.workers_seen` without the age filter.
-def heartbeats(objects, prefix: str) -> dict[str, Heartbeat]:
+def heartbeats(objects, sub: str) -> dict[str, Heartbeat]:
     """Every worker's last heartbeat, WHATEVER ITS AGE — the read model's source.
+
+    `sub` is the subsystem's name (`"vms"`, or `"vms/"` — both spellings the callers
+    already use). Where its heartbeats LIVE is this function's business and not its
+    callers': before they lived under `<name>/heartbeats/`, every caller listed
+    `<name>/` and filtered by a suffix, and the filter was not the point — it was
+    the price of a key layout that mixed them in with everything else.
 
     The read model wants the stale ones: it shows them muted, as "last known state".
     Anyone asking *who can I talk to right now* wants `holders()` below instead — a
     catalogue with the health filter inside it, so that no caller has to remember it.
     Four of them forgot."""
     out = {}
-    for key in objects.list(prefix):
-        if key.endswith("/heartbeat"):
-            raw = objects.get(key)
-            if raw:
-                hb = Heartbeat.from_bytes(raw)
-                out[hb.worker] = hb
+    for key in objects.list(sub.rstrip("/") + "/" + HEARTBEATS + "/"):
+        raw = objects.get(key)
+        if raw:
+            hb = Heartbeat.from_bytes(raw)
+            out[hb.worker] = hb
     return out
 
 

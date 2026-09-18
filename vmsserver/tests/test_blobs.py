@@ -14,7 +14,7 @@ that one choice.
 import base64
 import json
 
-from w2cplatform.blobs import digest, is_digest
+from w2cplatform.blobs import BlobMismatch, digest, is_digest
 from w2cplatform.console import SpecConsole
 from w2cplatform.objects import FsObjectStore
 from vms.config import DET_SPEC
@@ -157,3 +157,37 @@ def test_what_a_sweep_would_keep_and_the_sweep_that_does_not_exist():
     assert stored == {old, new}                                  # both still there
     assert ctl.blobs_referenced() == {new}                       # one of them referenced
     assert stored - ctl.blobs_referenced() == {old}              # and this is the garbage nobody collects
+
+
+def test_a_poisoned_blob_is_caught_on_the_read_and_not_trusted():
+    """The property an ACL cannot give.
+
+    Whoever can write `det/blobs/<digest>` can put other bytes there — on a cluster
+    that is anyone the policy lets near the object prefix, and the policy is static
+    text written by a person. The digest is the only thing that says what those bytes
+    ARE, and it is worth nothing until someone checks it.
+
+    Checked on the READ, where the bytes are about to be used. Checking only on the
+    write would be trusting the writer again, which is the thing being replaced."""
+    box = Box()
+    ctl, _ = _det(box)
+    ctl.create({"name": "7-linecross", "cam": "7", "kind": "linecross"})
+    d = ctl.put_blob(MASK)
+    ctl.update("7-linecross", {"mask": d})
+    assert ctl.blob(d) == MASK
+
+    box.objects.put(f"det/blobs/{d}", b"not the mask at all")      # the write an ACL is supposed to stop
+    try:
+        ctl.blob(d)
+        raise AssertionError("the poisoned bytes were handed to the caller")
+    except BlobMismatch as e:
+        assert d in str(e) and digest(b"not the mask at all") in str(e)
+
+    # …and it holds for reasons that have nothing to do with a writer: a truncated
+    # object, a bad disk, a copy between stores that lost a byte.
+    box.objects.put(f"det/blobs/{d}", MASK[:-1])
+    try:
+        ctl.blob(d)
+        raise AssertionError("a truncated object was handed to the caller")
+    except BlobMismatch:
+        pass

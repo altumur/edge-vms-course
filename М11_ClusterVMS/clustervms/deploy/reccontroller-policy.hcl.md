@@ -1,3 +1,3 @@
 # reccontroller-policy.hcl — bound to job reccontroller's workload identity
 
-**Role.** Lesson 2. The only writer of the recorder's placement: `rec/workers/*` (assignments), `rec/placement/*` (with a reason), `rec/slots/*` (redistribution of a released slot). Reads everything (`*`, `objects/*`): the recorders' heartbeats, the resources' heartbeats, the recording rows the console wrote. Never a recording row, never the VMS's.
+**Role.** Lesson 2. The only writer of the recorder's placement: `rec/workers/*` (assignments), `rec/placement/*` (with a reason), `rec/slots/*` (redistribution of a released slot), and `objects/rec/snapshot/*` — its own snapshot shards, a grant it did not have from the day it was written until М10A Lesson 27, because nothing checked the file against the code. Reads everything else (`*`, `objects/*`): the recorders' heartbeats, the resources' heartbeats, the recording rows the console wrote. Never a recording row, never the VMS's.

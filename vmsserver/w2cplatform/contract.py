@@ -87,6 +87,33 @@ BUILD = os.environ.get("BUILD", "dev")            # what a person reads on /sche
 # worker name space — see `Subsystem.snapshot_key`.
 UNPLACED = "unplaced"
 
+# The object-store directory a subsystem's heartbeats live in: `<name>/heartbeats/<worker>`.
+#
+# It used to be `<name>/<worker>/heartbeat`, with the worker's name as the FIRST segment — and that one
+# decision made the grant un-narrowable. A worker's name is claimed at run time (`claim_slot` hands out
+# `w-1`), and a scheduler's ACL policy is static text, so "may write its own heartbeat and nothing else"
+# could not be written down: the narrowest expressible grant was `objects/<name>/*`, the whole subsystem,
+# which also covers the snapshot shards М12 reads and the blobs the workers trust.
+#
+# Moving the worker to the LAST segment makes it expressible. Three sibling directories under the
+# subsystem, one writer each: `heartbeats/` the workers, `snapshot/` the controller, `blobs/` the console.
+# A prefix that cannot be bounded by a policy is a layout problem, not a missing ACL feature.
+HEARTBEATS = "heartbeats"
+
+
+# `<subsystem>/heartbeats/<worker>`, or the resource's `platform/resources/<server>/heartbeat`, which has
+# a bounded prefix of its own and stays as it is.
+def is_heartbeat_key(key: str) -> bool:
+    return f"/{HEARTBEATS}/" in key or key.endswith("/heartbeat")
+
+
+# What `builds()` calls the process behind such a key: `<subsystem>/<worker>`, or the resource's own path.
+def heartbeat_owner(key: str) -> str:
+    if f"/{HEARTBEATS}/" in key:
+        sub, _, worker = key.partition(f"/{HEARTBEATS}/")
+        return f"{sub}/{worker}"
+    return key[: -len("/heartbeat")]
+
 
 class SchemaTooNew(Exception):
     """This build does not understand the layout the store is already in."""
@@ -114,19 +141,19 @@ def check_schema(vars_) -> int:
 
 
 # Every process that heartbeats, with the schema it understands and the build it is. The keys are
-# `<subsystem>/<worker>/heartbeat` and `platform/resources/<server>/heartbeat`; nothing else ends that way,
-# so one scan answers "what is running in this cluster" across subsystems.
+# `<subsystem>/heartbeats/<worker>` and `platform/resources/<server>/heartbeat`; nothing else matches, so
+# one scan answers "what is running in this cluster" across subsystems.
 def builds(objects, now: float, lost_after: float = 45.0) -> dict[str, dict]:
     out = {}
     for key in objects.list(""):
-        if not key.endswith("/heartbeat"):
+        if not is_heartbeat_key(key):
             continue
         raw = objects.get(key)
         if not raw:
             continue
         d = json.loads(raw)
         ts = float(d.get("ts", 0))
-        out[key[: -len("/heartbeat")]] = {"schema": int(d.get("schema", SCHEMA)), "build": d.get("build", "?"),
+        out[heartbeat_owner(key)] = {"schema": int(d.get("schema", SCHEMA)), "build": d.get("build", "?"),
                                           "ts": ts, "live": now - ts <= lost_after}
     return out
 
@@ -163,9 +190,17 @@ class Subsystem:
     def assignment(self, worker: str) -> str:
         return f"{self.name}/workers/{worker}"
 
-    # `<name>/<worker>/heartbeat` — an object-store key, not a Variable.
+    # `<name>/heartbeats/<worker>` — an object-store key, not a Variable. The worker's name is the LAST
+    # segment so that "the workers write here and nowhere else" is a prefix a policy can name; see
+    # `HEARTBEATS` above for why the old spelling could not be bounded.
     def heartbeat_key(self, worker: str) -> str:
-        return f"{self.name}/{worker}/heartbeat"
+        return f"{self.name}/{HEARTBEATS}/{worker}"
+
+    # `<name>/heartbeats/` — what a reader lists, and now the ONLY thing under it. The old layout mixed
+    # heartbeats in with everything else under `<name>/`, so every reader carried a filter; the filter was
+    # never the point, it was the price of the layout.
+    def heartbeats_prefix(self) -> str:
+        return f"{self.name}/{HEARTBEATS}/"
 
     # `<name>/snapshot/<worker>` — one object per worker, the same shape the heartbeat key already has.
     # The snapshot used to be ONE object for the whole cluster, and it was the only place in the platform
@@ -213,6 +248,27 @@ class Subsystem:
     # `[<name>/epoch/*, <name>/slots/*]` — a worker writes only epochs and its slot, never configuration.
     def acl_worker(self) -> list[str]:
         return [f"{self.name}/epoch/*", f"{self.name}/slots/*"]
+
+    # -- the object store's half of the same question ------------------------------------------------
+    # Variables have had an ACL since Lesson 1; the OBJECT STORE never did. On one box that was invisible
+    # — `FsObjectStore` has no writer and no prefixes — and on a cluster the ACL is real but lives in a
+    # policy file a person maintains by hand, which drifted from the code twice in two commits.
+    #
+    # So the three grants are DERIVED here, from the same spec the Variables ACLs come from, and the
+    # policy files are checked against them. One source, and a test that says so.
+    #
+    # Each is one directory with one writer, which is what the key layout was rearranged to allow:
+    def acl_objects_worker(self) -> list[str]:
+        """The workers write their own heartbeats and nothing else."""
+        return [f"{self.name}/{HEARTBEATS}/*"]
+
+    def acl_objects_controller(self) -> list[str]:
+        """The controller publishes the snapshot shards — the only thing that leaves the cluster."""
+        return [f"{self.name}/snapshot/*"]
+
+    def acl_objects_console(self) -> list[str]:
+        """The console stores the bytes of a `blob` field, beside the row that names them."""
+        return [f"{self.name}/{BLOBS}/*"]
 
 
 # What one worker should run: the row at `<name>/workers/<worker>`.
@@ -345,13 +401,13 @@ class Controller:
         the controller keeps — a fact it reads."""
         out = {}
         now = self.wall()
-        for key in self.objects.list(self.sub.name + "/"):
-            if key.endswith("/heartbeat"):
-                raw = self.objects.get(key)
-                if raw:
-                    hb = Heartbeat.from_bytes(raw)
-                    if now - hb.ts <= max_age:
-                        out[hb.worker] = hb
+        # One prefix, no filter: `<name>/heartbeats/` holds heartbeats and nothing else.
+        for key in self.objects.list(self.sub.heartbeats_prefix()):
+            raw = self.objects.get(key)
+            if raw:
+                hb = Heartbeat.from_bytes(raw)
+                if now - hb.ts <= max_age:
+                    out[hb.worker] = hb
         return out
 
     # Reads one worker's row.

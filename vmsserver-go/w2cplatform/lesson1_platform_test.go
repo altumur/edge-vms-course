@@ -173,7 +173,7 @@ func TestThePlatformKnowsNothingAboutVideo(t *testing.T) {
 	}
 	sub := p.Subsystem{Name: "vms"}
 	if sub.Assignment("w-1") != "vms/workers/w-1" || sub.EpochKey("7") != "vms/epoch/7" ||
-		sub.HeartbeatKey("w-1") != "vms/w-1/heartbeat" || !reflect.DeepEqual(sub.ACLController(), []string{"vms/*"}) {
+		sub.HeartbeatKey("w-1") != "vms/heartbeats/w-1" || !reflect.DeepEqual(sub.ACLController(), []string{"vms/*"}) {
 		t.Fatal(sub)
 	}
 }
@@ -542,14 +542,14 @@ func TestTheSchemaIsRaisedAfterTheUpgradeAndNeverDuringIt(t *testing.T) {
 
 	// raising is refused while anything live understands less: you cannot raise the store out from under a
 	// machine you forgot to upgrade
-	box.Objects.Put("vms/w-2/heartbeat", p.Heartbeat{Worker: "w-2", Ts: box.Wall.Now(),
+	box.Objects.Put("vms/heartbeats/w-2", p.Heartbeat{Worker: "w-2", Ts: box.Wall.Now(),
 		Extra: map[string]any{"server": "srv-2", "schema": p.Schema, "build": "old"}}.ToBytes())
 	err := ctl.SetSchema(p.Schema + 1)
 	if err == nil || !strings.Contains(err.Error(), "still running") || !strings.Contains(err.Error(), "vms/w-2") {
 		t.Fatal(err)
 	}
 	box.Wall.Advance(60) // w-2 is gone; w-1 is new and says so
-	box.Objects.Put("vms/w-1/heartbeat", p.Heartbeat{Worker: "w-1", Ts: box.Wall.Now(),
+	box.Objects.Put("vms/heartbeats/w-1", p.Heartbeat{Worker: "w-1", Ts: box.Wall.Now(),
 		Extra: map[string]any{"server": "srv-1", "schema": p.Schema + 1}}.ToBytes())
 	if err := ctl.SetSchema(p.Schema + 1); err != nil {
 		t.Fatal(err)

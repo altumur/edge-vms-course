@@ -77,7 +77,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .secrets import is_secret_field
-from .blobs import digest as blob_digest, is_digest
+from .blobs import digest as blob_digest, is_digest, verify
 from .contract import DRAIN_KEY, UNPLACED, Controller, Subsystem, slot_number
 from .limits import TooLarge
 from .objects import ObjectStore
@@ -964,8 +964,16 @@ class SpecController(Controller):
 
     # What a worker calls with the digest it read from its row. `None` when the object is not there, which
     # is a real state — the row travelled and the object did not — and the caller must not start on it.
-    def blob(self, d: str) -> bytes | None:
-        return self.objects.get(self.sub.blob_key(d))
+    #
+    # The bytes are CHECKED against the digest before they are handed over. Not belt-and-braces: the key
+    # says what the bytes are, and nothing but this makes that true. An ACL says who may write the key,
+    # which is a different claim and a weaker one — it cannot survive a store shared more widely than
+    # intended, an object copied between stores, or a bad disk. `verify` survives all three.
+    def blob(self, d: str, check_digest: bool = True) -> bytes | None:
+        data = self.objects.get(self.sub.blob_key(d))
+        if data is None or not check_digest:
+            return data
+        return verify(d, data)
 
     # Every digest any row currently names: what a sweep would keep. There is no sweep — nothing in the
     # platform deletes an object — and this is the half of it that can be written honestly today.

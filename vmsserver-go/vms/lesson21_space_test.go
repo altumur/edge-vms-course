@@ -268,7 +268,7 @@ func (c *pair) writer(t *testing.T, server, unit string) {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]any{"worker": "r-" + server, "ts": c.box.Wall.Now(),
 		"status": []any{map[string]any{"id": unit, "phase": "running"}}, "server": server})
-	if err := c.box.Objects.Put("rec/r-"+server+"/heartbeat", raw); err != nil {
+	if err := c.box.Objects.Put("rec/heartbeats/r-"+server, raw); err != nil {
 		t.Fatal(err)
 	}
 }

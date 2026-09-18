@@ -2,6 +2,7 @@ package w2cplatform
 
 import (
 	"crypto/sha256"
+	"errors"
 	"encoding/hex"
 	"fmt"
 	"regexp"
@@ -48,6 +49,24 @@ func Digest(data []byte) string {
 }
 
 func IsDigest(v string) bool { return digestRe.MatchString(v) }
+
+// ErrBlobMismatch: the bytes stored under a digest do not hash to it.
+//
+// Content addressing is a PROMISE, and a promise nobody checks is a comment. The digest in the row makes
+// the key immutable BY CONVENTION; Verify makes it immutable in a way anyone can check — and that is what
+// an ACL cannot give, because an ACL is a claim about who wrote the bytes, not about what they are. This
+// holds against a writer with the wrong token, a store shared more widely than intended, an object copied
+// between stores, and a disk that rotted.
+var ErrBlobMismatch = errors.New("blob mismatch")
+
+// Verify returns data if it hashes to d. The check belongs on the READ, where the bytes are about to be
+// used — checking only on the write would be trusting the writer again, which is the thing being replaced.
+func Verify(d string, data []byte) ([]byte, error) {
+	if actual := Digest(data); actual != d {
+		return nil, fmt.Errorf("%w: %s: the bytes stored there hash to %s — the object was replaced by someone who could write that key", ErrBlobMismatch, d, actual)
+	}
+	return data, nil
+}
 
 // BlobKey is `<name>/blobs/sha256-<hex>` — the bytes of one blob field, named by what they are. Content
 // addressed, so this key is written once and never written again.

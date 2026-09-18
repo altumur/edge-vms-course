@@ -378,10 +378,10 @@ func TestTheFirstHeartbeatDoesNotWaitForTheFirstTick(t *testing.T) {
 	close(stop)
 	<-done
 
-	if n := objects.count("vms/w-1/heartbeat"); n != 2 {
+	if n := objects.count("vms/heartbeats/w-1"); n != 2 {
 		t.Fatalf("heartbeats: %d — want the announcement before the loop and the orderly stop's own", n)
 	}
-	if raw, _ := box.Objects.Get("vms/w-1/heartbeat"); raw == nil {
+	if raw, _ := box.Objects.Get("vms/heartbeats/w-1"); raw == nil {
 		t.Fatal("nothing in the store")
 	}
 }

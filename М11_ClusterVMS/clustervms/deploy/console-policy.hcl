@@ -18,6 +18,8 @@ namespace "default" {
     path "rec/idem/*"      { capabilities = ["write", "read", "list", "destroy"] }
     path "rec/policy"      { capabilities = ["write", "read"] }
     path "rec/*"           { capabilities = ["read", "list"] }
+    path "objects/vms/blobs/*" { capabilities = ["write", "read", "list"] }      # the bytes of a blob field, beside the row that names them
+    path "objects/rec/blobs/*" { capabilities = ["write", "read", "list"] }
     path "objects/*"       { capabilities = ["read", "list"] }
     path "platform/*"      { capabilities = ["read", "list"] }
   }

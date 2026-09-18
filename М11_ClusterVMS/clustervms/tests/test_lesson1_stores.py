@@ -63,10 +63,10 @@ def test_the_object_store_on_this_cluster_is_variables():
     sub = Subsystem("vms"); c = Cluster()
     w = Worker(sub, "w-1", v, objects, clock=c.clock, wall=c.wall)
     w.heartbeat([{"id": 7, "phase": "running"}], server="srv-a")
-    assert v.list("objects/") == ["objects/vms/w-1/heartbeat"] and objects.list("vms/") == ["vms/w-1/heartbeat"]
+    assert v.list("objects/") == ["objects/vms/heartbeats/w-1"] and objects.list("vms/") == ["vms/heartbeats/w-1"]
     ctl = Controller(sub, v, objects, wall=c.wall)
     assert ctl.workers_seen()["w-1"].extra["server"] == "srv-a"
     try:
-        VariablesObjectStore(v.as_writer("vmsworker", ["vms/epoch/*"])).put("vms/w-2/heartbeat", b"{}"); assert False
+        VariablesObjectStore(v.as_writer("vmsworker", ["vms/epoch/*"])).put("vms/heartbeats/w-2", b"{}"); assert False
     except Forbidden:
         pass                                                                    # the ACL comes with the token, as for every Variable

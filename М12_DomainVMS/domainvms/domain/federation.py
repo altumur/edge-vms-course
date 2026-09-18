@@ -31,6 +31,7 @@ from cluster.objectstore import ObjectStore
 from cluster.variables import Variables
 
 SNAPSHOT = "vms/snapshot/"           # a PREFIX: one object per worker, the shape the heartbeats already have
+HEARTBEATS = "vms/heartbeats/"        # its sibling: the workers' own reports, one object each
 
 
 class Unreachable(Exception):
@@ -76,14 +77,18 @@ class Cluster:
         return {"cluster": self.name, "ts": oldest or 0, "cameras": [r for _, r in best.values()]}
 
     def heartbeats(self) -> dict[str, dict]:
-        """worker -> its last heartbeat (М10's shape: status, server, epoch per camera)."""
+        """worker -> its last heartbeat (М10's shape: status, server, epoch per camera).
+
+        `vms/heartbeats/` holds heartbeats and nothing else, so this is a listing and a
+        get — the same two calls `snapshot()` above makes, against a sibling directory.
+        The filter this used to carry (`endswith("/heartbeat") and count("/") == 2`)
+        was the price of a key layout that put every worker's name at the top."""
         out = {}
-        for key in self.objects.list("vms/"):
-            if key.endswith("/heartbeat") and key.count("/") == 2:
-                raw = self.objects.get(key)
-                if raw:
-                    hb = json.loads(raw)
-                    out[hb["worker"]] = hb
+        for key in self.objects.list(HEARTBEATS):
+            raw = self.objects.get(key)
+            if raw:
+                hb = json.loads(raw)
+                out[hb["worker"]] = hb
         return out
 
 

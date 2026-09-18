@@ -12,17 +12,20 @@ import (
 // So this is contract, not console: it is the shape of a heartbeat and the freshness rule over it, and
 // it is the surface a second language has to keep byte for byte.
 
-// Heartbeats: every worker's last heartbeat under prefix, whatever its age — the read model's source.
-func Heartbeats(objects ObjectStore, prefix string) map[string]Heartbeat {
+// Heartbeats: every worker's last heartbeat for a subsystem, whatever its age — the read model's source.
+//
+// `sub` is the subsystem's name ("vms", or "vms/" — both spellings the callers already use). Where its
+// heartbeats LIVE is this function's business and not its callers': before they lived under
+// `<name>/heartbeats/`, every caller listed `<name>/` and filtered by a suffix, and the filter was not
+// the point — it was the price of a key layout that mixed them in with everything else.
+func Heartbeats(objects ObjectStore, sub string) map[string]Heartbeat {
 	out := map[string]Heartbeat{}
-	keys, _ := objects.List(prefix)
+	keys, _ := objects.List(strings.TrimSuffix(sub, "/") + "/" + HeartbeatsDir + "/")
 	for _, k := range keys {
-		if strings.HasSuffix(k, "/heartbeat") {
-			raw, _ := objects.Get(k)
-			if raw != nil {
-				if hb, err := HeartbeatFromBytes(raw); err == nil {
-					out[hb.Worker] = hb
-				}
+		raw, _ := objects.Get(k)
+		if raw != nil {
+			if hb, err := HeartbeatFromBytes(raw); err == nil {
+				out[hb.Worker] = hb
 			}
 		}
 	}

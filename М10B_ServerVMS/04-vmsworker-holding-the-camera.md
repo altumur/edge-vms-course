@@ -381,7 +381,7 @@ w = VmsWorker("w-1", vars_, objects, archive_root=tmp, env={"NOMAD_NODE_NAME": "
 w.reconcile_once()                       # [('start', 1)]
 w.heartbeat_once()
 
-hb = Heartbeat.from_bytes(objects.get("vms/w-1/heartbeat"))
+hb = Heartbeat.from_bytes(objects.get("vms/heartbeats/w-1"))
 hb.status[0]["live_url"]                 # 'rtsp://box-a:8554/1'
 hb.status[0]["live_shm"]                 # 'shm:///run/vms/1.shm'
 hb.extra["headroom"]                     # 49

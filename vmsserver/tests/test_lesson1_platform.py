@@ -85,7 +85,7 @@ def test_the_platform_knows_nothing_about_video():
                 assert "camera" not in src.lower(), f              # not even the word
     sub = Subsystem("vms")
     assert sub.assignment("w-1") == "vms/workers/w-1" and sub.epoch_key("7") == "vms/epoch/7"
-    assert sub.heartbeat_key("w-1") == "vms/w-1/heartbeat" and sub.acl_controller() == ["vms/*"]
+    assert sub.heartbeat_key("w-1") == "vms/heartbeats/w-1" and sub.acl_controller() == ["vms/*"]
 
 
 def test_controller_and_worker_bases_speak_only_the_contract():
@@ -344,14 +344,14 @@ def test_the_schema_is_raised_after_the_upgrade_and_never_during_it():
     # raising is refused while anything live understands less: you cannot raise the store out from
     # under a machine you forgot to upgrade
     old = Heartbeat("w-2", box.wall(), [], {"server": "srv-2", "schema": SCHEMA, "build": "old"}).to_bytes()
-    box.objects.put("vms/w-2/heartbeat", old)
+    box.objects.put("vms/heartbeats/w-2", old)
     try:
         ctl.set_schema(SCHEMA + 1); raise AssertionError("raised the schema over a running old build")
     except SchemaTooNew as e:
         assert "still running" in str(e) and "vms/w-2" in str(e)
 
     box.wall.advance(60); w.heartbeat_once()            # w-2 is gone; w-1 is new and says so
-    box.objects.put("vms/w-1/heartbeat",
+    box.objects.put("vms/heartbeats/w-1",
                     Heartbeat("w-1", box.wall(), [], {"server": "srv-1", "schema": SCHEMA + 1}).to_bytes())
     assert ctl.set_schema(SCHEMA + 1)["version"] == str(SCHEMA + 1)
     try:

@@ -7,7 +7,8 @@
 ### `namespace "default"` → `variables`
 - `path "vms/epoch/*" { capabilities = ["write", "read", "list"] }` — `vms/epoch/<camera>`: `next_epoch` (CAS increment when a worker starts a camera) and the lease renewals; the epoch is what fences an old instance.
 - `path "vms/slots/*" { capabilities = ["write", "read", "list"] }` — `vms/slots/w-<n>`: `claim_slot` (CAS: holder = this allocation, gen + 1), `renew_slot`, `release_slot` on SIGTERM. `list` so a worker without an index preference can find a free or lapsed slot.
-- `path "objects/vms/*" { capabilities = ["write", "read", "list"] }` — the comment: its heartbeat, as an object-as-Variable (`objects/vms/w-<n>/heartbeat`, written without CAS — the last heartbeat wins). `read` so a fresh instance can read the previous instance's heartbeat for `previous_hb` and measure its own failover.
+- `path "objects/vms/heartbeats/*" { capabilities = ["write", "read", "list"] }` — its heartbeat, as an object-as-Variable (`objects/vms/heartbeats/w-<n>`, written without CAS — the last heartbeat wins). `read` so a fresh instance can read the previous instance's heartbeat for `previous_hb` and measure its own failover.
+- `path "objects/vms/*" { capabilities = ["read", "list"] }` — the snapshot shards and the blobs: read, never written by a worker. Until М10A Lesson 27 this line said `write` and the one above did not exist, because the heartbeat key put the worker's name FIRST (`objects/vms/w-1/heartbeat`) and there was no narrower prefix to name — so a worker could write М12's directory and poison a blob. The fix was the key layout, not a new ACL mechanism.
 - `path "vms/*" { capabilities = ["read", "list"] }` — the assignment `vms/workers/<w>` and the camera rows `vms/cameras/<id>` it reconciles against; never written.
 
 ## Notes

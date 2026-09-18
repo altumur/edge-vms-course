@@ -57,3 +57,26 @@ def digest(data: bytes) -> str:
 
 def is_digest(value: str) -> bool:
     return bool(_DIGEST.match(str(value or "")))
+
+
+class BlobMismatch(Exception):
+    """The bytes stored under a digest do not hash to it.
+
+    Content addressing is a PROMISE, and a promise nobody checks is a comment.
+    The digest in the row makes the key immutable *by convention*; this makes it
+    immutable in a way anyone can verify — and verification is what an ACL cannot
+    give, because it is not a claim about who wrote the bytes. It holds against a
+    writer with the wrong token, a store shared more widely than intended, an
+    object copied between stores, and a disk that rotted.
+
+    So the check belongs on the READ, where the bytes are about to be used, and
+    not only on the write, where it would only be trusting the writer again."""
+
+
+def verify(d: str, data: bytes) -> bytes:
+    """`data` if it hashes to `d`; otherwise `BlobMismatch`. Never a silent pass."""
+    actual = digest(data)
+    if actual != d:
+        raise BlobMismatch(f"{d}: the bytes stored there hash to {actual} — "
+                           f"the object was replaced by someone who could write that key")
+    return data

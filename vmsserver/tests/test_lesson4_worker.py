@@ -237,4 +237,4 @@ def test_the_first_heartbeat_does_not_wait_for_the_first_tick():
 
     assert sent and sent[0] == 0.0, f"the first heartbeat waited: {sent}"
     assert len(sent) == 2, sent          # the announcement, and the orderly stop's own
-    assert box.objects.get("vms/w-1/heartbeat")
+    assert box.objects.get("vms/heartbeats/w-1")

@@ -33,7 +33,16 @@ func (s Subsystem) Config(parts ...string) string {
 	return strings.Join(append([]string{s.Name}, parts...), "/")
 }
 func (s Subsystem) Assignment(worker string) string   { return s.Name + "/workers/" + worker }
-func (s Subsystem) HeartbeatKey(worker string) string { return s.Name + "/" + worker + "/heartbeat" }
+// HeartbeatKey is `<name>/heartbeats/<worker>`. The worker's name is the LAST segment so that "the
+// workers write here and nowhere else" is a prefix a policy can name; see HeartbeatsDir above.
+func (s Subsystem) HeartbeatKey(worker string) string {
+	return s.Name + "/" + HeartbeatsDir + "/" + worker
+}
+
+// HeartbeatsPrefix is what a reader lists — and now the ONLY thing under it. The old layout mixed
+// heartbeats in with everything else under `<name>/`, so every reader carried a filter; the filter was
+// never the point, it was the price of the layout.
+func (s Subsystem) HeartbeatsPrefix() string { return s.Name + "/" + HeartbeatsDir + "/" }
 
 // SnapshotKey is `<name>/snapshot/<worker>` — one object per worker, the same shape HeartbeatKey already
 // has. The snapshot used to be ONE object for the whole cluster, and it was the only place in the platform
@@ -62,6 +71,14 @@ func (s Subsystem) EpochKey(unit string) string       { return s.Name + "/epoch/
 func (s Subsystem) SlotKey(worker string) string      { return s.Name + "/slots/" + worker }
 func (s Subsystem) ACLController() []string           { return []string{s.Name + "/*"} }
 func (s Subsystem) ACLWorker() []string               { return []string{s.Name + "/epoch/*", s.Name + "/slots/*"} }
+
+// The object store's half of the same question. Variables have had an ACL since Lesson 1; the object
+// store never did — invisible on one box, and on a cluster a policy file a person maintains by hand,
+// which drifted from the code twice in two commits. Derived here, from the same spec, and the policy
+// files are checked against them. One directory, one writer, each.
+func (s Subsystem) ACLObjectsWorker() []string     { return []string{s.Name + "/" + HeartbeatsDir + "/*"} }
+func (s Subsystem) ACLObjectsController() []string { return []string{s.Name + "/snapshot/*"} }
+func (s Subsystem) ACLObjectsConsole() []string    { return []string{s.Name + "/" + Blobs + "/*"} }
 
 // Assignment: what a worker should run. Units are whatever the subsystem
 // calls its units of work; the platform does not know.
@@ -233,6 +250,33 @@ const (
 // is otherwise the worker name space — see Subsystem.SnapshotKey.
 const Unplaced = "unplaced"
 
+// HeartbeatsDir is the object-store directory a subsystem's heartbeats live in: `<name>/heartbeats/<worker>`.
+//
+// It used to be `<name>/<worker>/heartbeat`, with the worker's name as the FIRST segment — and that one
+// decision made the grant un-narrowable. A worker's name is claimed at run time (ClaimSlot hands out
+// `w-1`) and a scheduler's ACL policy is static text, so "may write its own heartbeat and nothing else"
+// could not be written down: the narrowest expressible grant was `objects/<name>/*`, the whole subsystem,
+// which also covers the snapshot shards М12 reads and the blobs the workers trust.
+//
+// Moving the worker to the LAST segment makes it expressible. Three sibling directories under the
+// subsystem, one writer each: heartbeats/ the workers, snapshot/ the controller, blobs/ the console. A
+// prefix that cannot be bounded by a policy is a layout problem, not a missing ACL feature.
+const HeartbeatsDir = "heartbeats"
+
+// IsHeartbeatKey: `<subsystem>/heartbeats/<worker>`, or the resource's own
+// `platform/resources/<server>/heartbeat`, which has a bounded prefix already and stays as it is.
+func IsHeartbeatKey(key string) bool {
+	return strings.Contains(key, "/"+HeartbeatsDir+"/") || strings.HasSuffix(key, "/heartbeat")
+}
+
+// HeartbeatOwner is what Builds calls the process behind such a key: `<subsystem>/<worker>`.
+func HeartbeatOwner(key string) string {
+	if sub, worker, ok := strings.Cut(key, "/"+HeartbeatsDir+"/"); ok {
+		return sub + "/" + worker
+	}
+	return strings.TrimSuffix(key, "/heartbeat")
+}
+
 // Build is what a person reads on /schema; the machine reads Schema.
 var Build = envOr("BUILD", "dev")
 
@@ -300,7 +344,7 @@ func Builds(objects ObjectStore, now, lostAfter float64) map[string]ProcessBuild
 	out := map[string]ProcessBuild{}
 	keys, _ := objects.List("")
 	for _, key := range keys {
-		if !strings.HasSuffix(key, "/heartbeat") {
+		if !IsHeartbeatKey(key) {
 			continue
 		}
 		raw, _ := objects.Get(key)
@@ -319,7 +363,7 @@ func Builds(objects ObjectStore, now, lostAfter float64) map[string]ProcessBuild
 			b.Build = v
 		}
 		b.Live = now-b.Ts <= lostAfter
-		out[strings.TrimSuffix(key, "/heartbeat")] = b
+		out[HeartbeatOwner(key)] = b
 	}
 	return out
 }
@@ -388,11 +432,9 @@ func (c *Controller) Write(path string, mutate Mutate) (out Items, err error) {
 func (c *Controller) WorkersSeen(maxAge float64) map[string]Heartbeat {
 	out := map[string]Heartbeat{}
 	now := c.Wall()
-	keys, _ := c.Objects.List(c.Sub.Name + "/")
+	// One prefix, no filter: `<name>/heartbeats/` holds heartbeats and nothing else.
+	keys, _ := c.Objects.List(c.Sub.HeartbeatsPrefix())
 	for _, key := range keys {
-		if !strings.HasSuffix(key, "/heartbeat") {
-			continue
-		}
 		raw, _ := c.Objects.Get(key)
 		if len(raw) == 0 {
 			continue

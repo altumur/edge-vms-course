@@ -109,7 +109,7 @@ def test_a_python_controller_places_a_camera_on_a_go_worker():
         # instance, and `released` is the string "true"/"false" both sides agree to spell that way
         assert slot and slot["holder"] and slot["released"] == "false" and float(slot["until"]) > 0, slot
         assert p_slot(vars_, "w-1").holder == slot["holder"], "Python could not parse Go's slot row"
-        hb = _until(lambda: objects.get("vms/w-1/heartbeat"))
+        hb = _until(lambda: objects.get("vms/heartbeats/w-1"))
         assert hb, "the Go worker never published a heartbeat Python could find"
         seen = _until(lambda: ctl.workers_seen(45.0).get("w-1"))
         assert seen is not None and seen.extra["server"] == "srv-1" and int(seen.extra["capacity"]) == 50
@@ -138,7 +138,7 @@ def test_a_python_controller_places_a_camera_on_a_go_worker():
         assert running[0]["live_url"] == "rtsp://srv-1:8554/1"     # …and the fan-out a Python console proxies to
 
         # 4. schema and build travel in every heartbeat: what the upgrade route reads to decide
-        raw = json.loads(objects.get("vms/w-1/heartbeat"))
+        raw = json.loads(objects.get("vms/heartbeats/w-1"))
         assert raw["schema"] == 1 and raw["build"] and raw["server"] == "srv-1"
     finally:
         log = _stop(w)

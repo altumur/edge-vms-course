@@ -7,7 +7,8 @@ namespace "default" {
   variables {
     path "rec/epoch/*"   { capabilities = ["write", "read", "list"] }
     path "rec/slots/*"   { capabilities = ["write", "read", "list"] }
-    path "objects/rec/*" { capabilities = ["write", "read", "list"] }   # its heartbeat, as an object-as-Variable
+    path "objects/rec/heartbeats/*" { capabilities = ["write", "read", "list"] }   # its heartbeat, as an object-as-Variable
+    path "objects/rec/*" { capabilities = ["read", "list"] }            # the snapshot and the blobs: read, never written by a recorder
     path "rec/*"         { capabilities = ["read", "list"] }
     path "objects/vms/*" { capabilities = ["read", "list"] }            # the workers' heartbeats: live_url
     path "vms/*"         { capabilities = ["read", "list"] }

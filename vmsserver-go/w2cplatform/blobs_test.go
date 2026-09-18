@@ -272,3 +272,75 @@ func TestABlobKeyIsBuiltOnlyFromADigest(t *testing.T) {
 	var tooLarge *p.TooLarge
 	_ = errors.As(error(nil), &tooLarge)
 }
+
+// The property an ACL cannot give.
+//
+// Whoever can write `det/blobs/<digest>` can put other bytes there — on a cluster that is anyone the
+// policy lets near the object prefix, and the policy is static text written by a person. The digest is the
+// only thing that says what those bytes ARE, and it is worth nothing until someone checks it.
+//
+// Checked on the READ, where the bytes are about to be used. Checking only on the write would be trusting
+// the writer again, which is the thing being replaced.
+func TestAPoisonedBlobIsCaughtOnTheReadAndNotTrusted(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	d, _ := ctl.PutBlob(mask)
+	ctl.Update("7-linecross", map[string]any{"mask": d})
+	if got, err := ctl.Blob(d); err != nil || string(got) != string(mask) {
+		t.Fatal(err)
+	}
+
+	box.Objects.Put("det/blobs/"+d, []byte("not the mask at all")) // the write an ACL is supposed to stop
+	_, err := ctl.Blob(d)
+	if !errors.Is(err, p.ErrBlobMismatch) {
+		t.Fatal("the poisoned bytes were handed to the caller:", err)
+	}
+	if !strings.Contains(err.Error(), p.Digest([]byte("not the mask at all"))) {
+		t.Fatal("the refusal does not say what it actually found:", err)
+	}
+
+	// …and it holds for reasons that have nothing to do with a writer: a truncated object, a bad disk, a
+	// copy between stores that lost a byte.
+	box.Objects.Put("det/blobs/"+d, mask[:len(mask)-1])
+	if _, err := ctl.Blob(d); !errors.Is(err, p.ErrBlobMismatch) {
+		t.Fatal("a truncated object was handed to the caller:", err)
+	}
+}
+
+// Three sibling directories under the subsystem, one writer each — the layout the grants are cut from.
+// The worker's name moved to the LAST segment so that "the workers write here and nowhere else" is a
+// prefix a policy can name at all; while it was first, the narrowest expressible grant was the whole
+// subsystem, which also covers the snapshot М12 reads and the blobs the workers trust.
+func TestTheThreeObjectDirectoriesHaveOneWriterEach(t *testing.T) {
+	sub := p.Subsystem{Name: "vms"}
+	hb := sub.HeartbeatKey("w-1")
+	snap, _ := sub.SnapshotKey("w-1")
+	blob, _ := sub.BlobKey(p.Digest([]byte("x")))
+	if hb != "vms/heartbeats/w-1" || snap != "vms/snapshot/w-1" || !strings.HasPrefix(blob, "vms/blobs/") {
+		t.Fatal(hb, snap, blob)
+	}
+	// each grant covers its own directory and neither of the others
+	for _, c := range []struct {
+		grants []string
+		mine   string
+		theirs []string
+	}{
+		{sub.ACLObjectsWorker(), hb, []string{snap, blob}},
+		{sub.ACLObjectsController(), snap, []string{hb, blob}},
+		{sub.ACLObjectsConsole(), blob, []string{hb, snap}},
+	} {
+		if len(c.grants) != 1 {
+			t.Fatal("one directory, one grant:", c.grants)
+		}
+		pre := strings.TrimSuffix(c.grants[0], "*")
+		if !strings.HasPrefix(c.mine, pre) {
+			t.Fatal(c.grants[0], "does not cover", c.mine)
+		}
+		for _, other := range c.theirs {
+			if strings.HasPrefix(other, pre) {
+				t.Fatal(c.grants[0], "also covers", other)
+			}
+		}
+	}
+}
