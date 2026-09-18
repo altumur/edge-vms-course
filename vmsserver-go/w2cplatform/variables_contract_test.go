@@ -9,7 +9,7 @@
 //
 //	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract
 //
-// The contract, in five clauses:
+// The contract, in seven clauses:
 //
 //  1. a path that was never written reads as (nil, Absent);
 //  2. Put returns an Index that identifies the version; the next read gives it back;
@@ -19,6 +19,9 @@
 //     Kubernetes' resourceVersion is a string and arithmetic on it is meaningless.
 //     Clause 5 is the one that quietly decides whether the k8s backend is possible.
 //  6. a key has exactly ONE spelling: ".." and a leading "/" are REFUSED, not repaired.
+//  7. what a read hands back is a COPY. A caller that mutates it must not have edited
+//     the store — an edit without an index is the one thing CAS exists to prevent, and a
+//     backend that returns its own state gives it away for free.
 package w2cplatform_test
 
 import (
@@ -74,6 +77,71 @@ func TestContractAWriteIsReadableAndCarriesAVersion(t *testing.T) {
 		t.Fatal(got, i3)
 	}
 }
+
+// Clause 7, and the one a backend gets for free only by accident.
+//
+// A file backend parses JSON on every read, so what a caller holds is already its own; a backend that
+// keeps its state in memory — this process's memory://, a cache in front of raft, anything that does not
+// re-parse — hands back the store itself unless it deliberately does not. Then a caller that edits the map
+// it read has written to the store WITH NO INDEX: no CAS, no conflict, no version, and the next reader
+// sees a change nobody can point at.
+//
+// This clause exists because it was missing. memory:// copied correctly from the first line, and removing
+// the copy broke nothing in the suite — which meant the suite was not the contract it claimed to be. A
+// clause nothing tests is a comment.
+func TestContractAReadHandsBackACopy(t *testing.T) {
+	v := store(t)
+	idx, err := v.Put("contract/copy", p.Items{"n": "1"}, p.Absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	items, got, _ := v.Get("contract/copy")
+	items["n"] = "999"
+	items["sneaked"] = "yes"
+
+	again, idx2, _ := v.Get("contract/copy")
+	if len(again) != 1 || again["n"] != "1" {
+		t.Fatalf("a read handed back the store's own row: %v", again)
+	}
+	if idx2 != got || idx2 != idx {
+		t.Fatal("the store changed version without anyone writing to it")
+	}
+
+	// …and the same for what a caller PUT: keeping the map it passed is the same hole from the other side.
+	row := p.Items{"n": "2"}
+	if _, err := v.Put("contract/copy", row, idx); err != nil {
+		t.Fatal(err)
+	}
+	row["n"] = "666"
+	if kept, _, _ := v.Get("contract/copy"); kept["n"] != "2" {
+		t.Fatalf("Put kept the caller's map: %v", kept)
+	}
+}
+
+//
+// A store is swapped by changing CONFIG_URL, which is only safe if "it works"
+// means something checkable. This is that meaning: file today, Nomad in М11,
+// Kubernetes when there is a site for it. A new backend is accepted when this
+// file is green against it, not when it looks right.
+//
+// Run against another backend by pointing CONTRACT_URL at it:
+//
+//	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract
+//
+// The contract, in seven clauses:
+//
+//  1. a path that was never written reads as (nil, Absent);
+//  2. Put returns an Index that identifies the version; the next read gives it back;
+//  3. cas is the whole of the concurrency story: N racers, one winner, N-1 refusals;
+//  4. a writer may only write its own prefixes, and is refused — not ignored — elsewhere;
+//  5. the Index is OPAQUE. It is compared for equality and nothing else, because
+//     Kubernetes' resourceVersion is a string and arithmetic on it is meaningless.
+//     Clause 5 is the one that quietly decides whether the k8s backend is possible.
+//  6. a key has exactly ONE spelling: ".." and a leading "/" are REFUSED, not repaired.
+//  7. what a read hands back is a COPY. A caller that mutates it must not have edited
+//     the store — an edit without an index is the one thing CAS exists to prevent, and a
+//     backend that returns its own state gives it away for free.
 
 func TestContractEverythingIsStrings(t *testing.T) {
 	// The reason the contract fits Kubernetes at all: ConfigMap.data is

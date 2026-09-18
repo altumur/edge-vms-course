@@ -9,7 +9,7 @@ Run against another backend by pointing `CONTRACT_URL` at it:
 
     CONTRACT_URL=nomad://127.0.0.1:4646 python3 tests/run.py
 
-The contract, in five clauses:
+The contract, in seven clauses:
 
 1.  a key that was never written reads as `(None, 0)`;
 2.  `put` returns an index that identifies the version; the next read gives it back;
@@ -19,6 +19,9 @@ The contract, in five clauses:
     Kubernetes' `resourceVersion` is a string and arithmetic on it is meaningless.
     Clause 5 is the one that quietly decides whether the k8s backend is possible.
 6.  a key has exactly ONE spelling: `..` and a leading `/` are REFUSED, not repaired.
+7.  what a read hands back is a COPY. A caller that mutates it must not have edited
+    the store — an edit without an index is the one thing CAS exists to prevent, and a
+    backend that returns its own state gives it away for free.
 """
 import os
 import tempfile
@@ -60,6 +63,37 @@ def test_everything_is_strings():
     got = v.get("contract/types")[0]
     assert got == {"n": "7", "flag": "true"}
     assert all(isinstance(k, str) and isinstance(x, str) for k, x in got.items())
+
+
+def test_a_read_hands_back_a_copy():
+    """Clause 7, and the one a backend gets for free only by accident.
+
+    A file backend parses JSON on every read, so what a caller holds is already its own; a backend that
+    keeps its state in memory — this process's `memory://`, a cache in front of raft, anything that does
+    not re-parse — hands back the store itself unless it deliberately does not. Then a caller that edits
+    the dict it read has written to the store **with no index**: no CAS, no conflict, no version, and the
+    next reader sees a change nobody can point at.
+
+    This clause exists because it was missing. `memory://` copied correctly from the first line, and
+    removing the copy broke NOTHING in the suite — which meant the suite was not the contract it claimed
+    to be. A clause nothing tests is a comment."""
+    v = _store()
+    v.put("contract/copy", {"n": "1"}, cas=0)
+
+    items, idx = v.get("contract/copy")
+    items["n"] = "999"
+    items["sneaked"] = "yes"
+
+    again, idx2 = v.get("contract/copy")
+    assert again == {"n": "1"}, f"a read handed back the store's own row: {again}"
+    assert idx2 == idx, "the store changed version without anyone writing to it"
+
+    # and the same for what a caller PUT: keeping the dict it passed would be the same hole, from the
+    # other side. `put` is given a row and must not go on sharing it.
+    row = {"n": "2"}
+    v.put("contract/copy", row, cas=idx)
+    row["n"] = "666"
+    assert v.get("contract/copy")[0] == {"n": "2"}, "put kept the caller's dict"
 
 
 def test_cas_lets_exactly_one_racer_through():

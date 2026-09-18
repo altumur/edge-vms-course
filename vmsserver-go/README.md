@@ -10,6 +10,7 @@ vmsserver-go/
   w2cplatform/                 the platform — no import of vms/, and not the word "camera" (a test greps for it)
     variables.go               Variables: the interface (Get/Put/List/Delete) over an OPAQUE Index, FileVariables (one box, files, flock),
                                and the seam — OpenVars(url, writer, acl) + RegisterScheme, so a process is told CONFIG_URL and nothing else
+    memvariables.go            the same contract in memory, registered as `memory://` — the second backend, and what the contract suite is FOR
     runtime.go                 what a runtime hands a process, under neutral names: <ROLE>_NAME, SLOT_INDEX, SERVER_NAME, LABELS, INSTANCE_ID
     objects.go                 ObjectStore: the interface and FsObjectStore
     epoch.go                   NextEpoch by CAS; Lease (Renew = read my epoch; MayWrite on a monotonic clock)
@@ -24,9 +25,7 @@ vmsserver-go/
                                the filters (constraint, spread_by), the preferences (near, home), the tie-break, redistribute, rebalance, EnsureHome
     yaml.go                    a YAML subset parser (block and flow, scalars, comments) so the spec needs no dependency
     heartbeats.go              reading heartbeats: the read model (every age) and the freshness filter a caller uses before it TALKS to a holder
-    space.go                   the two marks on the disk; space_unix.go / space_windows.go — statfs and GetDiskFreeSpaceExW behind one name
-    flock_unix.go              the store's lock: flock(LOCK_EX)
-    flock_windows.go           …and LockFileEx through kernel32, with no dependency added — `GOOS=windows go build ./...` is a test here
+    space.go                   the disk and the two marks on it: statvfs behind a seam, and the watermark's settings
     console.go  console.html   the console as data: SpecConsole over the same spec — the page (embedded, built from /spec), /<rows>, /where, /metrics with
                                the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers an Extra for its own routes;
                                and on the Mount itself, /drain (one machine is about to stop — is it safe yet) and /schema (the store's layout, and
@@ -66,7 +65,8 @@ vmsserver-go/
 
 ```bash
 go test ./...                    # 89 tests, ~600 ms
-CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract   # the same contract, another backend
+CONTRACT_URL=memory:// go test ./w2cplatform -run Contract              # the same contract, the other backend shipped here
+CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract   # …and one that is not
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms
 ```

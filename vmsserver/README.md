@@ -6,6 +6,8 @@ The eleven lessons as one runnable package. No scheduler, no KVS, no database: t
 vmsserver/
   w2cplatform/                 the platform (named so because Python owns `platform`)
     variables.py               Lesson 1  a config store with ModifyIndex and check-and-set, as files; one writer per prefix
+    memvariables.py            Lesson 20  the same contract in memory, registered as `memory://` — the second backend, and
+                               what the contract suite is FOR (CONTRACT_URL=memory:// python3 tests/run.py)
     objects.py                 Lesson 1  an object store: a directory
     epoch.py                   Lesson 1  the fencing-token issuer and the lease — generic
     contract.py                Lesson 1  Subsystem, Assignment, Heartbeat, Slot; the Controller and Worker bases; identity by claim
@@ -47,12 +49,12 @@ vmsserver/
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container (no spool),
                                recworker@.container (the only writer of segments), vmscontroller.container, reccontroller.container, console.container, resource.container,
                                liveworker@.container, livecontroller.container, detworker@.container, detcontroller.container, vms.env.example, check-quadlet.sh
-  tests/                       109 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
+  tests/                       113 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
                                from ../vmsserver-go against this controller over one store (skipped where there is no Go)
 ```
 
 ```bash
-python3 tests/run.py                                   # 109 tests
+python3 tests/run.py                                   # 113 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: holds cameras, rtsp://<box>:8554/<cam>; without: the fake actuator
 RECORDER_NAME=r-1 python3 -m vms recorder              # subscribes to the fan-out, writes rec/<cam>/ into the archive
@@ -62,7 +64,7 @@ python3 -m vms worker                                  # no name: claims the fir
 ## The Go port, and the one test that holds the two together
 
 [`../vmsserver-go/`](../vmsserver-go/README.md) is this package whole, in Go: the same platform, the same
-subsystem, the same decisions, 98 tests. Both ports are complete and both are kept complete — the claim
+subsystem, the same decisions, 102 tests. Both ports are complete and both are kept complete — the claim
 this course makes is that the shape can be stated twice, in two languages, and come out the same, and a
 half-port would not state it.
 

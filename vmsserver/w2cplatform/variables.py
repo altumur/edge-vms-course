@@ -110,6 +110,13 @@ def safe_path(path: str) -> str:
 _SCHEMES: dict[str, object] = {}
 
 
+# The platform's own backends, by the module that registers each. `file://` is answered above without a
+# lookup because it is what a box with no URL at all gets; `memory://` is the other one shipped here.
+# Anything else — `nomad://`, `k8s://` — is a module somebody else imports, and this table is not where it
+# goes: that is the difference between a backend the platform HAS and a backend it ALLOWS.
+_BUILTIN = {"memory": "w2cplatform.memvariables"}
+
+
 def register_scheme(scheme: str, factory) -> None:
     """`factory(url, writer=…, acl=…) -> Variables`. A backend registers itself at import."""
     _SCHEMES[scheme] = factory
@@ -125,8 +132,14 @@ def open_vars(url: str, writer: str | None = None, acl: dict[str, list[str]] | N
     if scheme == "file":
         return FileVariables(rest or "/", writer, acl)
     factory = _SCHEMES.get(scheme)
+    if factory is None and scheme in _BUILTIN:
+        # A backend registers itself when its module is imported, and the platform's own second one is
+        # imported here rather than from `__init__` — `import w2cplatform` still pulls in nothing, which is
+        # a property the package states about itself and a test checks.
+        __import__(_BUILTIN[scheme])
+        factory = _SCHEMES.get(scheme)
     if factory is None:
-        known = ", ".join(sorted(["file"] + list(_SCHEMES)))
+        known = ", ".join(sorted({"file", *_BUILTIN, *_SCHEMES}))
         raise ValueError(f"no Variables backend for {scheme}://  (have: {known})")
     return factory(url, writer=writer, acl=acl)
 
