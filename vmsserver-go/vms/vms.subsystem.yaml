@@ -8,12 +8,19 @@ unit:
   id: numeric                        # vms/next_id
   fields:
     name:                  {type: string, default: "cam{id}"}
-    source:                {type: string, required: true}     # driverpack://file/<name> or driverpack://<vendor>/<host>
+    # `type: url` is not decoration: it is what refuses `driverpack://root:hunter2@10.0.0.7/…` at the
+    # door. This field IS in the snapshot below, and the snapshot leaves the cluster.
+    source:                {type: url,    required: true}     # driverpack://file/<name> or driverpack://<vendor>/<host>
     enabled:               {type: bool,   default: true}
     events_retention_days: {type: int,    default: 365}       # buckets: the platform's, via the derived row below
     priority:              {type: int,    default: 100}
     labels:                {type: list}                       # where the camera is reachable from: "vlan:cctv-a"
     ref:                   {type: string}                     # the name a layer above knows it by (М12)
+    # The device's own credential. Two fields and not one: a login identifies and a password
+    # authenticates, and only the second has to be kept. The worker hands both to the actuator as element
+    # PROPERTIES — never inside a launch string, which is what ends up in logs, a crash dump and `ps`.
+    cred_username:         {type: string}                     # the device login
+    cred_secret:           {type: string}                     # the device password: never in the snapshot, masked on the way out
     live:                  {type: string, default: "always"}  # always | on-demand
   derived:
     - row: retention/{id}            # vms/retention/<id> {days}: what the platform's resource job retains buckets by
@@ -31,6 +38,6 @@ placement:
   near:       rec                               # an affinity: the recorder holding this camera's recording
   home:       near                              # …and, unlike a bare affinity, maintained: EnsureHome follows it back
   rebalance:  {dead_band: 0.10}
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live, cred_username]
 console:
   running: cameras_running             # vms_cameras_running: cameras held — streaming to whoever subscribes; recording is rec's gauge

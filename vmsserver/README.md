@@ -15,6 +15,8 @@ vmsserver/
     spec.py                    Lesson 6  the controller as data: SubsystemSpec (rows, fields, derived rows, placement by name — requires, servers, near — snapshot, the two ACLs) and SpecController, the one controller every subsystem runs
     console.py                 Lesson 7  the console as data: SpecConsole over the same spec — the page, /spec, /<rows>, /where, /metrics with the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers extra routes;
                                Mount — one process fronting several subsystems, the root at / and the others under their names (/live/…, /det/…)
+    secrets.py                 Lesson 23  the `*_secret` rule: mask_secrets on the way out of the console, and a spec that
+                               names a secret in its snapshot does not load
     console.html               Lesson 7  the one page for every subsystem: reads /spec, builds the list and the forms from the fields; timeline and player only when the spec says media
   vms/                         the VMS — the first subsystem
     reconciler.py              Lesson 4  М9 Lesson 6's loop, copied unchanged: the contract
@@ -45,12 +47,12 @@ vmsserver/
   deploy/                      Quadlet, on М9's box: Containerfile (localhost/vmsserver:latest, the image М11 builds FROM), vmsworker@.container (no spool),
                                recworker@.container (the only writer of segments), vmscontroller.container, reccontroller.container, console.container, resource.container,
                                liveworker@.container, livecontroller.container, detworker@.container, detcontroller.container, vms.env.example, check-quadlet.sh
-  tests/                       101 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
+  tests/                       104 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
                                from ../vmsserver-go against this controller over one store (skipped where there is no Go)
 ```
 
 ```bash
-python3 tests/run.py                                   # 101 tests
+python3 tests/run.py                                   # 104 tests
 PLATFORM_DIR=/data/platform python3 -m vms controller  # the console on :8080
 WORKER_NAME=w-1 python3 -m vms worker                  # with GStreamer: holds cameras, rtsp://<box>:8554/<cam>; without: the fake actuator
 RECORDER_NAME=r-1 python3 -m vms recorder              # subscribes to the fan-out, writes rec/<cam>/ into the archive
@@ -60,7 +62,7 @@ python3 -m vms worker                                  # no name: claims the fir
 ## The Go port, and the one test that holds the two together
 
 [`../vmsserver-go/`](../vmsserver-go/README.md) is this package whole, in Go: the same platform, the same
-subsystem, the same decisions, 89 tests. Both ports are complete and both are kept complete — the claim
+subsystem, the same decisions, 96 tests. Both ports are complete and both are kept complete — the claim
 this course makes is that the shape can be stated twice, in two languages, and come out the same, and a
 half-port would not state it.
 

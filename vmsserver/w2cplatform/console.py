@@ -85,6 +85,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from .secrets import mask_secrets
 from .contract import SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew, builds, schema_version
 from .epoch import current_epoch
 from .events import EventLog
@@ -374,14 +375,17 @@ class SpecConsole:
     def create(self, body: dict) -> tuple[int, dict]:
         try:
             r = self.ctl.create(body)
-            return 201, {**r, "worker": None}                        # placed by the controller's next pass, never by the console
+            # Masked, like every other way out. This reply is ALSO what `IdempotencyKeys` stores to answer a
+            # retry, so an unmasked one puts a second copy of the secret in the config store under a key
+            # nobody thinks to look at — which is exactly how this was got wrong the first time.
+            return 201, {**mask_secrets([r])[0], "worker": None}      # placed by the controller's next pass, never by the console
         except Refused as e:
             return 400, {"detail": str(e), "error": str(e)}
 
     # `ctl.update` → 200 with the row; `Refused` → 400; `KeyError` → 404.
     def update(self, uid, body: dict) -> tuple[int, dict]:
         try:
-            return 200, self.ctl.update(uid, body)
+            return 200, mask_secrets([self.ctl.update(uid, body)])[0]
         except Refused as e:
             return 400, {"detail": str(e), "error": str(e)}
         except KeyError:
@@ -501,7 +505,7 @@ class SpecConsole:
             if path == "/spec":
                 return h._send(200, con.describe())
             if path == rows_path:
-                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": ctl.units()})
+                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": mask_secrets(ctl.units())})
             if path.startswith("/where/"):
                 uid = self._uid(path); pl = ctl.placement(uid)
                 return h._send(200 if pl else 404, {"worker": pl.worker if pl else None, "reason": pl.reason if pl else None,

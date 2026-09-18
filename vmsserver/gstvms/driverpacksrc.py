@@ -59,7 +59,16 @@ from .uri import resolve  # noqa: E402
 # `pace`), `offset` (nanoseconds accumulated across loops) and `last_pts` (the last rebased PTS seen).
 class DriverPackSrc(Gst.Bin):
     __gstmetadata__ = ("DriverPack source", "Source/Video", "Plays a media file as if it were a camera", "edge-vms-course")
-    __gproperties__ = {"uri": (str, "uri", "driverpack://file/<name>", "", GObject.ParamFlags.READWRITE)}
+    # Three properties, not one. `user` and `password` are what the REAL DriverPack takes for a vendor
+    # camera, and this stand-in declares the same surface so the worker's code path is the same one that
+    # runs in production: set after `parse_launch`, never inside the launch string. A file has no login, so
+    # this element stores them and opens the file regardless — a stand-in that refused them would push the
+    # difference into the worker, which is the one place it must not be.
+    __gproperties__ = {
+        "uri": (str, "uri", "driverpack://file/<name>", "", GObject.ParamFlags.READWRITE),
+        "user": (str, "user", "the device login; unused by driverpack://file/", "", GObject.ParamFlags.READWRITE),
+        "password": (str, "password", "the device password; unused by driverpack://file/", "", GObject.ParamFlags.READWRITE),
+    }
 
     # Creates and adds the four elements; links `filesrc → qtdemux` statically, `h264parse → identity`
     # statically, and `qtdemux → h264parse` dynamically on `pad-added` (a demuxer's pads appear once it has
@@ -70,6 +79,7 @@ class DriverPackSrc(Gst.Bin):
     def __init__(self):
         super().__init__()
         self.uri = ""
+        self.user = self.password = ""
         self.src = Gst.ElementFactory.make("filesrc", "file")
         self.demux = Gst.ElementFactory.make("qtdemux", "demux")
         self.parse = Gst.ElementFactory.make("h264parse", "parse")
@@ -90,9 +100,14 @@ class DriverPackSrc(Gst.Bin):
     # vendor URI or a bad name raises `ValueError` from the property setter, which `Gst.parse_launch` in the
     # actuator turns into a failed start (logged, `False` returned, the reconciler backs off).
     def do_get_property(self, prop):
-        return self.uri
+        return getattr(self, prop.name, "")
 
+    # The credential is stored and nothing else: a file is opened by path. `repr` of this element never
+    # shows it, because `do_get_property` is the only way out and nothing prints all three.
     def do_set_property(self, prop, value):
+        if prop.name in ("user", "password"):
+            setattr(self, prop.name, value)
+            return
         self.uri = value
         self.src.set_property("location", resolve(value))
 

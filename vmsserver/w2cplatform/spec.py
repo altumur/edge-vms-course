@@ -74,6 +74,9 @@ import os
 import time
 from dataclasses import dataclass, field
 
+from urllib.parse import urlsplit
+
+from .secrets import is_secret_field
 from .contract import DRAIN_KEY, Controller, Subsystem, slot_number
 from .objects import ObjectStore
 from .variables import Variables
@@ -104,7 +107,7 @@ class Placement:
 @dataclass
 class Field:
     name: str
-    type: str = "string"          # string | int | float | bool | list
+    type: str = "string"          # string | int | float | bool | list | url
     default: object = None
     required: bool = False
 
@@ -205,8 +208,18 @@ class SubsystemSpec:
                    near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
                    home=str(pl.get("home", "") or ""),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
-                   snapshot=list(d.get("snapshot", []) or list(fields)),
+                   snapshot=list(d.get("snapshot", []) or [n for n in fields if not is_secret_field(n)]),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
+        # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot` is what М12's directory
+        # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
+        # the default ("every field") is a convenience and not a decision.
+        leaks = [n for n in spec.snapshot if is_secret_field(n)]
+        if leaks:
+            raise ValueError(f"spec {spec.name}: a secret may not be in the snapshot: {leaks} — "
+                             f"the snapshot is what leaves the cluster")
+        unknown_snap = [n for n in spec.snapshot if n not in fields]
+        if unknown_snap:
+            raise ValueError(f"spec {spec.name}: snapshot names no field: {unknown_snap}")
         if spec.home == "near" and spec.near == "none":
             raise ValueError(f"spec {spec.name}: home: near needs a near to follow")
         if spec.home and spec.home != "near" and spec.home not in fields:
@@ -281,6 +294,17 @@ class SubsystemSpec:
         unknown = [k for k in fields if k not in self.fields]
         if unknown:
             raise Refused(f"unknown field(s) {unknown}")
+        # A `url` field may not carry a userinfo. `rtsp://root:hunter2@10.0.0.5/…` is how a password
+        # reaches a row that is in the SNAPSHOT — out of the cluster, into М12's directory, and onto the
+        # screen of every console, past a mask that only looks at `*_secret`. The credential fields are
+        # where it goes instead, and saying so is better than moving it quietly: an operator who pasted a
+        # URL from a browser learns that this system keeps the two apart.
+        for name, f in self.fields.items():
+            if f.type == "url" and fields.get(name):
+                u = urlsplit(str(fields[name]))
+                if u.username or u.password or "@" in u.netloc:
+                    raise Refused(f"{name} may not carry a login: put it in cred_username / cred_secret — "
+                                  f"a url field is in the snapshot, and the snapshot leaves the cluster")
 
     # A fresh row: each required field must be present and truthy (`"a vms unit needs a source"`), others
     # get their default; a string value containing `{id}` has it substituted (the VMS's `name: "cam{id}"`);

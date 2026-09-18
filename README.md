@@ -122,7 +122,7 @@ The recorder rebuilt on the shape М11 arrived at — **workers, resources, one 
 - [Lesson index](./М10_ServerVMS/README.md) — start here
 - [Module design](./М10_ServerVMS/module-design.md) — the three elements, the two processes, where configuration lives, and the contract every subsystem gives the platform
 - [`vmsserver/`](./vmsserver/README.md) — the module's code, whole: the platform's two stores with CAS, the epoch issuer and the lease, `driverpacksrc` and `archivesink`, `vmsworker`, `vmscontroller`, the console, the systemd units, identity by claim, events beside the segment, the resource as a platform job, and a second subsystem that counts seconds; 42 tests
-- [`vmsserver-go/`](./vmsserver-go/README.md) — the same module in Go, standard library only, 89 tests: the platform, the controller, the console, the resource and both workers, whole. Both ports are kept complete, and `vmsserver/tests/test_cross_go_worker.py` runs this binary against the Python controller over one store — because a green suite on each side proves each side self-consistent and nothing about whether they agree
+- [`vmsserver-go/`](./vmsserver-go/README.md) — the same module in Go, standard library only, 96 tests: the platform, the controller, the console, the resource and both workers, whole. Both ports are kept complete, and `vmsserver/tests/test_cross_go_worker.py` runs this binary against the Python controller over one store — because a green suite on each side proves each side self-consistent and nothing about whether they agree
 
 ## М11 — ClusterVMS
 

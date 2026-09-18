@@ -511,7 +511,9 @@ func (c *SpecConsole) Create(body map[string]any) Reply {
 		out[k] = v
 	}
 	out["worker"] = nil
-	return Reply{201, out}
+	// Masked, like every other way out. This reply is ALSO what IdempotencyKeys stores to answer a retry,
+	// so an unmasked one writes a second copy of the secret into the config store.
+	return Reply{201, map[string]any(MaskRow(out))}
 }
 
 func (c *SpecConsole) Update(uid string, body map[string]any) Reply {
@@ -519,7 +521,7 @@ func (c *SpecConsole) Update(uid string, body map[string]any) Reply {
 	if rep, bad := refusal(err); bad {
 		return rep
 	}
-	return Reply{200, r}
+	return Reply{200, map[string]any(MaskRow(r))}
 }
 
 func (c *SpecConsole) Delete(uid string) Reply {
@@ -614,7 +616,7 @@ func (c *SpecConsole) Handler() http.Handler {
 			case path == "/spec":
 				SendJSON(w, 200, c.Describe())
 			case path == rowsPath:
-				SendJSON(w, 200, map[string]any{"rows": c.Ctl.ReadModel(c.O.LostAfter), "configured": c.Ctl.Units()})
+				SendJSON(w, 200, map[string]any{"rows": c.Ctl.ReadModel(c.O.LostAfter), "configured": MaskSecrets(c.Ctl.Units())})
 			case strings.HasPrefix(path, "/where/"):
 				uid := LastSegment(path)
 				pl := c.Ctl.Placement(uid)

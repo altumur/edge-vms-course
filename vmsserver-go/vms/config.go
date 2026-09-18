@@ -152,6 +152,8 @@ type Camera struct {
 	Revision            int
 	Labels              []string
 	Ref                 string
+	CredUsername        string
+	CredSecret          string
 	Epoch               int
 	LiveURL, LiveShm    string // the worker: what it gives out
 	LivePort            int
@@ -168,7 +170,8 @@ type Camera struct {
 func CameraOf(r p.Row) Camera {
 	return Camera{ID: r.String("id"), Name: r.String("name"), Source: r.String("source"), Enabled: r.Bool("enabled"),
 		EventsRetentionDays: r.Int("events_retention_days"), Priority: r.Int("priority"),
-		Revision: r.Int("revision"), Labels: r.List("labels"), Ref: r.String("ref"), Live: r.String("live")}
+		Revision: r.Int("revision"), Labels: r.List("labels"), Ref: r.String("ref"), Live: r.String("live"),
+		CredUsername: r.String("cred_username"), CredSecret: r.String("cred_secret")}
 }
 
 func RowOf(c Camera) p.Row {
@@ -177,7 +180,8 @@ func RowOf(c Camera) p.Row {
 		labels = []string{}
 	}
 	return p.Row{"id": c.ID, "name": c.Name, "source": c.Source, "enabled": c.Enabled,
-		"events_retention_days": c.EventsRetentionDays, "priority": c.Priority, "revision": c.Revision, "labels": labels, "ref": c.Ref}
+		"events_retention_days": c.EventsRetentionDays, "priority": c.Priority, "revision": c.Revision, "labels": labels, "ref": c.Ref,
+		"cred_username": c.CredUsername, "cred_secret": c.CredSecret}
 }
 
 func Row(items p.Items) Camera { return CameraOf(Spec.RowOf(items)) }

@@ -18,6 +18,7 @@ package w2cplatform
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -76,7 +77,7 @@ type Move struct {
 
 type FieldSpec struct {
 	Name     string
-	Type     string // string | int | float | bool | list
+	Type     string // string | int | float | bool | list | url
 	Default  any
 	Required bool
 }
@@ -291,10 +292,27 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 			s.Snapshot = append(s.Snapshot, Str(f))
 		}
 	} else {
-		s.Snapshot = append([]string{}, s.FieldOrder...)
+		// The DEFAULT — "every field" — leaves secrets out rather than refusing: a spec that said nothing
+		// made no mistake, and the safe reading of silence is the one that keeps the secret in.
+		for _, n := range s.FieldOrder {
+			if !IsSecretField(n) {
+				s.Snapshot = append(s.Snapshot, n)
+			}
+		}
 	}
 	if con := asMap(d["console"]); con["running"] != nil {
 		s.RunningGauge = Str(con["running"])
+	}
+	// A secret in the snapshot is a secret leaving the cluster: the snapshot is what М12's directory
+	// reads. Refused at LOAD time, not watched for at review time — a subsystem written a year from now
+	// cannot make the mistake, and nobody has to remember the rule to be protected by it.
+	for _, n := range s.Snapshot {
+		if IsSecretField(n) {
+			return nil, fmt.Errorf("spec %s: a secret may not be in the snapshot: %q — the snapshot is what leaves the cluster", s.Name, n)
+		}
+		if _, ok := s.Fields[n]; !ok {
+			return nil, fmt.Errorf("spec %s: snapshot names no field: %q", s.Name, n)
+		}
 	}
 	if _, ok := Constraints[s.Constraint]; !ok {
 		return nil, fmt.Errorf("spec: unknown constraint %q", s.Constraint)
@@ -398,6 +416,29 @@ func (s *SubsystemSpec) Refuse(fields map[string]any) error {
 	}
 	if len(unknown) > 0 {
 		return &Refused{fmt.Sprintf("unknown field(s) %v", unknown)}
+	}
+	// A `url` field may not carry a userinfo. `rtsp://root:hunter2@10.0.0.5/…` is how a password reaches a
+	// row that is in the SNAPSHOT — out of the cluster, into М12's directory, and onto every console
+	// screen, past a mask that only looks at `*_secret`. Refused rather than moved quietly into the
+	// credential fields: an operator who pasted a URL from a browser should learn that the two are kept
+	// apart here.
+	names := make([]string, 0, len(s.Fields))
+	for n := range s.Fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if s.Fields[n].Type != "url" {
+			continue
+		}
+		v, ok := fields[n]
+		if !ok || Str(v) == "" {
+			continue
+		}
+		u, err := url.Parse(Str(v))
+		if err == nil && u.User != nil {
+			return &Refused{fmt.Sprintf("%s may not carry a login: put it in cred_username / cred_secret — a url field is in the snapshot, and the snapshot leaves the cluster", n)}
+		}
 	}
 	return nil
 }

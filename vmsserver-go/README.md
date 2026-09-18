@@ -24,6 +24,8 @@ vmsserver-go/
                                the filters (constraint, spread_by), the preferences (near, home), the tie-break, redistribute, rebalance, EnsureHome
     yaml.go                    a YAML subset parser (block and flow, scalars, comments) so the spec needs no dependency
     heartbeats.go              reading heartbeats: the read model (every age) and the freshness filter a caller uses before it TALKS to a holder
+    secrets.go                 the `*_secret` rule: MaskSecrets on the way out of the console — including the create reply, which is what
+                               an Idempotency-Key stores — and a spec naming a secret in its snapshot does not load
     space.go                   the disk and the two marks on it: statvfs behind a seam, and the watermark's settings
     console.go  console.html   the console as data: SpecConsole over the same spec — the page (embedded, built from /spec), /<rows>, /where, /metrics with
                                the subsystem's prefix, /marks, the writes with the spec's refusals; a subsystem registers an Extra for its own routes;
@@ -58,12 +60,12 @@ vmsserver-go/
   gstvms/uri.go                driverpack://file/<name> resolution — the pure part; the element itself is Python's (GStreamer)
   testbox/                     the fixture both Go suites share: FileVariables + FsObjectStore in a temp dir, a spool, an archive, two clocks
   cmd/vms/main.go              vms worker|controller|recorder|reccontroller|console|resource — the box's processes, with the fake actuator
-  *_test.go                    89 tests, in the packages they test; -race clean — including variables_contract_test.go, the contract EVERY
+  *_test.go                    96 tests, in the packages they test; -race clean — including variables_contract_test.go, the contract EVERY
                                backend must keep, runnable against another with CONTRACT_URL
 ```
 
 ```bash
-go test ./...                    # 89 tests, ~600 ms
+go test ./...                    # 96 tests, ~600 ms
 CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract   # the same contract, another backend
 go test -race ./...              # the CAS races with real goroutines
 go build ./cmd/vms

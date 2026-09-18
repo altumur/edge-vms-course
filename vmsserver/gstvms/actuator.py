@@ -25,7 +25,7 @@
 #
 # ## Module-level names
 # - `log` — logger `gstvms`.
-# - `DESC` — the worker's launch template: `driverpacksrc uri={uri} name=src ! h264parse ! watchdog
+# - `DESC` — the worker's launch template: `driverpacksrc name=src ! h264parse ! watchdog
 #   timeout={watchdog} ! tee name=t`, then two leaky branches: `rtph264pay ! udpsink 127.0.0.1:{port}` (the
 #   loopback RTP the RTSP fan-out re-serves as rtsp://<server>:8554/<cam> — subscribers on any server) and
 #   `shmsink socket-path=<SHM_DIR>/<cam>.shm` (the same bytes in shared memory — subscribers on THIS server,
@@ -59,7 +59,10 @@ from . import archivesink, driverpacksrc  # noqa: E402,F401 — registers the el
 log = logging.getLogger("gstvms")
 Gst.init(None)
 
-DESC = ("driverpacksrc uri={uri} name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
+# No `uri=` and no credential in the template. A launch string is what ends up in a log line, in a crash
+# dump and in `ps`, so the three things worth hiding are set as PROPERTIES after `parse_launch` — by
+# construction, rather than by remembering to redact at every place that prints one.
+DESC = ("driverpacksrc name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
         "t. ! queue leaky=downstream max-size-buffers=30 ! {live} "
         "t. ! queue leaky=downstream max-size-buffers=30 ! {shm}")
 SHM = "shmsink socket-path={path} shm-size=20000000 wait-for-connection=false sync=false"      # the tee's same-server branch: any number of shmsrc readers
@@ -109,8 +112,14 @@ class GstActuator:
             return True
         try:
             p = Gst.parse_launch(self.describe(cam))
+            src = p.get_by_name("src")
+            src.set_property("uri", cam["source"])                    # the URI, after the parse: see DESC
+            if cam.get("cred_username"):
+                src.set_property("user", cam["cred_username"])
+            if cam.get("cred_secret"):
+                src.set_property("password", cam["cred_secret"])
         except Exception as e:                        # noqa: BLE001
-            log.error("camera %s: %s", cid, e)
+            log.error("camera %s: %s", cid, e)        # the message may name the URI; it can no longer name the password
             return False
         bus = p.get_bus()
         bus.add_signal_watch()
@@ -126,7 +135,7 @@ class GstActuator:
     def describe(self, cam: dict) -> str:
         live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
         shm = SHM.format(path=cam["live_shm"][len("shm://"):]) if cam.get("live_shm") else IDLE
-        return DESC.format(uri=cam["source"], watchdog=self.watchdog, live=live, shm=shm)
+        return DESC.format(watchdog=self.watchdog, live=live, shm=shm)
 
     def _publish(self, cid: int, cam: dict) -> None:
         if self.fanout is not None and cam.get("live_port"):
