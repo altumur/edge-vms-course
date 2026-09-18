@@ -57,8 +57,21 @@ func TestTheConsoleNeverHandsOutTheDeviceSecret(t *testing.T) {
 	}
 }
 
-// The asymmetry, checked where it has consequences: the snapshot is the object М12's directory reads.
-func TestTheLoginLeavesTheClusterAndTheSecretDoesNot(t *testing.T) {
+// Two different reasons, and they are worth keeping apart. The SECRET is out of the snapshot because the
+// snapshot leaves the cluster — the spec refuses a spec that names it there, so this is a rule, not a
+// choice. The LOGIN is out because nothing above the cluster READS it: М12's directory takes exactly
+// `ref`, `worker` and `server` from each row and has never looked at a credential. The snapshot is one
+// object under a 64 KiB cap, so a field with no consumer is paid for by every camera in the cluster.
+// "Not a secret" is a reason not to hide it — never a reason to publish it.
+func TestNeitherHalfOfTheCredentialLeavesTheCluster(t *testing.T) {
+	for _, f := range vms.Spec.Snapshot {
+		if f == "cred_secret" || f == "cred_username" {
+			t.Fatal("a credential field is in the snapshot:", vms.Spec.Snapshot)
+		}
+	}
+	if _, ok := vms.Spec.Fields["cred_username"]; !ok {
+		t.Fatal("the login stopped being a field: it is still what the device is told")
+	}
 	box := testbox.NewBox()
 	ctl := vms.NewVmsController(box.Vars.AsWriter("vmscontroller", vms.Spec.ACLController()...), box.Objects, 0, box.Wall.Now)
 	con := vms.NewVmsController(box.Vars.AsWriter("console", vms.Spec.ACLConsole()...), box.Objects, 0, box.Wall.Now)
@@ -68,15 +81,29 @@ func TestTheLoginLeavesTheClusterAndTheSecretDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := box.Objects.Get("vms/snapshot")
-	if raw == nil || strings.Contains(string(raw), "Hunter2") {
+	if raw == nil {
+		t.Fatal("no snapshot was published")
+	}
+	if strings.Contains(string(raw), "Hunter2") {
 		t.Fatal("the secret left the cluster:", string(raw))
 	}
-	if !strings.Contains(string(raw), "admin") {
-		t.Fatal("the login is a field like any other and should be here:", string(raw))
+	if strings.Contains(string(raw), "admin") {
+		t.Fatal("the login left the cluster and nothing up there reads it:", string(raw))
 	}
 	var snap map[string]any
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
+	}
+	// what the snapshot IS for — М12 reads these and nothing else about a row
+	row := snap["cameras"].([]any)[0].(map[string]any)
+	if _, ok := row["ref"]; !ok {
+		t.Fatal("the snapshot stopped carrying what М12 actually reads:", row)
+	}
+	if _, ok := row["server"]; !ok {
+		t.Fatal("the snapshot stopped carrying what М12 actually reads:", row)
+	}
+	if _, ok := row["cred_username"]; ok {
+		t.Fatal("the login is in the row:", row)
 	}
 }
 

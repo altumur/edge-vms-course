@@ -19,6 +19,9 @@ unit:
     # The device's own credential. Two fields and not one: a login identifies and a password
     # authenticates, and only the second has to be kept. The worker hands both to the actuator as element
     # PROPERTIES — never inside a launch string, which is what ends up in logs, a crash dump and `ps`.
+    # Not in the snapshot below: nothing above the cluster reads it, and the snapshot is one object with a
+    # 64 KiB ceiling — a field nobody consumes is paid for by every camera. "Not a secret" is a reason not
+    # to hide it, never a reason to publish it.
     cred_username:         {type: string}                     # the device login
     cred_secret:           {type: string}                     # the device password: never in the snapshot, masked on the way out
     live:                  {type: string, default: "always"}  # always | on-demand
@@ -38,6 +41,6 @@ placement:
   near:       rec                               # an affinity: the recorder holding this camera's recording
   home:       near                              # …and, unlike a bare affinity, maintained: EnsureHome follows it back
   rebalance:  {dead_band: 0.10}
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live, cred_username]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 console:
   running: cameras_running             # vms_cameras_running: cameras held — streaming to whoever subscribes; recording is rec's gauge

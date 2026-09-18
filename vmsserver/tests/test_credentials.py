@@ -119,9 +119,19 @@ def test_the_console_never_hands_out_the_secret_and_the_store_holds_one_copy():
                 assert path == "vms/cameras/1" and k == "cred_secret", f"the secret is also stored at {path}[{k}]"
 
 
-def test_the_login_leaves_the_cluster_and_the_secret_does_not():
-    """The asymmetry, stated where it is enforced: in the YAML, not in the code that publishes."""
-    assert "cred_username" in SPEC.snapshot and "cred_secret" not in SPEC.snapshot
+def test_neither_half_of_the_credential_leaves_the_cluster():
+    """Two different reasons, and they are worth keeping apart.
+
+    The SECRET is out of the snapshot because the snapshot leaves the cluster — `SubsystemSpec.from_dict`
+    refuses a spec that names it there, so this is a rule, not a choice.
+
+    The LOGIN is out because **nothing above the cluster reads it**. М12's directory takes exactly `ref`,
+    `worker` and `server` from each row; it has never looked at a credential. And the snapshot is one
+    object under a 64 KiB cap, so a field with no consumer is paid for by every camera in the cluster.
+    "Not a secret" is a reason not to hide it — never a reason to publish it."""
+    assert "cred_secret" not in SPEC.snapshot        # refused by the spec: it would leave the cluster
+    assert "cred_username" not in SPEC.snapshot      # allowed there, and still pointless: nobody reads it
+    assert "cred_username" in SPEC.fields and "cred_secret" in SPEC.fields
     box = Box()
     ctl = VmsController(box.vars.as_writer("vmscontroller", SPEC.acl_controller()), box.objects, wall=box.wall)
     con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
@@ -130,5 +140,7 @@ def test_the_login_leaves_the_cluster_and_the_secret_does_not():
     ctl.publish_snapshot()
     snap = json.loads(box.objects.get("vms/snapshot"))
     row = snap["cameras"][0] if isinstance(snap, dict) and "cameras" in snap else snap[0]
-    assert row["cred_username"] == "admin"
-    assert "cred_secret" not in row and "Hunter2" not in json.dumps(snap)
+    assert "cred_secret" not in row and "cred_username" not in row
+    assert "Hunter2" not in json.dumps(snap) and "admin" not in json.dumps(snap)
+    # what the snapshot IS for — М12 reads these three and nothing else about a row
+    assert row["worker"] is None and "server" in row and "ref" in row

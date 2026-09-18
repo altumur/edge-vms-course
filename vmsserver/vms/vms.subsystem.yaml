@@ -52,10 +52,12 @@ unit:
     # leaves the cluster in the snapshot.
     ref:                   {type: string}                     # the name a layer above knows it by (М12)
     # The device's own credential. Two fields and not one, because they are not the same KIND of thing: a
-    # login identifies and a password authenticates, and only the second has to be kept. The login is in
-    # the snapshot below like any other field; the secret is not, and `mask_secrets` keeps it off every
-    # reply the console sends. The worker hands both to the actuator as element PROPERTIES — never inside
-    # a launch string, which is what ends up in logs, in a crash dump and in `ps`.
+    # login identifies and a password authenticates, and only the second has to be kept. `mask_secrets`
+    # keeps the secret off every reply the console sends. The worker hands both to the actuator as element
+    # PROPERTIES — never inside a launch string, which is what ends up in logs, in a crash dump and in `ps`.
+    # Not in the snapshot below: nothing above the cluster reads it, and the snapshot is one object with a
+    # 64 KiB ceiling — a field nobody consumes is paid for by every camera. "Not a secret" is a reason not
+    # to hide it, never a reason to publish it.
     cred_username:         {type: string}                     # the device login
     cred_secret:           {type: string}                     # the device password: never in the snapshot, masked on the way out
     # `always` (the default) or `on-demand`. A channel of an NVR kept only for its archive needs no live
@@ -106,7 +108,7 @@ placement:
 # `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the
 # copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller
 # pass.
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live, cred_username]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 console:
   # the name of the running gauge: `metrics_text()` emits `vms_cameras_running <n>` for status entries in
   # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_running 1`); `/spec`

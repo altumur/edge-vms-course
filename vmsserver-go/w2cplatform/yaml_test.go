@@ -25,12 +25,12 @@ func TestYAMLSubsetReadsTheSpec(t *testing.T) {
 		t.Fatal(d)
 	}
 	pl := m["placement"].(map[string]any)
-	if pl["constraint"] != "labels-subset" || pl["rebalance"].(map[string]any)["dead_band"] != 0.10 || len(m["snapshot"].([]any)) != 9 {
+	if pl["constraint"] != "labels-subset" || pl["rebalance"].(map[string]any)["dead_band"] != 0.10 || len(m["snapshot"].([]any)) != 8 {
 		t.Fatal(pl, m["snapshot"])
 	}
-	// The credential the device needs: the login is a field like any other and rides in the snapshot; the
-	// secret is a field the snapshot does not name. That asymmetry is the whole rule, and it is declared
-	// HERE — in the YAML — and not in the code that publishes the snapshot.
+	// The credential the device needs: two fields, and the snapshot names NEITHER of them. The secret is
+	// out because the spec refuses it there; the login is out because nothing above the cluster reads it.
+	// Both facts are declared HERE — in the YAML — and not in the code that publishes the snapshot.
 	if _, ok := fields["cred_username"]; !ok {
 		t.Fatal(fields)
 	}
@@ -38,8 +38,8 @@ func TestYAMLSubsetReadsTheSpec(t *testing.T) {
 		t.Fatal(fields)
 	}
 	for _, f := range m["snapshot"].([]any) {
-		if f == "cred_secret" {
-			t.Fatal("the secret is in the snapshot:", m["snapshot"])
+		if f == "cred_secret" || f == "cred_username" {
+			t.Fatal("a credential field is in the snapshot:", m["snapshot"])
 		}
 	}
 	// the field Lesson 15 added: a channel held for its archive and nothing else
