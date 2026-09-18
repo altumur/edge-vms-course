@@ -57,7 +57,7 @@ GstRecActuator  the RECORDER's: `rtspsrc location=<live_url> ! rtph264depay ! h2
 ## Шаг 2 — Строка воркера
 
 ```python
-DESC = ("driverpacksrc uri={uri} name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
+DESC = ("driverpacksrc name=src ! h264parse ! watchdog timeout={watchdog} ! tee name=t "
         "t. ! queue leaky=downstream max-size-buffers=30 ! {live} "
         "t. ! queue leaky=downstream max-size-buffers=30 ! {shm}")
 SHM = "shmsink socket-path={path} shm-size=20000000 wait-for-connection=false sync=false"
@@ -67,7 +67,7 @@ IDLE = "fakesink sync=false"
 
 Разберём по элементам.
 
-`driverpacksrc uri={uri}` — источник из урока 5. `uri` — поле `source` строки камеры, как есть.
+`driverpacksrc name=src` — источник из урока 5. **Адреса в шаблоне нет**, и это не забывчивость: строка запуска попадает в лог при ошибке разбора, в крэш-дамп и в вывод `ps`, а у камеры, кроме адреса, есть ещё логин и пароль. Всё трое ставятся свойствами элемента **после** разбора — шаг 6; `name=src` здесь затем, чтобы потом было за что взяться. Почему так, а не «не забывать редактировать в каждом месте, которое печатает строку», — урок 19.
 
 `h264parse` — приводит поток в форму с явными границами кадров. Без него `tee` размножал бы байты, а не кадры, и получатели не смогли бы найти начало.
 
@@ -226,8 +226,14 @@ class GstActuator:
 ```python
         try:
             p = Gst.parse_launch(self.describe(cam))
+            src = p.get_by_name("src")
+            src.set_property("uri", cam["source"])                    # the URI, after the parse: see DESC
+            if cam.get("cred_username"):
+                src.set_property("user", cam["cred_username"])
+            if cam.get("cred_secret"):
+                src.set_property("password", cam["cred_secret"])
         except Exception as e:                        # noqa: BLE001
-            log.error("camera %s: %s", cid, e)
+            log.error("camera %s: %s", cid, e)        # the message may name the URI; it can no longer name the password
             return False
 ```
 
@@ -259,7 +265,7 @@ class GstActuator:
     def describe(self, cam: dict) -> str:
         live = LIVE.format(port=cam["live_port"]) if cam.get("live_port") else IDLE
         shm = SHM.format(path=cam["live_shm"][len("shm://"):]) if cam.get("live_shm") else IDLE
-        return DESC.format(uri=cam["source"], watchdog=self.watchdog, live=live, shm=shm)
+        return DESC.format(watchdog=self.watchdog, live=live, shm=shm)
 ```
 
 Единственный метод, который переопределит регистратор. Всё остальное — общее.
@@ -357,12 +363,12 @@ class GstRecActuator(GstActuator):
 Воркер, камера 7, сервер `box-a`:
 
 ```
-driverpacksrc uri=driverpack://file/lobby.mp4 name=src ! h264parse ! watchdog timeout=8000 ! tee name=t
+driverpacksrc name=src ! h264parse ! watchdog timeout=8000 ! tee name=t
   t. ! queue leaky=downstream max-size-buffers=30 ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=20007 sync=false
   t. ! queue leaky=downstream max-size-buffers=30 ! shmsink socket-path=/run/vms/7.shm shm-size=20000000 wait-for-connection=false sync=false
 ```
 
-Раздача: `rtsp://box-a:8554/7`, одна общая фабрика над портом 20007.
+Раздача: `rtsp://box-a:8554/7`, одна общая фабрика над портом 20007. Адреса камеры в этой строке нет — он уже стоит свойством `uri` у элемента `src`; чтобы прогнать её руками, `uri` дописывают в `gst-launch-1.0` (уроки 5 и 6 так и делают).
 
 Регистратор **на том же сервере**:
 
@@ -401,7 +407,7 @@ rtspsrc location=rtsp://box-a:8554/7 latency=200 protocols=tcp name=src ! rtph26
 - Очереди на ветвях разрывают синхронность `tee`; `leaky=downstream` для живого, непротекающая для записи — разные ветви, разная политика потерь.
 - Раздача — RTSP, а не multicast: multicast требует настройки сети, не идёт в облако, не даёт сессий и не проходит там, где нет UDP.
 - Одна общая фабрика на камеру: N клиентов, один конвейер, один приёмник RTP.
-- `parse_launch` из строки — и ту же строку можно запустить в `gst-launch-1.0`.
+- `parse_launch` из строки — и ту же строку можно запустить в `gst-launch-1.0`, дописав адрес. Ни адреса, ни учётных данных в самой строке нет: их ставят свойствами после разбора, потому что строка запуска попадает в лог, в крэш-дамп и в `ps` (урок 19).
 - Шина разбирается в две очереди; служебное отфильтровано, остальное — наблюдение, и элемент аналитики ничего не знает ни об эпохах, ни о бакетах.
 - Сторожевой таймер превращает зависание — худший вид отказа — в обычную ошибку.
 - Регистратор отличается от воркера одним переопределённым методом; источник выбирается по схеме адреса, и выбирает подписчик.
