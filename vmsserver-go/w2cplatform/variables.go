@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // Items is one Variable's payload. Nomad stores strings; so do we.
@@ -237,7 +236,7 @@ func (v *FileVariables) lock() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockFile(f); err != nil { // flock on Unix, LockFileEx on Windows — see flock_*.go
 		f.Close()
 		return nil, err
 	}

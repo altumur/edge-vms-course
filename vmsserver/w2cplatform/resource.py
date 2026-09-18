@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 import urllib.parse
@@ -90,8 +91,14 @@ RESOURCES = "platform/resources"
 # ours to spend. A test cannot fill a disk, so the probe is a seam — `Resource(space_probe=...)`.
 def disk_space(root: str) -> tuple[int, int]:
     """(total, free) bytes of the filesystem `root` is on."""
-    st = os.statvfs(root)
-    return st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+    # `shutil.disk_usage` and not `os.statvfs`, which does not exist on Windows. This is the happy case of
+    # a portability problem: the standard library already had the seam, and it keeps the meaning we want on
+    # both sides — POSIX `free` is `f_bavail * f_frsize`, exactly the line this replaced, and Windows
+    # `free` is GetDiskFreeSpaceExW's "available to the caller", which is the same idea (what is ours to
+    # spend) rather than the volume's own free space. The Go port has to write both by hand
+    # (`w2cplatform/space_unix.go`, `space_windows.go`); here it is one call.
+    u = shutil.disk_usage(root)
+    return u.total, u.free
 
 
 # Parses the JSON line `Bucket.line()` produced (types coerced back). Used by `PeerClient`.

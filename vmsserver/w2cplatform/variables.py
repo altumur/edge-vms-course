@@ -49,7 +49,6 @@ raft would: one of them wins the CAS.
 # ================================================================================================
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 from typing import Protocol
@@ -132,6 +131,29 @@ def open_vars(url: str, writer: str | None = None, acl: dict[str, list[str]] | N
     return factory(url, writer=writer, acl=acl)
 
 
+# Locking the store's `lock` file, on whichever operating system this is running on.
+#
+# `import fcntl` at the top of this module is what made the platform refuse to start on Windows — not fail
+# a call, not behave oddly: the MODULE did not import, so nothing that touches Variables existed at all.
+# That is the shape a portability bug takes in Python, and it is why the import lives inside the branch.
+#
+# `msvcrt.locking(LK_LOCK)` is the near equivalent, with one difference worth knowing rather than hiding:
+# it retries for about ten seconds and then raises, where `flock(LOCK_EX)` waits for as long as it takes.
+# A store held for ten seconds is a box in trouble either way, and an exception naming the lock beats a
+# process that waits for ever — but it is a difference, not a translation, and the day it fires the message
+# will be the only thing that says which platform you are on. `msvcrt` locks a region from the current
+# position, so one byte from zero is the whole of it: the file exists to BE a lock and nobody reads it.
+def _lock_exclusive(f) -> None:
+    try:
+        import fcntl
+    except ImportError:                                   # Windows
+        import msvcrt
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    fcntl.flock(f, fcntl.LOCK_EX)
+
+
 class FileVariables:
     # `root` is the store directory; `<root>/vars/` is created. `writer` is this handle's identity (None
     # means unrestricted). `acl` is `{writer: [allowed prefixes]}`; when both `writer` and a non-empty `acl`
@@ -166,12 +188,12 @@ class FileVariables:
         name = safe_path(path).replace("%", "%25").replace("/", "%2F")
         return os.path.join(self.dir, name + ".json")
 
-    # Opens the lock file and takes an exclusive `fcntl.flock` on it; the returned file object is used as a
+    # Opens the lock file and takes an exclusive lock on it (`_lock_exclusive`, by OS); the returned file object is used as a
     # context manager, and closing it releases the lock. This serialises every `put`/`delete` across all
     # processes on the box.
     def _locked(self):
         f = open(self.lock_file, "a+")
-        fcntl.flock(f, fcntl.LOCK_EX)
+        _lock_exclusive(f)
         return f
 
     # Reads the counter file (missing or empty means 1000), increments it, writes it back atomically (tmp +
