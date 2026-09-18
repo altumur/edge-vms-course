@@ -77,7 +77,10 @@ type Move struct {
 
 type FieldSpec struct {
 	Name     string
-	Type     string // string | int | float | bool | list | url
+	// string | int | float | bool | list | url | blob. A `blob` holds a DIGEST (`sha256-<hex>`); the
+	// bytes live in the object store under `<name>/blobs/<digest>` and the platform never looks inside
+	// them — see blobs.go.
+	Type     string
 	Default  any
 	Required bool
 }
@@ -295,7 +298,7 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 		// The DEFAULT — "every field" — leaves secrets out rather than refusing: a spec that said nothing
 		// made no mistake, and the safe reading of silence is the one that keeps the secret in.
 		for _, n := range s.FieldOrder {
-			if !IsSecretField(n) {
+			if !IsSecretField(n) && s.Fields[n].Type != "blob" {
 				s.Snapshot = append(s.Snapshot, n)
 			}
 		}
@@ -312,6 +315,11 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 		}
 		if _, ok := s.Fields[n]; !ok {
 			return nil, fmt.Errorf("spec %s: snapshot names no field: %q", s.Name, n)
+		}
+		// A blob is the one field that is certainly too big for the snapshot, and the snapshot is one
+		// object per worker with a ceiling over it. Refused at LOAD time for the same reason a secret is.
+		if s.Fields[n].Type == "blob" {
+			return nil, fmt.Errorf("spec %s: a blob may not be in the snapshot: %q — the snapshot is one object per worker under a ceiling, and a blob is what does not fit in a row in the first place", s.Name, n)
 		}
 	}
 	if _, ok := Constraints[s.Constraint]; !ok {
@@ -416,6 +424,22 @@ func (s *SubsystemSpec) Refuse(fields map[string]any) error {
 	}
 	if len(unknown) > 0 {
 		return &Refused{fmt.Sprintf("unknown field(s) %v", unknown)}
+	}
+	// A `blob` field holds the digest of the bytes, never the bytes. Without this, the obvious thing for
+	// a client to do — paste the lump into the row — is also the thing that puts a row over the store's
+	// ceiling, and the refusal it gets says "too big" rather than what to do instead.
+	blobNames := make([]string, 0, len(s.Fields))
+	for n := range s.Fields {
+		blobNames = append(blobNames, n)
+	}
+	sort.Strings(blobNames)
+	for _, n := range blobNames {
+		if s.Fields[n].Type != "blob" {
+			continue
+		}
+		if v, ok := fields[n]; ok && Str(v) != "" && !IsDigest(Str(v)) {
+			return &Refused{fmt.Sprintf("%s takes a digest, not the bytes (%d of them): PUT the bytes to /%s/<id>/%s and the row gets the digest back", n, len(Str(v)), s.Rows, n)}
+		}
 	}
 	// A `url` field may not carry a userinfo. `rtsp://root:hunter2@10.0.0.5/…` is how a password reaches a
 	// row that is in the SNAPSHOT — out of the cluster, into М12's directory, and onto every console

@@ -20,7 +20,8 @@ from typing import Protocol
 
 
 from w2cplatform.variables import Conflict, Forbidden   # noqa: E402  the platform's exceptions: one class, so a CAS retry catches ours too
-from w2cplatform.variables import register_scheme, safe_path
+from w2cplatform.limits import check
+from w2cplatform.variables import items_bytes, register_scheme, safe_path
 
 
 class Variables(Protocol):
@@ -39,7 +40,16 @@ def _open_nomad(url: str, writer: str | None = None, acl: dict | None = None) ->
     return NomadVariables(addr=f"http://{rest}" if rest else None)
 
 
+# What Nomad will hold in one Variable: every key and every value in it, together. The number is the
+# scheduler's constant `maxVariableSize = 65536`, not ours — the request to make it configurable has been
+# open since 2022, answered with "we don't want to give users a new way to break their clusters". This is
+# the line that turns it from prose into something the platform can read (М10A Lesson 26).
+NOMAD_MAX_VARIABLE_BYTES = 65536
+
+
 class NomadVariables:
+    max_bytes = NOMAD_MAX_VARIABLE_BYTES
+
     def __init__(self, addr: str | None = None, token: str | None = None, namespace: str = "default",
                  timeout: float = 5.0):
         self.addr = (addr or os.environ.get("NOMAD_ADDR", "http://127.0.0.1:4646")).rstrip("/")
@@ -79,6 +89,9 @@ class NomadVariables:
         return dict(body["Items"]), int(body["ModifyIndex"])
 
     def put(self, path: str, items: dict, cas: int | None = None) -> int:
+        # Refused here, by the number this store declares, rather than by a 400 from the server after the
+        # round trip: the caller gets the size and the limit, and nothing was sent.
+        check(path, items_bytes(items), self.max_bytes)
         q = f"namespace={self.namespace}" + (f"&cas={cas}" if cas is not None else "")
         _, body = self._req("PUT", f"{self.addr}/v1/var/{self._key(path)}?{q}", {"Items": {k: str(v) for k, v in items.items()}})
         return int(body["ModifyIndex"])

@@ -43,7 +43,18 @@ func init() {
 	// The seam takes a URL and an identity, never a class name.
 	RegisterScheme("memory", func(url, writer string, acl map[string][]string) (Variables, error) {
 		v := NewMemVariables()
-		if name := strings.TrimPrefix(url, "memory://"); name != "" {
+		// `memory://<name>?max_bytes=<n>`: the ceiling is part of WHICH STORE THIS IS, so it belongs in
+		// the URL beside the name, exactly as the backend itself does (Lesson 20).
+		rest := strings.TrimPrefix(url, "memory://")
+		name, query, _ := strings.Cut(rest, "?")
+		for _, part := range strings.Split(query, "&") {
+			if k, val, ok := strings.Cut(part, "="); ok && k == "max_bytes" {
+				if n, err := strconv.Atoi(val); err == nil {
+					v.Max = n
+				}
+			}
+		}
+		if name != "" {
 			namedMu.Lock()
 			if st, ok := namedMem[name]; ok {
 				v.s = st
@@ -64,7 +75,12 @@ func init() {
 type MemVariables struct {
 	s      *memState
 	Writer string // "who am I" for the ACL check; "" bypasses it
+	Max    int    // a map in memory has no ceiling — but `memory://x?max_bytes=512` gives the contract
+	//               suite a store that DOES, which is how clause 8 is exercised against something
+	//               other than prose
 }
+
+func (m *MemVariables) MaxBytes() int { return m.Max }
 
 type memEntry struct {
 	items Items
@@ -91,7 +107,7 @@ func (m *MemVariables) AsWriter(writer string, allowed ...string) *MemVariables 
 		m.s.acl[writer] = allowed
 	}
 	m.s.mu.Unlock()
-	return &MemVariables{s: m.s, Writer: writer}
+	return &MemVariables{s: m.s, Writer: writer, Max: m.Max}
 }
 
 func (m *MemVariables) refuse(path string) error {
@@ -136,6 +152,9 @@ func (m *MemVariables) Get(path string) (Items, Index, error) {
 
 func (m *MemVariables) Put(path string, items Items, cas Index) (Index, error) {
 	if _, err := safe(path); err != nil {
+		return Absent, err
+	}
+	if err := Check(path, ItemsBytes(items), m.Max); err != nil {
 		return Absent, err
 	}
 	m.s.mu.Lock()

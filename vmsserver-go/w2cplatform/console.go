@@ -488,9 +488,15 @@ func (c *SpecConsole) MetricsText() string {
 
 func refusal(err error) (Reply, bool) {
 	var refused *Refused
+	var big *TooLarge
 	switch {
 	case errors.As(err, &refused):
 		return Reply{400, map[string]any{"detail": refused.Msg, "error": refused.Msg}}, true
+	// 413, and to the person who typed it. The store's ceiling used to be a number in a document and a
+	// surprise in production; now the edit that does not fit is refused at the console, with the size and
+	// the limit in the sentence, before anything is written.
+	case errors.As(err, &big):
+		return Reply{413, map[string]any{"detail": big.Error(), "error": big.Error()}}, true
 	case errors.Is(err, ErrNoSuchUnit):
 		return Reply{404, map[string]any{"detail": "no such unit", "error": "no such unit"}}, true
 	case err != nil:
@@ -522,6 +528,39 @@ func (c *SpecConsole) Update(uid string, body map[string]any) Reply {
 		return rep
 	}
 	return Reply{200, map[string]any(MaskRow(r))}
+}
+
+// PutBlob takes the bytes of one blob field on their own route — the one request that carries something
+// other than JSON, because the thing it carries is not JSON. The bytes go to the object store first and the
+// row gets the digest, which bumps revision, which is what makes the worker pick the new lump up. Nothing
+// here is a new mechanism; the digest is what lets the old one see a change.
+func (c *SpecConsole) PutBlob(uid, field string, data []byte) Reply {
+	f, ok := c.Spec.Fields[field]
+	if !ok || f.Type != "blob" {
+		return Reply{404, map[string]any{"detail": field + " is not a blob field", "error": "no such blob field"}}
+	}
+	if c.Ctl.Unit(uid) == nil {
+		return Reply{404, map[string]any{"detail": "no such unit", "error": "no such unit"}}
+	}
+	d, err := c.Ctl.PutBlob(data) // 1. the object
+	if err != nil {
+		var big *TooLarge
+		if errors.As(err, &big) {
+			// The one place where changing the object store is the answer, because a blob is exactly the
+			// class of data an object store exists for — unlike the snapshot, which was a shape problem.
+			msg := big.Error() + " — a blob is what an object store is for: OBJECTS=s3+https://… holds this, variables:// does not"
+			return Reply{413, map[string]any{"detail": msg, "error": big.Error()}}
+		}
+		return Reply{500, map[string]any{"detail": err.Error(), "error": err.Error()}}
+	}
+	row, err := c.Ctl.Update(uid, map[string]any{field: d}) // 2. the row that names it
+	if rep, bad := refusal(err); bad {
+		return rep
+	}
+	out := map[string]any(MaskRow(row))
+	out[field] = d
+	out["bytes"] = len(data)
+	return Reply{200, out}
 }
 
 func (c *SpecConsole) Delete(uid string) Reply {

@@ -9,7 +9,7 @@ Run against another backend by pointing `CONTRACT_URL` at it:
 
     CONTRACT_URL=nomad://127.0.0.1:4646 python3 tests/run.py
 
-The contract, in seven clauses:
+The contract, in eight clauses:
 
 1.  a key that was never written reads as `(None, 0)`;
 2.  `put` returns an index that identifies the version; the next read gives it back;
@@ -22,17 +22,21 @@ The contract, in seven clauses:
 7.  what a read hands back is a COPY. A caller that mutates it must not have edited
     the store — an edit without an index is the one thing CAS exists to prevent, and a
     backend that returns its own state gives it away for free.
+8.  the store SAYS what it can hold (`max_bytes`, 0 meaning no ceiling), and a write over
+    that is refused, not truncated. Nomad caps a Variable at 64 KiB and the platform has no
+    say in it; before this clause that number lived in prose, `FileVariables` accepted
+    anything, and a write that production would reject was green in every test.
 """
 import os
 import tempfile
 import threading
 
-from w2cplatform.variables import Conflict, Forbidden, open_vars
+from w2cplatform.variables import Conflict, Forbidden, items_bytes, open_vars
 
 
-def _store(writer=None, acl=None):
+def _store(writer=None, acl=None, url=None):
     """The backend under test: this box's files by default, whatever `CONTRACT_URL` says otherwise."""
-    return open_vars(os.environ.get("CONTRACT_URL") or "file://" + tempfile.mkdtemp(), writer=writer, acl=acl)
+    return open_vars(url or os.environ.get("CONTRACT_URL") or "file://" + tempfile.mkdtemp(), writer=writer, acl=acl)
 
 
 def test_an_unwritten_key_reads_as_empty_and_index_zero():
@@ -271,3 +275,44 @@ def test_the_platforms_cas_loops_run_over_a_non_numeric_version():
     assert w.renew_slot() is True                               # read, compare, write back — still opaque
     w.release_slot()
     assert v.get("vms/slots/w-1")[0]["released"] == "true"
+
+
+def test_the_store_says_what_it_can_hold_and_refuses_more():
+    """Clause 8, in two halves, because every backend has the first and only some have the second.
+
+    Every store answers `max_bytes`. A directory answers 0 — no ceiling — and that is an
+    ANSWER, not a missing attribute: the platform can ask any store and get a number.
+
+    A store that declares a ceiling refuses a write over it and leaves what was there
+    alone. Refusing matters more than the number: a store that truncates is a store whose
+    `get` returns something its `put` never wrote, and every CAS loop above is built on
+    `get` telling the truth.
+
+    Run against a store that HAS a ceiling — `memory://…?max_bytes=n` — so the second half
+    is exercised here and not only on a cluster."""
+    v = _store()
+    assert isinstance(v.max_bytes, int) and v.max_bytes >= 0
+
+    capped = _store(url="memory://contract-capped?max_bytes=256")
+    assert capped.max_bytes == 256
+
+    small = {"a": "x" * 100}
+    idx = capped.put("contract/capped", small)
+    assert items_bytes(small) <= 256 and capped.get("contract/capped")[0] == small
+
+    big = {"a": "x" * 500}
+    try:
+        capped.put("contract/capped", big, cas=idx)
+        raise AssertionError("a write over the store's own ceiling was accepted")
+    # Matched by NAME and by the numbers it carries, not by class identity. `test_portability` rebuilds
+    # `sys.modules` to prove the platform imports on a box without the Unix modules, and after it the
+    # platform's own `TooLarge` is a different class object than the one this module imported — so an
+    # `except TooLarge:` here would silently stop catching. The clause is about what the store DOES, and
+    # this is the form of it that survives the suite it lives in.
+    except Exception as e:                                       # noqa: BLE001
+        assert type(e).__name__ == "TooLarge", f"refused, but not as TooLarge: {e!r}"
+        assert e.limit == 256 and e.size == items_bytes(big)
+
+    # and the refusal left the previous value exactly where it was
+    items, index = capped.get("contract/capped")
+    assert items == small and index == idx

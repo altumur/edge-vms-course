@@ -71,6 +71,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from .blobs import BLOBS, is_digest
 from .epoch import Lease, next_epoch
 from .objects import ObjectStore
 from .variables import Conflict, Variables
@@ -186,6 +187,15 @@ class Subsystem:
     # `<name>/snapshot/` — what a reader lists to find every shard.
     def snapshot_prefix(self) -> str:
         return f"{self.name}/snapshot/"
+
+    # `<name>/blobs/sha256-<hex>` — the bytes of one `blob` field, named by what they are. Content
+    # addressed, so this key is written once and never written again: the object store's
+    # last-writer-wins has nothing to decide. See `blobs.py`.
+    def blob_key(self, d: str) -> str:
+        if not is_digest(d):
+            raise ValueError(f"not a digest: {d!r} — a blob field holds `sha256-<hex>`, and the bytes go "
+                             f"to the object store first")
+        return f"{self.name}/{BLOBS}/{d}"
 
     # `<name>/epoch/<unit>`.
     def epoch_key(self, unit: str) -> str:

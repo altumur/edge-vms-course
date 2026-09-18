@@ -78,6 +78,9 @@ var ErrForbidden = errors.New("forbidden: this writer may not write that path")
 // Variables is the config store. Get returns (nil, 0, nil) for a path that
 // does not exist — absence is a value, not an error.
 type Variables interface {
+	// MaxBytes is what one path may weigh: the sum of the lengths of every key and every value in it,
+	// which is how Nomad measures a Variable. NoCeiling (0) when the store has none. See limits.go.
+	MaxBytes() int
 	Get(path string) (Items, Index, error)
 	Put(path string, items Items, cas Index) (Index, error)
 	List(prefix string) ([]string, error)
@@ -200,11 +203,23 @@ type FileVariables struct {
 	dir    string
 	Writer string
 	ACL    map[string][]string
+	Max    int // a directory has no ceiling; a test or an install may say otherwise
 }
+
+func (v *FileVariables) MaxBytes() int { return v.Max }
 
 func NewFileVariables(root string) (*FileVariables, error) {
 	v := &FileVariables{Root: root, dir: filepath.Join(root, "vars"), ACL: map[string][]string{}}
 	return v, os.MkdirAll(v.dir, 0o755)
+}
+
+// NewFileVariablesCapped is the same store with a declared ceiling.
+func NewFileVariablesCapped(root string, max int) (*FileVariables, error) {
+	v, err := NewFileVariables(root)
+	if v != nil {
+		v.Max = max
+	}
+	return v, err
 }
 
 // AsWriter is the same store seen through another identity, allowed only
@@ -283,6 +298,11 @@ func (v *FileVariables) Get(path string) (Items, Index, error) {
 func (v *FileVariables) Put(path string, items Items, cas Index) (Index, error) {
 	if v.Writer != "" && len(v.ACL) > 0 && !Allowed(path, v.ACL[v.Writer]) {
 		return Absent, fmt.Errorf("%w: %s may not write %s", ErrForbidden, v.Writer, path)
+	}
+	// Checked before the lock and before the write: an oversized row never half-lands, and the value that
+	// is already there is still the value that is there.
+	if err := Check(path, ItemsBytes(items), v.Max); err != nil {
+		return Absent, err
 	}
 	p, err := v.file(path)
 	if err != nil {

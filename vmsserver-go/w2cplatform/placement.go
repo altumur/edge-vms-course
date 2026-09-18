@@ -952,6 +952,51 @@ func (c *SpecController) ReadModel(lostAfter float64) []map[string]any {
 
 // Snapshot: units and placement as one object — what the layer above reads.
 // A copy with an age; never the rows themselves, which do not leave raft.
+// -- blobs: a field too big for a row -------------------------------------------------------------
+// PutBlob stores the bytes of one blob field and returns the digest to put in the row. Written FIRST,
+// before the row that names them: a crash between the two leaves an object nobody points at (harmless,
+// collectable), where the other order would leave a row pointing at nothing — a unit that cannot start.
+//
+// The key is the digest, so this is idempotent by construction: the same bytes twice write the same
+// object twice, and two units with the same lump share one object.
+func (c *SpecController) PutBlob(data []byte) (string, error) {
+	d := Digest(data)
+	key, err := c.Sub.BlobKey(d)
+	if err != nil {
+		return "", err
+	}
+	if err := c.Objects.Put(key, data); err != nil {
+		return "", err
+	}
+	return d, nil
+}
+
+// Blob is what a worker calls with the digest it read from its row. A nil result is a real state — the row
+// travelled and the object did not — and the caller must not start on it.
+func (c *SpecController) Blob(d string) ([]byte, error) {
+	key, err := c.Sub.BlobKey(d)
+	if err != nil {
+		return nil, err
+	}
+	return c.Objects.Get(key)
+}
+
+// BlobsReferenced is every digest any row currently names: what a sweep would keep. There is no sweep —
+// nothing in the platform deletes an object — and this is the half of it that can be written honestly.
+func (c *SpecController) BlobsReferenced() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range c.Units() {
+		for n, f := range c.Spec.Fields {
+			if f.Type == "blob" {
+				if d := Str(r[n]); IsDigest(d) {
+					out[d] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 // SnapshotShards is the snapshot as ONE OBJECT PER WORKER, keyed by shard name: `<name>/snapshot/<worker>`
 // holding that worker's rows, plus `<name>/snapshot/unplaced` for the rows nobody holds.
 //
@@ -1031,6 +1076,15 @@ func (c *SpecController) PublishSnapshot() error {
 	for name, shard := range shards {
 		raw, _ := json.Marshal(shard)
 		if err := c.Objects.Put(prefix+name, raw); err != nil {
+			// The store refuses with bytes; the caller knows what those bytes WERE. A shard is one
+			// worker's assignment, so an oversized shard is not a shape problem any more — it is a store
+			// too small to hold what a single worker carries, and OBJECTS is what names it.
+			var big *TooLarge
+			if errors.As(err, &big) {
+				return &TooLarge{Key: big.Key, Size: big.Size, Limit: big.Limit,
+					Detail: fmt.Sprintf("%d units on %s; the snapshot is already one object per worker, so the store is the thing to change (OBJECTS=…)",
+						len(shard[c.Spec.Rows].([]map[string]any)), name)}
+			}
 			return err
 		}
 	}

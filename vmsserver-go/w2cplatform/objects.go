@@ -15,16 +15,30 @@ import (
 
 // ObjectStore: Get returns (nil, nil) for an object that does not exist.
 type ObjectStore interface {
+	// MaxBytes is what one object may weigh here; NoCeiling (0) when the store has none. Declared, not
+	// guessed — see limits.go. A write over it returns *TooLarge and leaves the previous object alone.
+	MaxBytes() int
 	Put(key string, data []byte) error
 	Get(key string) ([]byte, error)
 	List(prefix string) ([]string, error)
 }
 
-type FsObjectStore struct{ Root string }
+type FsObjectStore struct {
+	Root string
+	Max  int // what this store says it can hold; a directory has no ceiling worth naming
+}
 
 func NewFsObjectStore(root string) (*FsObjectStore, error) {
-	return &FsObjectStore{root}, os.MkdirAll(root, 0o755)
+	return &FsObjectStore{Root: root}, os.MkdirAll(root, 0o755)
 }
+
+// NewFsObjectStoreCapped is the same store that DOES declare a ceiling — which is how the platform's own
+// limits get exercised on one box, without a cluster.
+func NewFsObjectStoreCapped(root string, max int) (*FsObjectStore, error) {
+	return &FsObjectStore{Root: root, Max: max}, os.MkdirAll(root, 0o755)
+}
+
+func (f *FsObjectStore) MaxBytes() int { return f.Max }
 
 func (f *FsObjectStore) path(key string) (string, error) {
 	if strings.Contains(key, "..") || strings.HasPrefix(key, "/") {
@@ -34,6 +48,9 @@ func (f *FsObjectStore) path(key string) (string, error) {
 }
 
 func (f *FsObjectStore) Put(key string, data []byte) error {
+	if err := Check(key, len(data), f.Max); err != nil { // refused before the write: the old object survives
+		return err
+	}
 	p, err := f.path(key)
 	if err != nil {
 		return err

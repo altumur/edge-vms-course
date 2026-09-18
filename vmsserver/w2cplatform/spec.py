@@ -77,7 +77,9 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from .secrets import is_secret_field
+from .blobs import digest as blob_digest, is_digest
 from .contract import DRAIN_KEY, UNPLACED, Controller, Subsystem, slot_number
+from .limits import TooLarge
 from .objects import ObjectStore
 from .variables import Variables
 
@@ -102,12 +104,13 @@ class Placement:
     rev: int
 
 
-# One operator field from the spec: `name`, `type` (`string | int | float | bool | list`), `default`,
-# `required`.
+# One operator field from the spec: `name`, `type` (`string | int | float | bool | list | url | blob`),
+# `default`, `required`. A `blob` holds a DIGEST (`sha256-<hex>`); the bytes live in the object store under
+# `<name>/blobs/<digest>` and the platform never looks inside them — see `blobs.py`.
 @dataclass
 class Field:
     name: str
-    type: str = "string"          # string | int | float | bool | list | url
+    type: str = "string"          # string | int | float | bool | list | url | blob
     default: object = None
     required: bool = False
 
@@ -208,7 +211,8 @@ class SubsystemSpec:
                    near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
                    home=str(pl.get("home", "") or ""),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
-                   snapshot=list(d.get("snapshot", []) or [n for n in fields if not is_secret_field(n)]),
+                   snapshot=list(d.get("snapshot", []) or [n for n, f in fields.items()
+                                                          if not is_secret_field(n) and f.type != "blob"]),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
         # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
@@ -217,6 +221,14 @@ class SubsystemSpec:
         if leaks:
             raise ValueError(f"spec {spec.name}: a secret may not be in the snapshot: {leaks} — "
                              f"the snapshot is what leaves the cluster")
+        # A blob is the one field that is certainly too big for the snapshot, and the snapshot is one
+        # object per worker with a ceiling over it. Refused at LOAD time for the same reason a secret is:
+        # by the time someone notices the snapshot stopped publishing, М12 has been stale for a while.
+        heavy = [n for n, f in fields.items() if f.type == "blob" and n in spec.snapshot]
+        if heavy:
+            raise ValueError(f"spec {spec.name}: a blob may not be in the snapshot: {heavy} — the snapshot "
+                             f"is one object per worker under a ceiling, and a blob is what does not fit "
+                             f"in a row in the first place")
         unknown_snap = [n for n in spec.snapshot if n not in fields]
         if unknown_snap:
             raise ValueError(f"spec {spec.name}: snapshot names no field: {unknown_snap}")
@@ -299,6 +311,13 @@ class SubsystemSpec:
         # screen of every console, past a mask that only looks at `*_secret`. The credential fields are
         # where it goes instead, and saying so is better than moving it quietly: an operator who pasted a
         # URL from a browser learns that this system keeps the two apart.
+        # A `blob` field holds the digest of the bytes, never the bytes. Without this, the obvious thing
+        # for a client to do — paste the lump into the row — is also the thing that puts a row over the
+        # store's ceiling, and the refusal it gets says "too big" rather than what to do instead.
+        for name, f in self.fields.items():
+            if f.type == "blob" and fields.get(name) and not is_digest(fields[name]):
+                raise Refused(f"{name} takes a digest, not the bytes ({len(str(fields[name]))} of them): "
+                              f"PUT the bytes to /{self.rows}/<id>/{name} and the row gets the digest back")
         for name, f in self.fields.items():
             if f.type == "url" and fields.get(name):
                 u = urlsplit(str(fields[name]))
@@ -930,6 +949,30 @@ class SpecController(Controller):
                 rows.append({**s, "worker": w, "server": hb.extra.get("server", "?"), "age": round(age, 1), "worker_state": state})
         return sorted(rows, key=lambda r: _unit_key(str(r["id"])))
 
+    # -- blobs: a field too big for a row ------------------------------------------------------------
+    # The bytes of one `blob` field. Written FIRST, before the row that names them: a crash between the
+    # two leaves an object nobody points at (harmless, collectable), where the other order would leave a
+    # row pointing at nothing — a unit that cannot start. The same order М12's identity store publishes in.
+    #
+    # The key is the digest, so this is idempotent by construction: writing the same bytes twice writes
+    # the same object twice, and two units with the same mask share one object.
+    def put_blob(self, data: bytes) -> str:
+        """Store the bytes; return the digest to put in the row."""
+        d = blob_digest(data)
+        self.objects.put(self.sub.blob_key(d), data)
+        return d
+
+    # What a worker calls with the digest it read from its row. `None` when the object is not there, which
+    # is a real state — the row travelled and the object did not — and the caller must not start on it.
+    def blob(self, d: str) -> bytes | None:
+        return self.objects.get(self.sub.blob_key(d))
+
+    # Every digest any row currently names: what a sweep would keep. There is no sweep — nothing in the
+    # platform deletes an object — and this is the half of it that can be written honestly today.
+    def blobs_referenced(self) -> set[str]:
+        names = [n for n, f in self.spec.fields.items() if f.type == "blob"]
+        return {r[n] for r in self.units() for n in names if is_digest(r.get(n) or "")}
+
     # Units and placement for the layer above, ONE OBJECT PER WORKER: `<name>/snapshot/<worker>` holding
     # `{cluster, worker, ts, <rows>: [{id, <snapshot fields>, revision, worker, server}]}`, plus
     # `<name>/snapshot/unplaced` for the units nobody holds. A copy with an age — never the rows
@@ -972,7 +1015,15 @@ class SpecController(Controller):
             shards.setdefault(key[len(prefix):], {"cluster": self.cluster, "worker": None, "ts": self.wall(),
                                                   self.spec.rows: []})
         for name, shard in shards.items():
-            self.objects.put(prefix + name, json.dumps(shard).encode())
+            try:
+                self.objects.put(prefix + name, json.dumps(shard).encode())
+            except TooLarge as e:
+                # The store refuses with bytes; the caller knows what those bytes WERE. A shard is one
+                # worker's assignment, so an oversized shard is not a shape problem any more — it is a
+                # store too small to hold what a single worker carries, and `OBJECTS` is what names it.
+                raise TooLarge(e.key, e.size, e.limit,
+                               f"{len(shard[self.spec.rows])} units on {name}; the snapshot is already one "
+                               f"object per worker, so the store is the thing to change (OBJECTS=…)") from e
 
     # Per worker: `started − previous_hb` from the heartbeat's own fields — the gap between the last
     # heartbeat of the previous instance and this instance's start, measured from what the workers wrote,

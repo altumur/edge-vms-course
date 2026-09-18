@@ -9,7 +9,7 @@
 //
 //	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract
 //
-// The contract, in seven clauses:
+// The contract, in eight clauses:
 //
 //  1. a path that was never written reads as (nil, Absent);
 //  2. Put returns an Index that identifies the version; the next read gives it back;
@@ -22,6 +22,10 @@
 //  7. what a read hands back is a COPY. A caller that mutates it must not have edited
 //     the store — an edit without an index is the one thing CAS exists to prevent, and a
 //     backend that returns its own state gives it away for free.
+//  8. the store SAYS what it can hold (MaxBytes, 0 meaning no ceiling), and a write over that
+//     is refused, not truncated. Nomad caps a Variable at 64 KiB and the platform has no say
+//     in it; before this clause that number lived in prose, FileVariables accepted anything,
+//     and a write that production would reject was green in every test.
 package w2cplatform_test
 
 import (
@@ -31,6 +35,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,9 +43,14 @@ import (
 )
 
 // The backend under test: this box's files by default, whatever CONTRACT_URL says otherwise.
-func store(t *testing.T) p.Variables {
+func store(t *testing.T) p.Variables { return storeAt(t, "") }
+
+func storeAt(t *testing.T, at string) p.Variables {
 	t.Helper()
-	url := os.Getenv("CONTRACT_URL")
+	url := at
+	if url == "" {
+		url = os.Getenv("CONTRACT_URL")
+	}
 	if url == "" {
 		url = "file://" + t.TempDir()
 	}
@@ -129,7 +139,7 @@ func TestContractAReadHandsBackACopy(t *testing.T) {
 //
 //	CONTRACT_URL=nomad://127.0.0.1:4646 go test ./w2cplatform -run Contract
 //
-// The contract, in seven clauses:
+// The contract, in eight clauses:
 //
 //  1. a path that was never written reads as (nil, Absent);
 //  2. Put returns an Index that identifies the version; the next read gives it back;
@@ -142,6 +152,10 @@ func TestContractAReadHandsBackACopy(t *testing.T) {
 //  7. what a read hands back is a COPY. A caller that mutates it must not have edited
 //     the store — an edit without an index is the one thing CAS exists to prevent, and a
 //     backend that returns its own state gives it away for free.
+//  8. the store SAYS what it can hold (MaxBytes, 0 meaning no ceiling), and a write over that
+//     is refused, not truncated. Nomad caps a Variable at 64 KiB and the platform has no say
+//     in it; before this clause that number lived in prose, FileVariables accepted anything,
+//     and a write that production would reject was green in every test.
 
 func TestContractEverythingIsStrings(t *testing.T) {
 	// The reason the contract fits Kubernetes at all: ConfigMap.data is
@@ -300,6 +314,8 @@ func TestContractTheIndexIsOpaque(t *testing.T) {
 // backend for it is only possible while nothing in the platform interprets the
 // index. This is the check for that: not a type annotation, a working store the
 // real CAS loops are driven against.
+func (s *opaqueStore) MaxBytes() int { return p.NoCeiling }
+
 type opaqueStore struct {
 	mu   sync.Mutex
 	data map[string]struct {
@@ -424,5 +440,50 @@ func TestContractThePlatformsCASLoopsRunOverANonNumericVersion(t *testing.T) {
 	items, _, _ := v.Get(w.Sub.SlotKey(name))
 	if items["released"] != "true" {
 		t.Fatal(items)
+	}
+}
+
+
+// Clause 8, in two halves, because every backend has the first and only some have the second.
+//
+// Every store answers MaxBytes. A directory answers 0 — no ceiling — and that is an ANSWER, not a missing
+// method: the platform can ask any store and get a number.
+//
+// A store that declares a ceiling refuses a write over it and leaves what was there alone. Refusing
+// matters more than the number: a store that truncates is a store whose Get returns something its Put
+// never wrote, and every CAS loop above is built on Get telling the truth.
+//
+// Run against a store that HAS a ceiling — memory://…?max_bytes=n — so the second half is exercised here
+// and not only on a cluster.
+func TestContractTheStoreSaysWhatItCanHoldAndRefusesMore(t *testing.T) {
+	v := store(t)
+	if v.MaxBytes() < 0 {
+		t.Fatal("a store must answer what it can hold:", v.MaxBytes())
+	}
+
+	capped := storeAt(t, "memory://contract-capped-go?max_bytes=256")
+	if capped.MaxBytes() != 256 {
+		t.Fatal(capped.MaxBytes())
+	}
+	small := p.Items{"a": strings.Repeat("x", 100)}
+	idx, err := capped.Put("contract/capped", small, p.Absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	big := p.Items{"a": strings.Repeat("x", 500)}
+	_, err = capped.Put("contract/capped", big, idx)
+	var tooLarge *p.TooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatal("a write over the store's own ceiling was accepted:", err)
+	}
+	if tooLarge.Limit != 256 || tooLarge.Size != p.ItemsBytes(big) {
+		t.Fatal(tooLarge)
+	}
+
+	// and the refusal left the previous value exactly where it was
+	items, index, _ := capped.Get("contract/capped")
+	if !reflect.DeepEqual(items, small) || index != idx {
+		t.Fatal(items, index, idx)
 	}
 }

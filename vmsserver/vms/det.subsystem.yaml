@@ -13,7 +13,13 @@ unit:
     name:      {type: string, required: true}
     cam:       {type: string, required: true}      # the VMS camera id whose stream the model runs on
     kind:      {type: string, required: true}      # which model: motion | linecross | lpr | …
-    params:    {type: string}                      # the model's settings, opaque to the platform
+    params:    {type: string}                      # the model's settings, opaque to the platform — and SMALL
+    # The one thing about a detector that does not fit in a row. A polygon mask is a few hundred bytes and
+    # belongs in `params`; a per-pixel one is 345 KB and belongs here — the row keeps the digest, the bytes
+    # go to `det/blobs/<digest>` in the object store, and the platform never looks inside either. Changing
+    # it changes the digest, which changes the row, which moves `revision`, which is what makes the worker
+    # pick it up. See М10A Lesson 26.
+    mask:      {type: blob}                        # sha256-<hex>; the bytes are in the object store
     enabled:   {type: bool,   default: true}
     labels:    {type: list,   default: ["gpu"]}    # where it may run: a worker whose server has these labels
 placement:

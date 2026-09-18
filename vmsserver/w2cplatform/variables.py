@@ -53,6 +53,8 @@ import json
 import os
 from typing import Protocol
 
+from .limits import NO_CEILING, check
+
 
 class Conflict(Exception):
     """The cas index did not match the current ModifyIndex."""
@@ -77,9 +79,19 @@ Index = str | int
 
 
 class Variables(Protocol):
+    # What one path may weigh: the sum of the lengths of every key and every value in it, which is how
+    # Nomad measures a Variable. `NO_CEILING` (0) when the store has none. See `limits.py`.
+    max_bytes: int
+
     def get(self, path: str) -> tuple[dict | None, Index]: ...
     def put(self, path: str, items: dict, cas: Index | None = None) -> Index: ...
     def list(self, prefix: str) -> list[str]: ...
+
+
+# The size a store charges for a path's items: keys and values, as bytes. A row is small — a couple of
+# hundred bytes — and that is the point: what makes a row big is one field that should not be in a row.
+def items_bytes(items: dict) -> int:
+    return sum(len(str(k).encode()) + len(str(v).encode()) for k, v in items.items())
 
 
 # A key must have exactly ONE spelling, and this is where that is enforced. It is not (only) about escaping
@@ -172,13 +184,15 @@ class FileVariables:
     # means unrestricted). `acl` is `{writer: [allowed prefixes]}`; when both `writer` and a non-empty `acl`
     # are present, `put` checks them. Nothing is read at construction; the index counter file is created
     # lazily on the first write.
-    def __init__(self, root: str, writer: str | None = None, acl: dict[str, list[str]] | None = None):
+    def __init__(self, root: str, writer: str | None = None, acl: dict[str, list[str]] | None = None,
+                 max_bytes: int = NO_CEILING):
         self.root = root
         self.dir = os.path.join(root, "vars")
         os.makedirs(self.dir, exist_ok=True)
         self.index_file = os.path.join(root, "index")
         self.lock_file = os.path.join(root, "lock")
         self.writer, self.acl = writer, acl or {}
+        self.max_bytes = max_bytes          # a directory has no ceiling; a test or an install may say otherwise
 
     # Returns a new handle on the same directory seen through another identity, allowed only the given
     # prefixes (`'vms/*'`, `'vms/epoch/*'` style: a trailing `*` means prefix match, otherwise exact path).
@@ -249,6 +263,9 @@ class FileVariables:
             allowed = self.acl.get(self.writer, [])
             if not any(path == p or (p.endswith("*") and path.startswith(p[:-1])) for p in allowed):
                 raise Forbidden(f"{self.writer} may not write {path}")
+        # Checked before the lock and before the write: an oversized row never half-lands, and the value
+        # that is already there is still the value that is there.
+        check(path, items_bytes(items), self.max_bytes)
         with self._locked():
             _, current = self.get(path)
             if cas is not None and cas != current:

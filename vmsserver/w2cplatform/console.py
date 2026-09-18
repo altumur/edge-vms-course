@@ -90,6 +90,7 @@ from .contract import SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew,
 from .epoch import current_epoch
 from .events import EventLog
 from .resource import resources_seen
+from .limits import TooLarge
 from .spec import Refused, SpecController
 from .variables import Conflict, Forbidden
 
@@ -381,15 +382,44 @@ class SpecConsole:
             return 201, {**mask_secrets([r])[0], "worker": None}      # placed by the controller's next pass, never by the console
         except Refused as e:
             return 400, {"detail": str(e), "error": str(e)}
+        except TooLarge as e:
+            return 413, {"detail": str(e), "error": str(e)}
 
-    # `ctl.update` → 200 with the row; `Refused` → 400; `KeyError` → 404.
+    # `ctl.update` → 200 with the row; `Refused` → 400; `TooLarge` → 413; `KeyError` → 404.
     def update(self, uid, body: dict) -> tuple[int, dict]:
         try:
             return 200, mask_secrets([self.ctl.update(uid, body)])[0]
         except Refused as e:
             return 400, {"detail": str(e), "error": str(e)}
+        # 413, and to the person who typed it. The store's ceiling used to be a number in a document and a
+        # surprise in production; now the edit that does not fit is refused at the console, with the size
+        # and the limit in the sentence, before anything is written.
+        except TooLarge as e:
+            return 413, {"detail": str(e), "error": str(e)}
         except KeyError:
             return 404, {"detail": "no such unit", "error": "no such unit"}
+
+    # `PUT /<rows>/<id>/<field>` with the bytes as the body: the one route that takes something other than
+    # JSON, because the thing it takes is not JSON. The bytes go to the object store first and the row gets
+    # the digest — which bumps `revision`, which is what makes the worker pick the new lump up. Nothing
+    # here is a new mechanism; the digest is what lets the old one see a change.
+    def put_blob(self, uid, field: str, data: bytes) -> tuple[int, dict]:
+        f = self.spec.fields.get(field)
+        if f is None or f.type != "blob":
+            return 404, {"detail": f"{field} is not a blob field", "error": "no such blob field"}
+        if self.ctl.unit(uid) is None:
+            return 404, {"detail": "no such unit", "error": "no such unit"}
+        try:
+            d = self.ctl.put_blob(data)                       # 1. the object
+            row = self.ctl.update(uid, {field: d})            # 2. the row that names it
+        except Refused as e:
+            return 400, {"detail": str(e), "error": str(e)}
+        except TooLarge as e:
+            # The blob is bigger than the STORE will hold — which is the one case where changing the store
+            # is the answer, because a blob is exactly the class of data an object store exists for.
+            return 413, {"detail": f"{e} — a blob is what an object store is for: OBJECTS=s3+https://… "
+                                   f"holds this, variables:// does not", "error": str(e)}
+        return 200, {**mask_secrets([row])[0], field: d, "bytes": len(data)}
 
     # 404 if the unit is absent; else `ctl.delete(uid)` and 200 `{deleted: uid}`.
     def delete(self, uid) -> tuple[int, dict]:
@@ -556,6 +586,11 @@ class SpecConsole:
                 if self._extra(h, "PUT", path, q):
                     return
                 return h._send(404, {"detail": "no such route", "error": "no such path"})
+            rest = path[len(rows_path) + 1:]
+            if "/" in rest:                                              # /<rows>/<id>/<field>: the bytes of a blob
+                uid, _, field = rest.partition("/")
+                n = int(h.headers.get("Content-Length", 0))
+                return h._send(*con.put_blob(spec.parse_id(uid), field, h.rfile.read(n)))
             key = h.headers.get("Idempotency-Key")
             if key:
                 try:

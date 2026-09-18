@@ -29,10 +29,16 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
+from .limits import NO_CEILING, check
+
 
 # A `typing.Protocol` with `put(key, data: bytes)`, `get(key) -> bytes | None`, `list(prefix) -> list[str]`.
 # No CAS, no index — objects are last-writer-wins by design; anything needing ordering goes in Variables.
 class ObjectStore(Protocol):
+    # What one object may weigh, in bytes; `NO_CEILING` (0) when the store has none. Declared, not
+    # guessed — see `limits.py`. A write over it raises `TooLarge` and leaves the previous object alone.
+    max_bytes: int
+
     def put(self, key: str, data: bytes) -> None: ...
     def get(self, key: str) -> bytes | None: ...
     def list(self, prefix: str) -> list[str]: ...
@@ -40,9 +46,12 @@ class ObjectStore(Protocol):
 
 # Implements `ObjectStore` over a directory tree; a key with `/` becomes nested directories.
 class FsObjectStore:
-    # Stores `root` and creates it.
-    def __init__(self, root: str):
+    # Stores `root` and creates it. `max_bytes` is what this store says it can hold: a directory has no
+    # ceiling worth naming, so the default is `NO_CEILING` — and a test that wants to see a real store's
+    # ceiling passes one, which is how the platform's own limits get exercised without a cluster.
+    def __init__(self, root: str, max_bytes: int = NO_CEILING):
         self.root = root
+        self.max_bytes = max_bytes
         os.makedirs(root, exist_ok=True)
 
     # Path for a key. Refuses `..` or a leading `/` (raises `ValueError`) so a key cannot leave `root`.
@@ -55,6 +64,7 @@ class FsObjectStore:
     # is the "whole or not at all" guarantee: a reader (a controller reading a heartbeat while the worker
     # writes it) sees the old bytes or the new bytes, never a truncated file.
     def put(self, key: str, data: bytes) -> None:
+        check(key, len(data), self.max_bytes)      # refused before the write: the old object survives intact
         p = self._p(key)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p + ".tmp", "wb") as f:

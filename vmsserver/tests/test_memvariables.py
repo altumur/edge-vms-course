@@ -23,7 +23,8 @@ def test_the_memory_backend_passes_the_whole_contract_suite():
     assert len(cases) >= 10, f"the contract suite shrank to {len(cases)}: this test is only as good as it"
 
     original = contract._store
-    contract._store = lambda writer=None, acl=None: open_vars("memory://", writer=writer, acl=acl)
+    # `url=` is how clause 8 asks for a store with a ceiling; everything else gets the bare private store.
+    contract._store = lambda writer=None, acl=None, url=None: open_vars(url or "memory://", writer=writer, acl=acl)
     try:
         for name, fn in sorted(cases):
             kwargs = {"monkeypatch": _NoPatch()} if "monkeypatch" in inspect.signature(fn).parameters else {}

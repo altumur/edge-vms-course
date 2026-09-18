@@ -27,14 +27,19 @@ import urllib.error
 import urllib.request
 from typing import Protocol
 
+from w2cplatform.limits import check
+
 
 class ObjectStore(Protocol):
+    max_bytes: int                      # what one object may weigh here; 0 means no ceiling (М10A Lesson 26)
+
     def put(self, key: str, data: bytes) -> None: ...
     def get(self, key: str) -> bytes | None: ...
     def list(self, prefix: str) -> list[str]: ...
 
 
 class HttpObjectStore:
+    max_bytes = 0                       # no ceiling worth naming
     def __init__(self, base_url: str, timeout: float = 10.0):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
@@ -60,6 +65,7 @@ class HttpObjectStore:
 
 
 class FsObjectStore:
+    max_bytes = 0                       # no ceiling worth naming
     def __init__(self, root: str):
         self.root = root
         os.makedirs(root, exist_ok=True)
@@ -97,6 +103,9 @@ class VariablesObjectStore:
 
     def __init__(self, vars_, prefix: str = "objects"):
         self.vars, self.prefix = vars_, prefix.strip("/")
+        # An object here IS a Variable, so it inherits the Variable's ceiling — and says so, rather than
+        # letting a caller find it out in production. The `data` key and its value are what gets charged.
+        self.max_bytes = max(0, getattr(vars_, "max_bytes", 0) - len("data"))
 
     def _path(self, key: str) -> str:
         if ".." in key or key.startswith("/"):
@@ -104,6 +113,7 @@ class VariablesObjectStore:
         return f"{self.prefix}/{key}"
 
     def put(self, key: str, data: bytes) -> None:
+        check(key, len(data), self.max_bytes)
         self.vars.put(self._path(key), {"data": data.decode("utf-8")})       # no cas: the last heartbeat wins, as it should
 
     def get(self, key: str) -> bytes | None:

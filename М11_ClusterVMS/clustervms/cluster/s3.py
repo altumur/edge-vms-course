@@ -56,6 +56,7 @@ def sign(method: str, host: str, path: str, query: str, headers: dict, payload: 
 
 
 class S3ObjectStore:
+    max_bytes = 0                       # an object store: this is the class of data it is for
     """Path-style: <endpoint>/<bucket>/<key>. Credentials from the
     environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), which on a server
     means from its Variable through the template — never a file in the image."""

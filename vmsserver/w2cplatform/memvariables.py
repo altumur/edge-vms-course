@@ -41,7 +41,8 @@ from __future__ import annotations
 
 import threading
 
-from .variables import Conflict, Forbidden, register_scheme, safe_path
+from .limits import NO_CEILING, check
+from .variables import Conflict, Forbidden, items_bytes, register_scheme, safe_path
 
 # One store per name, per process. Module-level because that is what "per process" means; the lock is
 # around the registry, not around a store — each store has its own.
@@ -64,9 +65,13 @@ class MemVariables:
     # `writer` is this handle's identity (None means unrestricted); `acl` is `{writer: [prefixes]}`. Both
     # mean exactly what they mean in `FileVariables`.
     def __init__(self, state: "_MemState | None" = None, writer: str | None = None,
-                 acl: dict[str, list[str]] | None = None):
+                 acl: dict[str, list[str]] | None = None, max_bytes: int = NO_CEILING):
         self._s = state or _MemState()
         self.writer = writer
+        # The ceiling this store declares. A dict in memory has none — but `memory://x?max_bytes=512`
+        # gives the contract suite a store that DOES, which is how the clause below gets exercised
+        # against something other than prose.
+        self.max_bytes = max_bytes
         if acl:
             with self._s.lock:
                 self._s.acl.update(acl)
@@ -75,7 +80,7 @@ class MemVariables:
     def as_writer(self, writer: str, allowed: list[str]) -> "MemVariables":
         with self._s.lock:
             self._s.acl[writer] = allowed
-        return MemVariables(self._s, writer)
+        return MemVariables(self._s, writer, max_bytes=self.max_bytes)
 
     @property
     def acl(self) -> dict[str, list[str]]:
@@ -100,6 +105,7 @@ class MemVariables:
     def put(self, path: str, items: dict, cas: int | None = None) -> int:
         safe_path(path)
         self._refuse(path)
+        check(path, items_bytes(items), self.max_bytes)
         with self._s.lock:
             current = self._s.items.get(path, (None, 0))[1]
             if cas is not None and cas != current:
@@ -126,12 +132,20 @@ class MemVariables:
 # The seam takes a URL and an identity, never a class name. `memory://` is all a process says to keep
 # nothing across a restart.
 def _open(url: str, writer: str | None = None, acl: dict[str, list[str]] | None = None) -> MemVariables:
-    name = url[len("memory://"):] if url.startswith("memory://") else ""
+    rest = url[len("memory://"):] if url.startswith("memory://") else ""
+    # `memory://<name>?max_bytes=<n>`: the ceiling is part of WHICH STORE THIS IS, so it belongs in the
+    # URL beside the name, exactly as the backend itself does (Lesson 20).
+    name, _, query = rest.partition("?")
+    max_bytes = NO_CEILING
+    for part in query.split("&"):
+        k, _, v = part.partition("=")
+        if k == "max_bytes" and v:
+            max_bytes = int(v)
     if not name:
-        return MemVariables(None, writer, acl)          # no name, no sharing: private to this open
+        return MemVariables(None, writer, acl, max_bytes)   # no name, no sharing: private to this open
     with _NAMED_LOCK:
         state = _NAMED.setdefault(name, _MemState())
-    return MemVariables(state, writer, acl)
+    return MemVariables(state, writer, acl, max_bytes)
 
 
 register_scheme("memory", _open)
