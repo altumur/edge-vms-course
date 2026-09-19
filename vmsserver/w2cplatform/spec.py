@@ -209,6 +209,17 @@ class SubsystemSpec:
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
     running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
+    # `events: {older_epochs: fenced | earlier-run}` — what it MEANS that a unit's events were written
+    # under an epoch that is not the current one.
+    #
+    # `fenced` (the default, and right for everything that runs until stopped): a writer that lost the
+    # race and kept writing. The page strikes those events through, because they are a zombie's.
+    #
+    # `earlier-run`: the same mechanism, the opposite meaning. A unit whose work ENDS takes a new epoch
+    # every time the operator runs it again, so an older epoch is a finished earlier result — a run to
+    # compare against, not a loser to strike through. Marking it `fenced` would tell an operator that the
+    # search they ran last week was never valid.
+    older_epochs: str = "fenced"
 
     # Builds the spec from the YAML dict, tolerating absent sections. Field defaults are parsed to their
     # type once here (strings kept as strings so `"cam{id}"` survives). `snapshot` defaults to every field.
@@ -251,7 +262,8 @@ class SubsystemSpec:
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=(list(declared) if declared is not None else
                              [n for n, f in fields.items() if not is_secret_field(n) and f.type != "blob"]),
-                   running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
+                   running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")),
+                   older_epochs=str((d.get("events", {}) or {}).get("older_epochs", "fenced")))
         # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
         # the default ("every field") is a convenience and not a decision.
@@ -270,6 +282,9 @@ class SubsystemSpec:
         unknown_snap = [n for n in spec.snapshot if n not in fields]
         if unknown_snap:
             raise ValueError(f"spec {spec.name}: snapshot names no field: {unknown_snap}")
+        if spec.older_epochs not in ("fenced", "earlier-run"):
+            raise ValueError(f"spec {spec.name}: events.older_epochs is fenced or earlier-run, "
+                             f"not {spec.older_epochs!r} — the page draws one of the two")
         if spec.retire_field and spec.retire_field not in fields:
             raise ValueError(f"spec {spec.name}: retire_when names no field: {spec.retire_field!r}")
         if bool(spec.retire_field) != bool(spec.retire_values):

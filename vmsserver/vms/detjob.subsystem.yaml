@@ -66,5 +66,11 @@ snapshot: [name, cam, kind, state]               # what leaves the cluster: enou
                                                  # reader above the cluster, and М10B Lesson 19's rule holds: not
                                                  # being a secret is a reason not to hide a field, never a reason to
                                                  # publish it.
+events:
+  older_epochs: earlier-run          # the same mechanism as everywhere, the opposite meaning. A unit that
+                                     # ENDS takes a new epoch every time the operator runs it again, so an
+                                     # older epoch here is a finished earlier result — a run to compare
+                                     # against, not a writer that lost a race. `fenced` would tell the
+                                     # operator that the search they ran last week was never valid.
 console:
   running: jobs_running              # detjob_jobs_running: scans whose worker is decoding right now

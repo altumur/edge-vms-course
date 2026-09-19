@@ -145,9 +145,14 @@ class EventDatabase:
 
     def query(self, t0: float, t1: float, cam: int | None = None, kind: str | None = None,
               subsystem: str | None = None, unit: str | None = None,
-              current_epochs: dict[tuple[str, str], int] | None = None, limit: int = 1000) -> dict:
+              current_epochs: dict[tuple[str, str], int] | None = None, limit: int = 1000,
+              epoch_policy: dict[str, str] | None = None) -> dict:
         """`current_epochs` is {(subsystem, unit): epoch} — fencing is per unit, and only the
-        unit's own subsystem knows its current epoch; the database just compares."""
+        unit's own subsystem knows its current epoch; the database just compares.
+
+        `epoch_policy` is {subsystem: "fenced" | "earlier-run"} — what an older epoch MEANS
+        there. Same comparison, two meanings: a writer that lost the race, or a finished
+        earlier run of work that ends. The database is told; it does not decide."""
         sql, args = "SELECT subsystem, unit, cam, epoch, t, kind, server, path, fields FROM events WHERE t >= ? AND t < ?", [t0, t1]
         if cam is not None: sql += " AND cam = ?"; args.append(cam)
         if kind is not None: sql += " AND kind = ?"; args.append(kind)
@@ -159,8 +164,10 @@ class EventDatabase:
             rows = self.db.execute(sql, args).fetchall()
         for sub, u, c, ep, t, k, server, path, fields in rows:
             cur = (current_epochs or {}).get((sub, u))
+            older = cur is not None and ep < cur
+            was = (epoch_policy or {}).get(sub, "fenced") if older else "current"
             out.append({"subsystem": sub, "unit": u, "cam": c, "epoch": ep, "t": t, "kind": k, "server": server, "bucket": path,
-                        "fenced": cur is not None and ep < cur, **json.loads(fields)})
+                        "epoch_is": was, "fenced": was == "fenced", **json.loads(fields)})
         return {"events": out, "state": self.state}
 
     # Retention removed a bucket: delete its rows and its `seen` row, so a re-mirrored copy is not refused.
@@ -210,7 +217,8 @@ class MergedIndex:
         with urllib.request.urlopen(f"{url}/events?{urllib.parse.urlencode(params)}", timeout=self.timeout) as r:
             return json.loads(r.read())
 
-    def query(self, t0: float, t1: float, cam=None, kind=None, subsystem=None, unit=None, current_epochs=None, limit: int = 1000) -> dict:
+    def query(self, t0: float, t1: float, cam=None, kind=None, subsystem=None, unit=None, current_epochs=None,
+              limit: int = 1000, epoch_policy: dict[str, str] | None = None) -> dict:
         now = self.wall(); seen = resources_seen(self.objects)
         live = {s for s, hb in seen.items() if now - float(hb["ts"]) <= self.lost_after}
         params = {k: v for k, v in (("from", t0), ("to", t1), ("cam", cam), ("kind", kind), ("subsystem", subsystem),
@@ -235,9 +243,11 @@ class MergedIndex:
                 unreachable.append(server)                        # silent, and nobody holds its copies
         events.sort(key=lambda e: e["t"]); events = events[:limit]
         cur = current_epochs or {}
-        for e in events:
+        for e in events:                                          # each resource fenced its own; re-decide over the merge
             c = cur.get((e["subsystem"], e["unit"]))
-            e["fenced"] = c is not None and e["epoch"] < c
+            older = c is not None and e["epoch"] < c
+            e["epoch_is"] = (epoch_policy or {}).get(e["subsystem"], "fenced") if older else "current"
+            e["fenced"] = e["epoch_is"] == "fenced"
         unreachable = sorted(set(unreachable))
         self.state = "live" + (f"; {', '.join(unreachable)} unreachable" if unreachable else "") \
                             + (f"; {', '.join(sorted(from_mirror))} from mirror" if from_mirror else "")

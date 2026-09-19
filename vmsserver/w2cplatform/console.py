@@ -266,6 +266,7 @@ class SpecConsole:
         self.marks_root = marks_root
         self.marks = EventLog(marks_root, "console", self.instance, 1) if marks_root else None   # the console's own log: one writer, so epoch 1
         self.seen = IdempotencyKeys(ctl.vars, f"{self.spec.name}/idem/", self.wall)   # in the store: any instance answers a retry
+        self.epoch_policy: dict[str, str] = {self.spec.name: self.spec.older_epochs}   # replaced by the Mount's shared one
         self._scan: tuple[float, dict] = (-1e9, {})
         self.scans = 0
 
@@ -580,7 +581,8 @@ class SpecConsole:
                 cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
                 return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
                                                     int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
-                                                    q.get("unit") if not cam else None, cur))
+                                                    q.get("unit") if not cam else None, cur,
+                                                    epoch_policy=con.epoch_policy))
             if path == "/metrics":
                 return h._send(200, con.metrics_text(), raw=True)
             if self._extra(h, "GET", path, q):
@@ -651,9 +653,20 @@ class Mount:
 
     def __init__(self, root: SpecConsole, mounts: dict[str, SpecConsole] | None = None):
         self.root, self.mounts = root, dict(mounts or {})
+        # One dict, SHARED by reference with every console here: `/events` merges across subsystems, so the
+        # console answering the request has to know what an older epoch means in a subsystem it does not
+        # own. A subsystem nobody mounted keeps the default, which is the old behaviour.
+        self.epoch_policy: dict[str, str] = {}
+        for c in (self.root, *self.mounts.values()):
+            self._adopt(c)
+
+    def _adopt(self, console: SpecConsole) -> None:
+        self.epoch_policy[console.spec.name] = console.spec.older_epochs
+        console.epoch_policy = self.epoch_policy
 
     def mount(self, name: str, console: SpecConsole) -> "Mount":
         self.mounts[name] = console
+        self._adopt(console)
         return self
 
     def resolve(self, path: str) -> tuple[SpecConsole, str]:
