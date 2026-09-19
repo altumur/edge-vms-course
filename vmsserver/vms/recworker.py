@@ -73,6 +73,7 @@ class RecWorker(VmsWorker):
         self.space_probe = disk_space                # the disk under the archive; a test cannot fill one
         self.backfill_budget = 0                    # ranges per pass; 0 = only what an operator asks for
         self.backfilled = 0
+        self.fetched: list[str] = []                # request ids this worker has fetched — the heartbeat carries them
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
@@ -151,7 +152,10 @@ class RecWorker(VmsWorker):
     # question a rolling upgrade really asks: is it safe to stop this machine now. A recorder whose units
     # have left promotes what they closed on its next pump, and then this is zero.
     def heartbeat_extra(self) -> dict:
-        return {"spool": len(self.archive.closed_in_spool(0.0, self.wall()))}
+        # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
+        # configuration — so it says which ones are done and the console removes them.
+        return {"spool": len(self.archive.closed_in_spool(0.0, self.wall())),
+                "fetched": ",".join(self.fetched[-32:])}
 
     def promote_closed(self) -> int:
         n = 0
@@ -163,6 +167,7 @@ class RecWorker(VmsWorker):
     def pump_once(self) -> None:
         super().pump_once()
         self.promote_closed()
+        self.requests()                             # what a person asked for: outside the budget and the hour
         if self.backfill_budget:                    # bounded, and inside the window: it shares the device's uplink
             self.backfill(self.backfill_budget)
 
@@ -209,6 +214,37 @@ class RecWorker(VmsWorker):
         if found is None or not found[2].get("coverage"):
             return None                       # no phase: a channel held only for its archive answers too
         return found[2]["playback_url"], found[2]["coverage"]
+
+    # -- what an operator asked for: `rec/requests/<id>`, written by the console ------------------------
+    #
+    # The ordinary pass is bounded by a budget and an hour because backfill competes with live for the
+    # device's uplink. A range a PERSON asked for is different work: they are looking at that gap now, and
+    # the night is not a useful answer. So these are fetched outside both — but not outside
+    # `under_pressure`, because a disk that is being emptied this minute cannot be given more.
+    #
+    # The request is not cleared here. A worker's token writes its slot and its epochs, never configuration
+    # (М10A Lesson 10), so the recorder REPORTS what it fetched in its heartbeat and the console's reaper
+    # removes the row — the same division as a scan that finishes (М10B Lesson 21).
+    def requests(self, budget: int = 2, now: float | None = None) -> list[dict]:
+        now = self.wall() if now is None else now
+        if self.under_pressure():
+            return []
+        mine = {str(r["id"]) for r in self.rows}
+        done: list[dict] = []
+        for key in self.vars.list(REC.requests_prefix()):
+            if len(done) >= budget:
+                break
+            it, _ = self.vars.get(key)
+            if not it or str(it.get("unit", "")) not in mine:
+                continue                                     # another recorder's recording: not ours to fetch
+            src = self.device_source(it.get("cam", it["unit"]))
+            rid = key.rsplit("/", 1)[1]
+            if src is None:
+                continue                                     # nobody holds the device right now; ask again next pass
+            r = self.fetch(str(it["unit"]), str(it.get("cam", it["unit"])), src[0], float(it["from"]), float(it["to"]))
+            self.fetched.append(rid)                         # the heartbeat says so; the console removes the row
+            done.append({**r, "request": rid})
+        return done
 
     # Bounded work, on request — never in the ordinary pass, the way `rebalance(budget)` is bounded
     # (Lesson 13): backfill competes with live for the device's uplink, so it gets a ceiling and an hour.

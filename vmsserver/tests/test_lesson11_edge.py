@@ -760,3 +760,89 @@ def test_the_upgrade_script_polls_a_condition_instead_of_sleeping():
     assert m.drain_route("DELETE", {})[1] == {"draining": "", "safe": True,
                                               "subsystems": {"vms": {"draining": "", "subsystem": "vms"},
                                                              "rec": {"draining": "", "subsystem": "rec"}}}
+
+
+def test_a_request_is_fetched_outside_the_window_and_the_budget():
+    """The ordinary pass is bounded by a budget and an hour because backfill shares
+    the device's uplink with live. A range a PERSON asked for is different work:
+    they are looking at that gap now, and "tonight" is not a useful answer."""
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1000000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)
+    con_rec.create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    now = 1000000.0
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, window=(22, 6), keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+    r.backfill_budget = 0                                                  # the ordinary pass fetches nothing at all
+
+    con_rec.vars.put(REC_SPEC.sub.request_key("1-a"),
+                     {"unit": "1", "cam": "1", "from": str(now - 76400), "to": str(now - 70000),
+                      "at": str(now), "by": "anna"})
+    r.pump_once()                                                           # the ORDINARY pass, not a direct call:
+    assert r.fetched == ["1-a"]                                             # a pass nobody runs is the bug this project has had twice
+    assert [s.source for s in Manifest(box.archive, 1).read() if s.source == "edge"]
+
+    r.heartbeat_once()
+    hb = Heartbeat.from_bytes(box.objects.get(REC_SPEC.sub.heartbeat_key("r-1")))
+    assert "1-a" in hb.extra["fetched"]                                     # the worker says so; the console removes the row
+
+    from vms.jobs import clear_requests
+    assert clear_requests(con_rec) == 1 and box.vars.list(REC_SPEC.sub.requests_prefix()) == []
+
+
+def test_a_request_for_somebody_elses_recording_is_left_alone():
+    """Every recorder reads the same prefix. The camera here is held and its device
+    answers — so the only thing that can refuse this range is that the recording
+    belongs to another recorder. Fetching it would write another server's unit."""
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)
+    con_rec.create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1", env={})
+    r.heartbeat_once()                                                       # …and this recorder holds NOTHING
+    assert r.rows == []
+    assert r.device_source("1") is not None                                  # the device is right there, answering
+
+    con_rec.vars.put(REC_SPEC.sub.request_key("1-a"),
+                     {"unit": "1", "cam": "1", "from": "100", "to": "200", "at": "1", "by": "anna"})
+    assert r.requests() == [] and r.fetched == []
+    assert box.vars.list(REC_SPEC.sub.requests_prefix()) == ["rec/requests/1-a"]   # still asked, for whoever holds it
+
+
+def test_a_request_waits_while_the_disk_is_over_the_mark():
+    """`force` does not open this door for backfill (above) and a person asking does
+    not open it either: a disk the resource is emptying this minute cannot be given
+    more, however politely."""
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+
+    from w2cplatform.resource import SPACE_KEY
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+    r.space_probe = lambda root: (1_000_000, 100_000)                        # 90 % full
+    con_rec.vars.put(REC_SPEC.sub.request_key("1-b"),
+                     {"unit": "1", "cam": "1", "from": "900000", "to": "930000", "at": "1", "by": "anna"})
+    assert r.requests() == [] and r.fetched == []
+    assert box.vars.list(REC_SPEC.sub.requests_prefix()) == ["rec/requests/1-b"]   # kept: it is a wait, not a refusal
+
+    r.space_probe = lambda root: (1_000_000, 500_000)                        # room again, same request
+    assert r.requests() and r.fetched == ["1-b"]

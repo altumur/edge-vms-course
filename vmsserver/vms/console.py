@@ -211,8 +211,22 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
                 return 200, live.status(path[len("/whep/"):])           # GET /whep/<cam>: the stream, its gateway, that gateway's word
             return None
         if method == "POST" and path == "/backfill" and archive is not None:
+            # This used to answer 202 and store nothing: the text below was true about what the recorder
+            # WOULD do and false about anything having been asked. The request is a row now
+            # (`rec/requests/<id>`), the recorder reads it, and the id is deterministic — a retried POST
+            # for the same range is the same row, not a second fetch.
+            if rec_ctl is None:
+                return 503, {"detail": "no recorder subsystem behind this console", "error": "no rec"}
             body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))) or b"{}")
-            return 202, {"queued": {"cam": body.get("cam"), "from": body.get("from"), "to": body.get("to")},
+            cam, t0, t1 = str(body.get("cam", "")), float(body.get("from", 0)), float(body.get("to", 0))
+            if not cam or t1 <= t0:
+                return 400, {"detail": "a backfill wants a camera and a range", "error": "bad range"}
+            unit = recordings_of(rec_ctl, cam)[0]
+            rid = f"{unit}-{int(t0)}-{int(t1)}"
+            rec_ctl.vars.put(rec_ctl.spec.sub.request_key(rid),
+                             {"unit": str(unit), "cam": cam, "from": str(t0), "to": str(t1),
+                              "at": str(con_wall()), "by": handler.headers.get("X-User", "operator")})
+            return 202, {"queued": {"id": rid, "unit": str(unit), "cam": cam, "from": t0, "to": t1},
                          "detail": "the recorder fetches it on its next pass — outside the budget and the window, "
                                    "because a person asked for it"}
         if method != "GET" or archive is None:

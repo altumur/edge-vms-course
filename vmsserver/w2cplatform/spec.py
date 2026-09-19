@@ -322,6 +322,7 @@ class SubsystemSpec:
         out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*",   # idem: a retried POST answered the same by ANY instance
                f"{self.name}/policy",                                                         # the administrator's knobs: servers distinct | shared
                f"{self.name}/sweep",                                                          # what the blob sweep marked, and when
+               f"{self.name}/requests/*",                                                     # bounded work an operator asked a worker for, outside its ordinary pass
                DRAIN_KEY]                                                                     # "this machine is about to stop": the operator's, and the same row for every subsystem
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")

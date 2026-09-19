@@ -326,8 +326,8 @@ def _sweep_loop(controllers, every: float = 60.0) -> None:
 # The console's second pass, beside the sweep: a job's row follows the worker that finished it. The worker
 # cannot write the row (its ACL forbids configuration) and the controller must not (one row, one writer),
 # so the console — which already reads these heartbeats — is where the fact lands. See `vms/jobs.py`.
-def _reap_loop(controllers, every: float = 30.0) -> None:
-    from .jobs import reap
+def _reap_loop(controllers, requests=(), every: float = 30.0) -> None:
+    from .jobs import clear_requests, reap
     while not stop.is_set():
         for c in controllers:
             try:
@@ -336,6 +336,13 @@ def _reap_loop(controllers, every: float = 30.0) -> None:
                     logging.info("%s: %d done, %d failed", c.spec.name, moved["done"], moved["failed"])
             except Exception:                         # noqa: BLE001
                 logging.exception("the job reaper failed in %s — finished jobs will stay open", c.spec.name)
+        for c in requests:                            # the same division, one row simpler: fetched, so gone
+            try:
+                gone = clear_requests(c)
+                if gone:
+                    logging.info("%s: %d request(s) fetched and cleared", c.spec.name, gone)
+            except Exception:                         # noqa: BLE001
+                logging.exception("clearing requests failed in %s — they will be asked for again", c.spec.name)
         stop.wait(every)
 
 
@@ -360,7 +367,7 @@ def console() -> None:
     det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
     job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
     threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl],), daemon=True).start()
-    threading.Thread(target=_reap_loop, args=([job_ctl],), daemon=True).start()
+    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl]), daemon=True).start()
     stop.wait()
     srv.shutdown()
 

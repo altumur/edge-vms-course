@@ -110,4 +110,50 @@ def test_the_console_process_actually_runs_the_reaper():
     console = inspect.getsource(m.console)
     assert "_reap_loop" in console, "the console process does not start the reaper — no job will ever close"
     assert "job_ctl" in console and "detjob" in console
-    assert "from .jobs import reap" in inspect.getsource(m._reap_loop)
+    assert "import clear_requests, reap" in inspect.getsource(m._reap_loop)
+
+
+# -- `<name>/requests/<id>`: what an operator asked a worker for ------------------------------------
+def test_a_backfill_request_is_a_row_and_not_a_202():
+    """It used to answer 202 and store nothing. The text was true about what the
+    recorder would do and false about anything having been asked — a lie that
+    survives right up until somebody checks whether the range arrived."""
+    import json
+    from vms.config import REC_SPEC
+    from vms.console import vms_routes
+    from vms.archive import ArchiveResource
+    from w2cplatform.spec import SpecController
+
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    rec.create({"cam": "7"})
+    routes = vms_routes(ArchiveResource(box.spool, box.archive), None, None, rec)
+
+    class H:                                                        # the handler surface the route uses
+        headers = {"Content-Length": "48", "X-User": "anna"}
+        rfile = type("R", (), {"read": staticmethod(lambda n: json.dumps({"cam": "7", "from": 100, "to": 200}).encode())})()
+
+    status, body = routes(H(), "POST", "/backfill", {})
+    assert status == 202 and body["queued"]["id"] == "7-100-200"
+    it, _ = box.vars.get(REC_SPEC.sub.request_key("7-100-200"))
+    assert it and it["unit"] == "7" and float(it["from"]) == 100.0 and it["by"] == "anna"
+
+    status2, body2 = routes(H(), "POST", "/backfill", {})            # a retry is the same row, not a second fetch
+    assert status2 == 202 and body2["queued"]["id"] == "7-100-200"
+    assert len(box.vars.list(REC_SPEC.sub.requests_prefix())) == 1
+
+
+def test_a_request_the_recorder_fetched_is_cleared():
+    from vms.config import REC_SPEC
+    from vms.jobs import clear_requests
+    from w2cplatform.spec import SpecController
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    rec.vars.put(REC_SPEC.sub.request_key("7-100-200"), {"unit": "7", "cam": "7", "from": "100", "to": "200", "at": "1", "by": "op"})
+    rec.vars.put(REC_SPEC.sub.request_key("7-300-400"), {"unit": "7", "cam": "7", "from": "300", "to": "400", "at": "1", "by": "op"})
+
+    box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),
+                    Heartbeat("r-1", box.wall(), [], {"server": "srv-1", "fetched": "7-100-200"}).to_bytes())
+    assert clear_requests(rec) == 1
+    assert [k.rsplit("/", 1)[1] for k in rec.vars.list(REC_SPEC.sub.requests_prefix())] == ["7-300-400"]
+    assert clear_requests(rec) == 0                                   # …and again is a no-op

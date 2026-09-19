@@ -26,6 +26,25 @@ TERMINAL = ("done", "failed")
 log = logging.getLogger("vms.jobs")
 
 
+# The other half of `<name>/requests/<id>`: the worker fetched it and said so in its heartbeat; the row goes.
+#
+# Same division as `reap` below, and for the same reason — a worker writes no configuration. Here it is
+# cheaper still, because a request has no state to move: once the work named in it is done the row has
+# nothing left to say, and a store that keeps every range anyone ever asked for is a store that grows
+# without anybody deciding it should.
+def clear_requests(ctl) -> int:
+    from w2cplatform.console import heartbeats
+    fetched: set[str] = set()
+    for _, hb in heartbeats(ctl.objects, ctl.spec.name + "/").items():
+        fetched |= {r for r in str(hb.extra.get("fetched", "")).split(",") if r}
+    gone = 0
+    for key in ctl.vars.list(ctl.sub.requests_prefix()):
+        if key.rsplit("/", 1)[1] in fetched:
+            ctl.vars.delete(key)
+            gone += 1
+    return gone
+
+
 # One pass: `{done: n, failed: n}` — how many rows this pass moved.
 #
 # Only the worker the CONTROLLER placed the job on is believed. A heartbeat object outlives its worker,
