@@ -1,0 +1,33 @@
+# /etc/containers/systemd/detjobworker@.container — a scan worker: the fifth
+# subsystem's worker. `systemctl start detjobworker@j-1` — the instance name is
+# the slot. Its unit is one model over one interval of one recording, and unlike
+# every other worker here its work ENDS.
+#
+# Same box, same GPU and the same models as detworker@ — a separate unit because
+# it carries a separate BUDGET (SCAN_CAPACITY, two by default against eight
+# streams): a retro-search must not be able to spend what live detection is
+# running on. It reads the archive, so it mounts it; it writes its events into
+# detjob/<job>/e<epoch>/ and its progress into detjob/<job>/manifest.jsonl beside
+# them, because its token may not write the row. In М11 a service job placed by
+# constraint on GPU servers, scaled on detjob_jobs_running.
+[Unit]
+Description=VMS scan worker %i — models over recorded intervals, on its own budget
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms detjobworker
+Environment=DETJOB_NAME=%i
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Volume=/data/archive:/data/archive:z
+AddDevice=/dev/dri
+Network=host
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

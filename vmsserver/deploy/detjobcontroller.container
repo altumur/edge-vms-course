@@ -1,0 +1,24 @@
+# /etc/containers/systemd/detjobcontroller.container — the detjob subsystem's
+# controller: the platform's SpecController run from detjob.subsystem.yaml, one
+# per box (one per cluster in М11), no code of its own. Places a scan beside the
+# recorder holding the footage it reads (`near: {sub: rec, by: rec}`) and on any
+# GPU server when it cannot — the footage is then fetched through the resource's
+# own door, which costs network and not correctness. No port; its token writes
+# detjob/workers/*, detjob/placement/*, detjob/slots/*.
+[Unit]
+Description=VMS detjob controller — the only writer of scan placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms detjobcontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

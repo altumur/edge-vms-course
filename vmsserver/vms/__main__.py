@@ -246,6 +246,30 @@ def detworker() -> None:
     d.run(stop=stop)
 
 
+def detjobcontroller() -> None:
+    """The fifth subsystem's controller: the platform's class from detjob.subsystem.yaml, placing scans
+    beside the recorder holding the footage they read, and on a GPU server when it cannot. No code of its
+    own — and, until the placement predicate lands, no notion that a job ever finishes."""
+    from w2cplatform.spec import SpecController
+    from .config import DETJOB_SPEC
+    vars_ = open_vars(CONFIG_URL, writer="detjobcontroller", acl={"detjobcontroller": DETJOB_SPEC.acl_controller()})
+    _controller_loop(SpecController(DETJOB_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
+
+
+def detjobworker() -> None:
+    """A scan worker: a worker of the `detjob` subsystem. Same box, same models and same GPU as
+    `detworker`, a separate process because it carries a separate budget — a retro-search must not be able
+    to spend the streams live detection is running on. Its events go into detjob/<job>/e<epoch>/ on this
+    server's resource; its progress goes beside them, because its token may not write the row."""
+    from .detjobworker import DetJobWorker
+    vars_ = open_vars(CONFIG_URL, writer="detjobworker", acl={"detjobworker": ["detjob/epoch/*", "detjob/slots/*"]})
+    j = DetJobWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")),
+                     capacity=int(os.environ.get("SCAN_CAPACITY", "2")),
+                     archive_root=os.environ.get("ARCHIVE", "/data/archive"))
+    logging.info("scan worker %s (instance %s) claimed its slot; models: %s", j.name, j.instance, ",".join(j.models))
+    j.run(stop=stop)
+
+
 def gateway() -> None:
     """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
@@ -299,24 +323,44 @@ def _sweep_loop(controllers, every: float = 60.0) -> None:
         stop.wait(every)
 
 
+# The console's second pass, beside the sweep: a job's row follows the worker that finished it. The worker
+# cannot write the row (its ACL forbids configuration) and the controller must not (one row, one writer),
+# so the console — which already reads these heartbeats — is where the fact lands. See `vms/jobs.py`.
+def _reap_loop(controllers, every: float = 30.0) -> None:
+    from .jobs import reap
+    while not stop.is_set():
+        for c in controllers:
+            try:
+                moved = reap(c)
+                if moved["done"] or moved["failed"]:
+                    logging.info("%s: %d done, %d failed", c.spec.name, moved["done"], moved["failed"])
+            except Exception:                         # noqa: BLE001
+                logging.exception("the job reaper failed in %s — finished jobs will stay open", c.spec.name)
+        stop.wait(every)
+
+
 def console() -> None:
     """The screen and the API: its own process, count as many as you like, a
     token for the operator's rows and nothing else."""
     from .config import SPEC
     from .console import serve
     from w2cplatform.spec import SpecController
-    from .config import DET_SPEC, LIVE_SPEC, REC_SPEC
+    from .config import DET_SPEC, DETJOB_SPEC, LIVE_SPEC, REC_SPEC
     vars_ = open_vars(CONFIG_URL, writer="console",
-                          acl={"console": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console() + REC_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
+                          acl={"console": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()
+                               + REC_SPEC.acl_console() + DETJOB_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
                 live_ctl=SpecController(LIVE_SPEC, vars_, objects),
-                mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects)})
+                mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects),
+                        "detjob": SpecController(DETJOB_SPEC, vars_, objects)})
     logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
     det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
-    threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl],), daemon=True).start()
+    job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
+    threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl],), daemon=True).start()
+    threading.Thread(target=_reap_loop, args=([job_ctl],), daemon=True).start()
     stop.wait()
     srv.shutdown()
 
@@ -364,4 +408,5 @@ def resource() -> None:
 
 if __name__ == "__main__":
     {"worker": worker, "controller": controller, "recorder": recorder, "reccontroller": reccontroller, "console": console, "resource": resource,
-     "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller}[sys.argv[1]]()
+     "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller,
+     "detjobworker": detjobworker, "detjobcontroller": detjobcontroller}[sys.argv[1]]()
