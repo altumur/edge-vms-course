@@ -79,7 +79,7 @@ func TestNeitherHalfOfTheCredentialLeavesTheCluster(t *testing.T) {
 	if err := ctl.PublishSnapshot(); err != nil {
 		t.Fatal(err)
 	}
-	snap, raw := box.PublishedSnapshot("vms", "cameras")   // every shard, the way М12 reads them
+	snap, raw := box.PublishedSnapshot("vms", "cameras") // every shard, the way М12 reads them
 	if len(raw) == 0 {
 		t.Fatal("no snapshot was published")
 	}

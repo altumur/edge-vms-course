@@ -7,7 +7,9 @@
 package w2cplatform_test
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -106,5 +108,76 @@ func TestARowThatDoesNotFitIsA413ToThePersonWhoTypedIt(t *testing.T) {
 func TestTheSizeAStoreChargesIsKeysAndValues(t *testing.T) {
 	if n := p.ItemsBytes(p.Items{"a": "xx", "bb": "y"}); n != 1+2+2+1 {
 		t.Fatal(n)
+	}
+}
+
+// Two jobs in one loop, and what it costs to report them as one.
+//
+// The controller's pass PLACES units and PUBLISHES a copy of where they went. They fail independently and
+// mean different things to whoever is woken up. In the Python port the four calls shared one try and one
+// sentence — "placement pass failed" — and since publishing is LAST, that sentence named the one thing
+// that had not failed. Here the publish returned an error nobody looked at, which is the same defect with
+// the volume turned down.
+func TestTheAgeOfThePublishedCopyIsOnMetrics(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := p.NewSpecController(detSpec(t), box.Vars, box.Objects, 8, box.Wall.Now, "cluster-a")
+	con := p.NewSpecConsole(ctl, p.ConsoleOptions{})
+	if _, err := ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// never published is not the same as published a moment ago, and the gauge says so
+	if _, ok := ctl.SnapshotAge(0); ok {
+		t.Fatal("nothing was published, and the age pretended otherwise")
+	}
+	if !strings.Contains(con.MetricsText(), "det_snapshot_age_seconds -1") {
+		t.Fatal(con.MetricsText())
+	}
+
+	if _, err := ctl.EnsurePlaced([]string{"w-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctl.PublishSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(con.MetricsText(), "det_snapshot_age_seconds 0") {
+		t.Fatal(con.MetricsText())
+	}
+
+	box.Wall.Advance(90) // the controller stopped publishing
+	if age, ok := ctl.SnapshotAge(0); !ok || math.Round(age) != 90 {
+		t.Fatal(age, ok)
+	}
+	if !strings.Contains(con.MetricsText(), "det_snapshot_age_seconds 90") {
+		t.Fatal(con.MetricsText())
+	}
+}
+
+// A number like this must only ever be wrong in the pessimistic direction. One shard that stopped being
+// rewritten IS the cluster being behind, and taking the newest would report an RPO better than the real one.
+func TestTheAgeIsTheStalestShardAndNeverTheFreshest(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := p.NewSpecController(detSpec(t), box.Vars, box.Objects, 2, box.Wall.Now, "cluster-a")
+	for _, i := range []string{"7", "8", "9", "10"} {
+		if _, err := ctl.Create(map[string]any{"name": i + "-linecross", "cam": i, "kind": "linecross"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ctl.EnsurePlaced([]string{"w-1", "w-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctl.PublishSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := box.Objects.Get("det/snapshot/w-1")
+	var shard map[string]any
+	json.Unmarshal(raw, &shard)
+	shard["ts"] = box.Wall.Now() - 300 // w-1's shard stopped moving
+	out, _ := json.Marshal(shard)
+	box.Objects.Put("det/snapshot/w-1", out)
+
+	age, ok := ctl.SnapshotAge(0)
+	if !ok || math.Round(age) != 300 {
+		t.Fatal("the freshest shard was taken, and the RPO looked better than it is:", age)
 	}
 }

@@ -443,7 +443,6 @@ func TestContractThePlatformsCASLoopsRunOverANonNumericVersion(t *testing.T) {
 	}
 }
 
-
 // Clause 8, in two halves, because every backend has the first and only some have the second.
 //
 // Every store answers MaxBytes. A directory answers 0 — no ceiling — and that is an ANSWER, not a missing

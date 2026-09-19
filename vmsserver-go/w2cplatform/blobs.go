@@ -2,8 +2,8 @@ package w2cplatform
 
 import (
 	"crypto/sha256"
-	"errors"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 )

@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -483,6 +484,17 @@ func (c *SpecConsole) MetricsText() string {
 		}
 	}
 	fmt.Fprintf(&b, "# TYPE %s_resources_live gauge\n%s_resources_live %d\n# TYPE %s_%s gauge\n%s_%s %d\n", p, p, resLive, p, s.RunningGauge, p, s.RunningGauge, running)
+	// How far behind the copy the layer above reads is. The controller publishes every pass and has no
+	// port; this is read from the store, so a failing publish shows up here as a number that climbs rather
+	// than only as a log line on a host nobody is looking at. -1 distinguishes "never published" from
+	// "published a moment ago" — a gauge that is 0 for both would hide a cluster whose controller has
+	// never once succeeded.
+	age, ok := c.Ctl.SnapshotAge(now)
+	shown := "-1"
+	if ok {
+		shown = strconv.FormatFloat(math.Round(age*10)/10, 'f', -1, 64)
+	}
+	fmt.Fprintf(&b, "# TYPE %s_snapshot_age_seconds gauge\n%s_snapshot_age_seconds %s\n", p, p, shown)
 	return b.String()
 }
 
