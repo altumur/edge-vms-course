@@ -25,6 +25,35 @@ import (
 	p "vmsserver/w2cplatform"
 )
 
+// Housekeeping the console owns BECAUSE THE ACL SAYS SO. `<sub>/blobs/*` is the console's to write
+// (Lesson 27), so it is the console's to collect; the controller could not delete a blob if it wanted to,
+// and that is the right way round — the process that creates a thing is the one that can be trusted to
+// know when nothing names it.
+//
+// Its own loop and its own log line. That is Lesson 28 applied before the same mistake is made twice: a
+// sweep that fails inside somebody else's error handling would be reported as somebody else's failure,
+// and the consequence — blobs accumulating with nothing reclaiming them — is the kind that shows up as a
+// disk full a year later.
+func sweepLoop(stop <-chan struct{}, controllers ...*p.SpecController) {
+	for {
+		for _, c := range controllers {
+			r, err := c.SweepBlobs(0, 0)
+			if err != nil {
+				log.Printf("the blob sweep failed in %s — nothing is reclaiming its blobs: %v", c.Spec.Name, err)
+				continue
+			}
+			if r.Deleted > 0 {
+				log.Printf("swept %d blob(s) nothing names in %s", r.Deleted, c.Spec.Name)
+			}
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(60 * time.Second):
+		}
+	}
+}
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -85,6 +114,9 @@ func main() {
 				log.Println("rec placement pass failed:", err)
 			}
 			ctl.Redistribute(nil)
+			if err := ctl.PublishSnapshot(); err != nil {
+				log.Println("publishing the rec snapshot failed — the layer above is now reading a stale copy:", err)
+			}
 			select {
 			case <-stop:
 				return
@@ -99,7 +131,14 @@ func main() {
 				log.Println("placement pass failed:", err)
 			}
 			ctl.Redistribute(nil) // cameras of a RELEASED slot (scale-in) onto the rest; nothing else, ever
-			ctl.PublishSnapshot()
+			// Reported on its OWN line, and this is not tidiness. Publishing is the last thing the pass
+			// does, so a failure here used to be swallowed entirely — and in the Python port, where the
+			// four calls shared one try, it came out as "placement pass failed", naming the one thing that
+			// had not failed. Two jobs, two failures, two sentences. The age of what the layer above reads
+			// is on /metrics as <sub>_snapshot_age_seconds, from the store rather than from this process.
+			if err := ctl.PublishSnapshot(); err != nil {
+				log.Println("publishing the snapshot failed — the layer above is now reading a stale copy:", err)
+			}
 			select {
 			case <-stop:
 				return
@@ -109,13 +148,14 @@ func main() {
 	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
 		vars := openVars(root, "console", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
+		recCtl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "") // the recorder at /rec/…: the page's Record toggle
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
-		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil,
-			p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")) // the recorder at /rec/…: the page's Record toggle
+		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil, recCtl)
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("console on %s", ln.Addr())
+		go sweepLoop(stop, ctl.SpecController, recCtl)
 		<-stop
 		srv.Close()
 	case "resource": // the archive has no controller — it has a policy pass, a heartbeat, its HTTP, and the event database

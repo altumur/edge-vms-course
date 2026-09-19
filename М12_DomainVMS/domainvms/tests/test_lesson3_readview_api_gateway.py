@@ -43,6 +43,84 @@ def test_the_list_from_a_real_cluster():
     assert {r["worker"] for r in rows} == {"w-0", "w-1"} and rows[0]["observed_revision"] == rows[0]["revision"] == 1
 
 
+def test_a_camera_nobody_is_running_is_in_the_list_and_says_so():
+    """The defect this closes: the list came only from heartbeats, so a camera that
+    NOTHING is running was not in it at all. An operator could add a camera, watch
+    the cluster fail to place it — no capacity, no worker with the right labels —
+    and find nothing in the domain. Not an error, not a greyed row: absence, which
+    is the most confusing shape a fault can take.
+
+    A heartbeat is an observation; the snapshot is the configuration. The list now
+    carries both and keeps them apart — the same pair М10A's console shows inside
+    one cluster as `rows` beside `configured`."""
+    fed, _ = make_domain({"north": ()}, "north")
+    wall = Clock()
+    # two cameras the cluster knows about: one held by a worker, one nobody could place
+    snapshot(fed.clusters["north"], {7: ("w-0", "srv-1"), 9: ("", "?")}, ts=wall())
+    heartbeat(fed.clusters["north"], "w-0", [7], ts=wall())
+    view = ReadView(fed, wall=wall)
+    view.refresh()
+
+    rows = {r["ref"] or str(r["camera"]): r for r in view.list()["rows"]}
+    assert set(rows) == {"7", "9"}, "the camera nobody runs is missing from the list"
+    assert rows["7"]["worker_state"] == "live" and rows["7"]["phase"] == "running"
+    assert rows["9"]["worker_state"] == "configured" and rows["9"]["worker"] == ""
+    assert "no worker reports it" in rows["9"]["as_of"]
+    assert view.list()["total"] == 2
+
+
+def test_a_camera_is_not_listed_twice_when_both_sources_have_it():
+    """The observation wins, because it says more. The two sources name a camera
+    differently — the worker's status entry and the cluster's snapshot row — so the
+    key is the one the DOMAIN uses, `ref`, and not the cluster's own number, of
+    which every cluster has its own."""
+    fed, _ = make_domain({"north": (), "south": ()}, "north")
+    wall = Clock()
+    snapshot(fed.clusters["north"], {7: ("w-0", "srv-1")}, ts=wall())
+    heartbeat(fed.clusters["north"], "w-0", [7], ts=wall())
+    snapshot(fed.clusters["south"], {7: ("w-0", "srv-9")}, ts=wall())   # a different camera 7
+    heartbeat(fed.clusters["south"], "w-0", [7], ts=wall())
+    view = ReadView(fed, wall=wall)
+    view.refresh()
+
+    rows = view.list()["rows"]
+    assert len(rows) == 2, [r["cluster"] for r in rows]
+    assert {r["cluster"] for r in rows} == {"north", "south"}
+    assert all(r["worker_state"] == "live" for r in rows), "an observed camera came back as configured too"
+
+
+def test_a_cluster_that_stopped_publishing_is_a_different_silence_from_a_silent_worker():
+    """Two silences, and an operator does different things about them.
+
+    A silent WORKER means its cameras are not running: `causes()` reports it. A stale
+    SNAPSHOT means the cluster is running perfectly well and the domain's picture of
+    it has stopped moving — nothing is broken where the operator would look.
+
+    `ages()` has computed this since Lesson 1 and nothing outside a test ever called
+    it, so the one number that says "this cluster's controller stopped publishing"
+    was computable and never computed. Now the list carries it."""
+    fed, _ = make_domain({"north": (), "south": ()}, "north")
+    wall = Clock()
+    snapshot(fed.clusters["north"], {1: ("w-0", "srv-1")}, ts=wall())
+    snapshot(fed.clusters["south"], {2: ("w-0", "srv-9")}, ts=wall())
+    heartbeat(fed.clusters["north"], "w-0", [1], ts=wall())
+    heartbeat(fed.clusters["south"], "w-0", [2], ts=wall())
+    view = ReadView(fed, wall=wall)
+    view.refresh()
+    assert view.list()["rpo"] == {"north": 0.0, "south": 0.0}
+
+    # north's controller stops publishing; its worker keeps reporting, so nothing else notices
+    wall.advance(120)
+    heartbeat(fed.clusters["north"], "w-0", [1], ts=wall())
+    heartbeat(fed.clusters["south"], "w-0", [2], ts=wall())
+    snapshot(fed.clusters["south"], {2: ("w-0", "srv-9")}, ts=wall())
+    view.refresh()
+
+    assert view.list()["rpo"] == {"north": 120.0, "south": 0.0}
+    assert view.causes() == [], "a stale snapshot is not a silent worker, and must not be reported as one"
+    assert all(r["worker_state"] == "live" for r in view.list()["rows"]), "the cameras are fine, and the list says so"
+
+
 def test_kill_a_server_one_cause_displayed():
     wall = Clock(10_000.0); fed, links = _four_workers(wall)
     view = ReadView(fed, lost_after=45, wall=wall)

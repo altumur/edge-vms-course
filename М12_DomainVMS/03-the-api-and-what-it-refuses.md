@@ -71,6 +71,10 @@ clusters: {"north": "ok", "south": "unreachable"}   complete: false
 
 This is М9's *desired is persisted, actual is derived* one layer up. The snapshots are actual state; a copy of actual state is only ever a cache, and this one admits it.
 
+И ровно поэтому список собирается из **двух** источников. Heartbeat — это наблюдение: камера работает, вот на какой ревизии и на каком воркере. Снимок кластера — конфигурация: камера должна существовать. Камера, которая есть в обоих, попадает в список один раз, из наблюдения; камера, которая есть только в снимке — её никто не разместил, или держащий её воркер ни разу не отчитался, — попадает с пометкой `configured`, и это ровно «настроено, но не работает». Тот же разрыв, который консоль кластера показывает внутри себя как `rows` рядом с `configured` (М10A, урок 13), поднятый на этаж выше.
+
+> **До этой правки таких камер в списке не было вовсе.** Оператор мог завести камеру, увидеть, что кластер не смог её разместить, и не найти в домене ничего: ни ошибки, ни серой строки — отсутствие. Самая неудобная форма, которую может принять отказ. Ключ склейки двух источников — `ref`, а не номер камеры: свой номер 7 есть у каждого кластера.
+
 ## Step 3 — One cause
 
 The heartbeat carries `server` — the Nomad client the worker runs on. So when a server dies, its workers go silent *together*, and the console can say so once instead of greying a hundred cameras:
