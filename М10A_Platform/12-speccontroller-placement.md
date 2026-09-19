@@ -146,16 +146,27 @@ def register_constraint(name: str, fn) -> None:
     def holder_near(self, uid) -> tuple[str, str] | None:
         if self.spec.near == "none":
             return None
+        want = self.near_id(uid)
         for w, hb in heartbeats(self.objects, self.spec.near + "/").items():
             if self.wall() - hb.ts > 45.0:
                 continue
             for st in hb.status:
-                if str(st.get("id")) == str(uid) and st.get("phase") == "running":
+                if str(st.get("id")) == str(want) and st.get("phase") == "running":
                     return w, hb.extra.get("server", "?")
         return None
+
+    def near_id(self, uid) -> str:
+        if self.spec.near_by == "id":
+            return str(uid)
+        row = self.unit(uid)
+        return str(row.get(self.spec.near_by, "") or "") if row else ""
 ```
 
 `near: rec` в спецификации VMS означает: «эта единица предпочитает стоять рядом с воркером подсистемы `rec`, который держит единицу с тем же идентификатором». Метод ищет такого воркера в **чужих** heartbeat'ах — по `status`, где каждая запись называет свой `id` и фазу.
+
+Чью именно единицу — отвечает `near_id`, и в этом вся разница между двумя формами. По умолчанию — свою собственную, и для VMS этого достаточно: камера 7 и запись 7 названы одной строкой, потому что `rec.subsystem.yaml` говорит `id: cam`. Подсистема, чьи единицы названы иначе, обязана сказать **по какому полю** искать: у детектора единица — `7-linecross`, и запись с таким идентификатором не держит никто. `near: {sub: rec, by: cam}` читает поле строки и ищет запись `7`.
+
+Строка читается только во второй форме — подсистема, разделяющая чужую нумерацию, не платит за те, которые её не разделяют. И заметьте, что `near_id` может вернуть пустую строку: поле не заполнено, следовать не за кем. Это не ошибка, а обычный ответ — близость всё равно предпочтение, и пустой пул из неё не получается.
 
 ### `home` — где единица живёт, и почему это не метка
 

@@ -1,0 +1,62 @@
+# Archive scans, as the platform sees them: the FIFTH subsystem, and the first whose unit of work ENDS.
+#
+# A unit is one model over one interval of one recording — "look for this plate in camera 7 between
+# 10:00 and 11:00 yesterday" — created by the operator from the timeline, not from the camera's page.
+# Everything about it is the same as `det` except the two things that follow from having both ends:
+#
+#   * it reads `rec/<rec>/manifest.jsonl` instead of subscribing to a fan-out (`vms/scan.py`), so it wants to
+#     be where that footage is — an affinity, since the resource will serve the bytes over HTTP if it is not;
+#   * it finishes, and nothing in the placement vocabulary has a word for that yet — `enabled` is read
+#     by workers, never by the controller, which places a disabled row like any other.
+#
+# Its events go to `detjob/<job>/e<epoch>/` on the resource — its OWN tree, not `det/<unit>/`. A scan of
+# last Tuesday writes events dated last Tuesday, and merging them into the live detector's buckets would
+# make "what did the detector see on Tuesday" unanswerable and a second run double every count. Separate
+# trees also make a re-run free to compare and a deletion a deletion of one directory.
+name: detjob
+unit:
+  rows: jobs                         # detjob/jobs/<name>
+  id: name                           # the console composes it: "<cam>-<kind>-<n>", unique per run
+  fields:
+    name:    {type: string, required: true}
+    cam:     {type: string, required: true}      # the camera the footage is of — and what every event line carries,
+                                                 # because `/events?cam=7` finds a scan's results by the LINE, not the tree
+    rec:     {type: string, required: true}      # the RECORDING whose manifest holds the footage. `id: cam` in
+                                                 # rec.subsystem.yaml makes it the camera's id today and need not tomorrow;
+                                                 # naming it separately is what keeps that day a YAML edit
+    kind:    {type: string, required: true}      # which model: motion | linecross | lpr | …
+    params:  {type: string}                      # the model's settings, opaque to the platform — and SMALL
+    mask:    {type: blob}                        # sha256-<hex>; the bytes are in the object store (М10A Lesson 26)
+    from:    {type: float,  required: true}      # unix seconds, inclusive — MEDIA time, not the time the job was made
+    to:      {type: float,  required: true}      # unix seconds, exclusive
+    state:   {type: string, default: queued}     # queued | running | done | failed — see below
+    labels:  {type: list,   default: ["gpu"]}    # where it may run: a worker whose server has these labels
+placement:
+  capacity:   {from: capacity, fallback: 2}      # scans a worker will carry at once — its OWN number, in its OWN
+                                                 # heartbeat. This is why a scan is a subsystem and not a flag on a
+                                                 # `det` row: a retro-search must not be able to spend the streams
+                                                 # live detection is running on. Two budgets, one worker process.
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   resource                           # it writes its events into the resource on its own server
+  near:       {sub: rec, by: rec}                # An affinity, never a filter: be beside the recorder holding the
+                                                 # recording this scan reads. Then the footage is on local disks and
+                                                 # nothing crosses the network — which is the whole point, since a scan
+                                                 # reads hours of video as fast as the disk will give it.
+                                                 # `by: rec` follows the RECORDING the job names, not the job's own id.
+                                                 # Where it cannot be had, the scan is placed on any GPU server and
+                                                 # fetches the footage through the resource's own door — `GET
+                                                 # /manifest/<unit>` and `GET /segment/<path>` with `Range`, the same
+                                                 # one the console plays from (Lesson 11). It costs network, and that
+                                                 # cost is exactly what the affinity exists to avoid, not a reason the
+                                                 # job cannot run.
+  # No `home`, for the same reason `det` has none: nobody owns the answer to "which server does this scan
+  # belong on". The footage has a home; the work does not.
+  tie_break:  most-free-capacity
+snapshot: [name, cam, kind, state]               # what leaves the cluster: enough for a domain to say "camera 7 is
+                                                 # being scanned", nothing more. `from`/`to`/`rec` have no
+                                                 # reader above the cluster, and М10B Lesson 19's rule holds: not
+                                                 # being a secret is a reason not to hide a field, never a reason to
+                                                 # publish it.
+console:
+  running: jobs_running              # detjob_jobs_running: scans whose worker is decoding right now

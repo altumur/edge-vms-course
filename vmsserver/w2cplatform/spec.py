@@ -176,6 +176,12 @@ class SubsystemSpec:
     servers: str = "shared"       # the default of the `servers` policy knob: shared | distinct (the console may change it)
     tie_break: str = "most-free-capacity"
     near: str = "none"            # a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
+    # WHICH unit of that subsystem. `id` — the same unit id, which is what `near: <sub>` means and all the
+    # VMS needed while the camera and its recording were the same string. A subsystem whose units are named
+    # for something else has to say so: a detector's unit is `7-linecross`, no recorder ever reports that id,
+    # and `near: rec` on it would match nothing — an affinity that reads as followed and is not. So
+    # `near: {sub: rec, by: cam}` — follow the recorder holding the recording my `cam` field names.
+    near_by: str = "id"
     # `home: <field>` — the server named in that field of the unit's own row is where it prefers to run;
     # `home: near` — wherever the subsystem this one follows is. A PREFERENCE and not a label: a label is a
     # filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
@@ -203,16 +209,34 @@ class SubsystemSpec:
             if f.default is not None:
                 f.default = f.parse(f.default) if f.type != "string" else str(f.default)
         derived = [Derived(x["row"], dict(x.get("items", {})), x.get("on_delete")) for x in unit.get("derived", [])]
+        # `snapshot:` LEFT OUT means "every field that may go" — a convenience, not a decision.
+        # `snapshot: []` means "no field of the row leaves the cluster", which is a decision. The two were
+        # one thing here for as long as this read `list(d.get("snapshot", [])) or [every field]`: an empty
+        # list is falsy, so a spec declaring "publish nothing" published everything, and its author would
+        # have learned that from М12 rather than from the file they wrote.
+        #
+        # An empty list is not an empty object. `id`, `revision`, `worker` and `server` are structural and
+        # go either way, because "which unit is where" is the snapshot's other job and the layer above is
+        # built on it. What `[]` buys is that nothing an OPERATOR typed leaves the cluster.
+        #
+        # `snapshot:` with nothing after it is neither, so it is refused rather than guessed: the author
+        # meant one of the two and the file does not say which.
+        if "snapshot" in d and d["snapshot"] is None:
+            raise ValueError(f"spec {d['name']}: `snapshot:` with nothing after it says neither — write "
+                             f"`snapshot: []` for no fields, or leave the key out for every field")
+        declared = d.get("snapshot")
         cap = pl.get("capacity", {}) or {}
         spec = cls(name=d["name"], rows=unit.get("rows", "units"), id=str(unit.get("id", "numeric")), fields=fields,
                    derived=derived, capacity_from=cap.get("from", "capacity"), capacity_fallback=int(cap.get("fallback", 50)),
                    headroom_from=(pl.get("headroom", {}) or {}).get("from", "headroom"),
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
-                   near=str(pl.get("near", "none")), spread_by=str(pl.get("spread_by", "") or ""),
+                   near=str((pl.get("near") or {}).get("sub", "none") if isinstance(pl.get("near"), dict) else pl.get("near", "none")),
+                   near_by=str((pl.get("near") or {}).get("by", "id") if isinstance(pl.get("near"), dict) else "id"),
+                   spread_by=str(pl.get("spread_by", "") or ""),
                    home=str(pl.get("home", "") or ""),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
-                   snapshot=list(d.get("snapshot", []) or [n for n, f in fields.items()
-                                                          if not is_secret_field(n) and f.type != "blob"]),
+                   snapshot=(list(declared) if declared is not None else
+                             [n for n, f in fields.items() if not is_secret_field(n) and f.type != "blob"]),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")))
         # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
@@ -232,6 +256,10 @@ class SubsystemSpec:
         unknown_snap = [n for n in spec.snapshot if n not in fields]
         if unknown_snap:
             raise ValueError(f"spec {spec.name}: snapshot names no field: {unknown_snap}")
+        if spec.near_by != "id" and spec.near_by not in fields:
+            raise ValueError(f"spec {spec.name}: near.by names no field: {spec.near_by!r}")
+        if spec.near_by != "id" and spec.near == "none":
+            raise ValueError(f"spec {spec.name}: near.by needs a near to follow")
         if spec.home == "near" and spec.near == "none":
             raise ValueError(f"spec {spec.name}: home: near needs a near to follow")
         if spec.home and spec.home != "near" and spec.home not in fields:
@@ -259,6 +287,7 @@ class SubsystemSpec:
         """The operator's rows: what a console (one per server, any of them) may write — never placement."""
         out = [f"{self.name}/{self.rows}/*", f"{self.name}/next_id", f"{self.name}/idem/*",   # idem: a retried POST answered the same by ANY instance
                f"{self.name}/policy",                                                         # the administrator's knobs: servers distinct | shared
+               f"{self.name}/sweep",                                                          # what the blob sweep marked, and when
                DRAIN_KEY]                                                                     # "this machine is about to stop": the operator's, and the same row for every subsystem
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")
@@ -688,14 +717,24 @@ class SpecController(Controller):
     def holder_near(self, uid) -> tuple[str, str] | None:
         if self.spec.near == "none":
             return None
+        want = self.near_id(uid)
         from .console import heartbeats                            # the read model's scan, without the age filter
         for w, hb in heartbeats(self.objects, self.spec.near + "/").items():
             if self.wall() - hb.ts > 45.0:
                 continue
             for st in hb.status:
-                if str(st.get("id")) == str(uid) and st.get("phase") == "running":
+                if str(st.get("id")) == str(want) and st.get("phase") == "running":
                     return w, hb.extra.get("server", "?")
         return None
+
+    # Whose unit of the followed subsystem this one wants to be beside: its own id by default, or the
+    # string in the field `near.by` names. The row is read for the second form only — a subsystem whose
+    # units share the other's naming pays nothing for the ones that do not.
+    def near_id(self, uid) -> str:
+        if self.spec.near_by == "id":
+            return str(uid)
+        row = self.unit(uid)
+        return str(row.get(self.spec.near_by, "") or "") if row else ""
 
     # Where this unit belongs, for `ensure_home`. `home` is either the name of a field on the row — the
     # server an operator named — or the literal `near`, meaning "wherever the thing I follow is".
@@ -958,7 +997,17 @@ class SpecController(Controller):
     # the same object twice, and two units with the same mask share one object.
     def put_blob(self, data: bytes) -> str:
         """Store the bytes; return the digest to put in the row."""
+        import json
         d = blob_digest(data)
+        # These exact bytes may be sitting on the sweep's list right now — the same mask uploaded again
+        # for a second unit, while the copy the first unit stopped naming is marked for collection.
+        # Taking it off the list makes the sweep's own CAS fail, and a sweep that loses that CAS deletes
+        # nothing at all. The alternative is a lock, for a window two store calls wide.
+        key = self.sub.sweep_key()
+        items, idx = self.vars.get(key)
+        marked = json.loads((items or {}).get("digests", "[]"))
+        if d in marked:
+            self.vars.put(key, {**items, "digests": json.dumps([x for x in marked if x != d])}, cas=idx)
         self.objects.put(self.sub.blob_key(d), data)
         return d
 
@@ -980,6 +1029,63 @@ class SpecController(Controller):
     def blobs_referenced(self) -> set[str]:
         names = [n for n, f in self.spec.fields.items() if f.type == "blob"]
         return {r[n] for r in self.units() for n in names if is_digest(r.get(n) or "")}
+
+    # -- the sweep: collecting blobs nothing names any more ------------------------------------------
+    # Nothing else in the platform deletes an object, and this is the one thing that has to. A blob key is
+    # the digest of its bytes, so every edit of a `blob` field makes a NEW permanent object: unlike a
+    # heartbeat, whose key is reused by the next instance of the slot, blobs grow with the number of edits
+    # over the system's lifetime and nothing ever reclaims them.
+    #
+    # The obvious implementation is wrong, and it is worth being precise about why. "Delete every blob no
+    # row names" races with `put_blob`: the object is written BEFORE the row that names it (Lesson 26), so
+    # a sweep landing between those two writes sees an unreferenced blob and deletes the bytes a row is
+    # about to point at. The unit then cannot start, and the operator's upload silently did nothing.
+    #
+    # So noticing and deleting are put in DIFFERENT PASSES:
+    #
+    #   mark   nothing is deleted. The digests that no row names are written to `<name>/sweep` with the
+    #          time. A blob created after this moment is not on the list, which is where the grace period
+    #          comes from — no timestamps on objects required, and `variables://` has none to offer.
+    #   sweep  one pass later, and only after `grace`: the marked digests are checked AGAIN, the row is
+    #          cleared by CAS on the index just read, and only then are the objects removed.
+    #
+    # The order of those last two is the whole safety argument. Clearing first means a lost CAS — anyone
+    # touched the row since the mark — costs nothing: not one object has been deleted yet. Deleting first
+    # would mean acting on a decision that something has already contradicted.
+    #
+    # `limit` is not a nicety either: `<name>/sweep` is a row, and a row has the store's ceiling over it
+    # (Lesson 26). The sweep is subject to the rule it was written under.
+    SWEEP_LIMIT = 64
+    SWEEP_GRACE = 300.0
+
+    def sweep_blobs(self, limit: int = SWEEP_LIMIT, grace: float = SWEEP_GRACE) -> dict:
+        """One pass: marks, or sweeps, or waits. `{marked, deleted, waiting}`."""
+        import json
+        names = [n for n, f in self.spec.fields.items() if f.type == "blob"]
+        if not names:
+            return {"marked": 0, "deleted": 0, "waiting": 0}
+        key, now = self.sub.sweep_key(), self.wall()
+        items, idx = self.vars.get(key)
+        marked = json.loads((items or {}).get("digests", "[]"))
+
+        if not marked:                                   # -- mark: notice, write it down, delete nothing
+            referenced = self.blobs_referenced()
+            prefix = self.sub.blobs_prefix()
+            orphans = sorted(k[len(prefix):] for k in self.objects.list(prefix)
+                             if k[len(prefix):] not in referenced)[:limit]
+            if orphans:
+                self.vars.put(key, {"at": str(now), "digests": json.dumps(orphans)}, cas=idx)
+            return {"marked": len(orphans), "deleted": 0, "waiting": 0}
+
+        if now - float((items or {}).get("at", 0)) < grace:
+            return {"marked": 0, "deleted": 0, "waiting": len(marked)}
+
+        # -- sweep: check again, clear the decision, and only then remove the bytes
+        referenced = self.blobs_referenced()
+        doomed = [d for d in marked if d not in referenced]
+        self.vars.put(key, {"at": str(now), "digests": "[]"}, cas=idx)   # Conflict here deletes nothing
+        deleted = sum(1 for d in doomed if self.objects.delete(self.sub.blob_key(d)))
+        return {"marked": 0, "deleted": deleted, "waiting": 0}
 
     # Units and placement for the layer above, ONE OBJECT PER WORKER: `<name>/snapshot/<worker>` holding
     # `{cluster, worker, ts, <rows>: [{id, <snapshot fields>, revision, worker, server}]}`, plus
@@ -1010,6 +1116,29 @@ class SpecController(Controller):
         shards = self.snapshot_shards()
         units = [u for sh in shards.values() for u in sh[self.spec.rows]]
         return {"cluster": self.cluster, "ts": self.wall(), self.spec.rows: units}
+
+    # How old the published snapshot is, in seconds — `None` when nothing has been published.
+    #
+    # Read from the STORE, not kept in this process: the controller has no port to serve it from, it is
+    # restarted freely, and two of them may be running. Whoever can read the objects can answer this, which
+    # is what makes it a number a console can put on `/metrics`.
+    #
+    # The age of the whole is the age of the STALEST shard, the same rule М12's reader uses: a directory is
+    # only as fresh as its oldest part, and taking the newest would report an RPO better than the real one —
+    # which is exactly the direction a number like this must never be wrong in.
+    def snapshot_age(self, now: float | None = None) -> float | None:
+        import json
+        oldest = None
+        prefix = self.sub.snapshot_prefix()
+        for key in self.objects.list(prefix):
+            raw = self.objects.get(key)
+            if not raw:
+                continue
+            ts = float(json.loads(raw).get("ts", 0))
+            oldest = ts if oldest is None else min(oldest, ts)
+        if oldest is None:
+            return None
+        return max(0.0, (self.wall() if now is None else now) - oldest)
 
     # Writes one object per worker under `<name>/snapshot/`.
     def publish_snapshot(self) -> None:
