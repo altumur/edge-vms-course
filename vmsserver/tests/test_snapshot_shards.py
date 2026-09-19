@@ -123,3 +123,52 @@ def test_the_shard_fits_where_the_one_object_did_not():
     assert biggest <= CAP // 3, f"a shard is {biggest} B: the margin the heartbeat has is gone"
     print(f"\n  600 камер: один объект {one_object / 1024:.0f} КиБ (потолок {CAP // 1024}), "
           f"крупнейший шард {biggest / 1024:.1f} КиБ — запас x{CAP / biggest:.1f}")
+
+
+# -- what an empty `snapshot:` means, and what it used to mean --------------------------------------
+def _spec(**over):
+    from w2cplatform.spec import SubsystemSpec
+    d = {"name": "thing", "unit": {"rows": "things", "id": "name", "fields": {
+        "name": {"type": "string", "required": True}, "note": {"type": "string"},
+        "api_secret": {"type": "string"}, "mask": {"type": "blob"}}},
+        "placement": {"capacity": {"from": "capacity", "fallback": 50}}}
+    d.update(over)
+    return SubsystemSpec.from_dict(d)
+
+
+def test_declaring_no_fields_is_not_declaring_every_field():
+    """The defect this pair exists for: an empty list is falsy, so `snapshot: []`
+    used to fall through to the default and publish everything. A spec author who
+    declared "publish nothing" would have found out from М12."""
+    assert _spec(snapshot=[]).snapshot == []
+    assert _spec().snapshot == ["name", "note"]                  # absent: every field that may go
+    assert "api_secret" not in _spec().snapshot and "mask" not in _spec().snapshot
+
+
+def test_an_empty_snapshot_still_says_where_the_unit_is():
+    """`[]` is not an empty object. Which unit is where is the snapshot's other
+    job and the layer above is built on it; what `[]` buys is that nothing an
+    operator typed leaves the cluster."""
+    from w2cplatform.spec import SpecController
+    box = Box()
+    spec = _spec(snapshot=[])
+    ctl = SpecController(spec, box.vars, box.objects, wall=box.wall)
+    box.objects.put(spec.sub.heartbeat_key("w-1"),
+                    Heartbeat("w-1", box.wall(), [], {"server": "srv-1", "capacity": 50, "headroom": 50}).to_bytes())
+    ctl.create({"name": "one", "note": "the operator typed this"})
+    ctl.ensure_placed()
+
+    rows = ctl.snapshot()["things"]
+    assert len(rows) == 1
+    assert rows[0]["id"] == "one" and rows[0]["worker"] == "w-1" and rows[0]["server"] == "srv-1"
+    assert "note" not in rows[0]                                 # …and nothing the operator typed
+
+
+def test_a_bare_snapshot_key_is_refused_rather_than_guessed():
+    """`snapshot:` with nothing after it is neither of the two meanings. Guessing
+    either one is how a spec says something its author did not."""
+    try:
+        _spec(snapshot=None)
+        raise AssertionError("a bare `snapshot:` was accepted")
+    except ValueError as e:
+        assert "`snapshot: []`" in str(e) and "leave the key out" in str(e)
