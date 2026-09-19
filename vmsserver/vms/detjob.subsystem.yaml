@@ -52,6 +52,14 @@ placement:
                                                  # job cannot run.
   # No `home`, for the same reason `det` has none: nobody owns the answer to "which server does this scan
   # belong on". The footage has a home; the work does not.
+  retire_when: {field: state, in: [done, failed]}   # the word the other four subsystems never needed: this
+                                                 # unit's work ENDS. The console's reaper moves `state` when
+                                                 # the worker holding the job says so, and from that moment
+                                                 # the controller gives the assignment back and never places
+                                                 # the row again. In the ROW, because a job that was only
+                                                 # `done` in a heartbeat would be un-placed, dropped by its
+                                                 # worker, forgotten by the next heartbeat — and started
+                                                 # again from the top, for ever.
   tie_break:  most-free-capacity
 snapshot: [name, cam, kind, state]               # what leaves the cluster: enough for a domain to say "camera 7 is
                                                  # being scanned", nothing more. `from`/`to`/`rec` have no

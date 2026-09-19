@@ -194,6 +194,18 @@ class SubsystemSpec:
     # is, and a second copy on the same server is not a second copy. Unplaceable while no other server
     # qualifies, and that is the honest answer — `/unplaceable` says so rather than quietly co-locating.
     spread_by: str = ""
+    # `retire_when: {field: state, in: [done, failed]}` — a unit whose row says one of those values is
+    # FINISHED, and finished work is not placed. The first subsystem to need it is `detjob`, whose unit
+    # ends; everything before it ran until an operator said stop.
+    #
+    # Not `enabled`. That field is read by workers, never here: a disabled camera keeps its assignment and
+    # its line in the console's list, and a unit that has to STAY VISIBLE while doing nothing is a
+    # different thing from one that is over. Saying which field and which values, per subsystem, is the
+    # difference between the two — and it is the row that says it, not a heartbeat: un-placing a finished
+    # unit makes its worker drop it, which makes the heartbeat stop mentioning it, which would erase the
+    # only evidence it was ever finished. It would then be placed again, and start over, for ever.
+    retire_field: str = ""
+    retire_values: tuple = ()
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
     running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
@@ -234,6 +246,8 @@ class SubsystemSpec:
                    near_by=str((pl.get("near") or {}).get("by", "id") if isinstance(pl.get("near"), dict) else "id"),
                    spread_by=str(pl.get("spread_by", "") or ""),
                    home=str(pl.get("home", "") or ""),
+                   retire_field=str((pl.get("retire_when") or {}).get("field", "") or ""),
+                   retire_values=tuple(str(v) for v in ((pl.get("retire_when") or {}).get("in") or [])),
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=(list(declared) if declared is not None else
                              [n for n, f in fields.items() if not is_secret_field(n) and f.type != "blob"]),
@@ -256,6 +270,11 @@ class SubsystemSpec:
         unknown_snap = [n for n in spec.snapshot if n not in fields]
         if unknown_snap:
             raise ValueError(f"spec {spec.name}: snapshot names no field: {unknown_snap}")
+        if spec.retire_field and spec.retire_field not in fields:
+            raise ValueError(f"spec {spec.name}: retire_when names no field: {spec.retire_field!r}")
+        if bool(spec.retire_field) != bool(spec.retire_values):
+            raise ValueError(f"spec {spec.name}: retire_when needs both a field and a non-empty `in` — "
+                             f"a predicate that matches nothing retires nothing, silently")
         if spec.near_by != "id" and spec.near_by not in fields:
             raise ValueError(f"spec {spec.name}: near.by names no field: {spec.near_by!r}")
         if spec.near_by != "id" and spec.near == "none":
@@ -536,6 +555,33 @@ class SpecController(Controller):
             gone.append(uid)
         return gone
 
+    # Whether this row says the work is over — `retire_when` in the spec, and nothing at all for the
+    # subsystems that never end.
+    def retired(self, row: dict | None) -> bool:
+        if not self.spec.retire_field or row is None:
+            return False
+        return str(row.get(self.spec.retire_field, "")) in self.spec.retire_values
+
+    # The other half of `retire_when`: a unit that FINISHED while placed gives its assignment back, so the
+    # worker drops it and the budget it was holding is free again. Without this the predicate below only
+    # stops the next placement, and a cluster's whole capacity ends up held by work that is over.
+    #
+    # The reason says which value did it, because "done" and "failed" are a very different message to the
+    # person reading `/where/<id>`.
+    def unplace_retired(self) -> list:
+        """Every placement whose unit's row says the work is over loses its assignment."""
+        done = []
+        for p in self.vars.list(self.sub.config("placement") + "/"):
+            uid = self.spec.parse_id(p.rsplit("/", 1)[1])
+            it, _ = self.vars.get(p)
+            if not it or not it.get("worker") or not self.retired(self.unit(uid)):
+                continue
+            state = str(self.unit(uid).get(self.spec.retire_field, ""))
+            self.assign_remove(it["worker"], str(uid))
+            self.write(p, lambda i: {"worker": "", "reason": state, "at": self.wall(), "rev": int(i.get("rev", 0)) + 1})
+            done.append(uid)
+        return done
+
     # The row, or `None` if absent or deleted.
     def unit(self, uid) -> dict | None:
         it, _ = self.vars.get(self._row_key(uid))
@@ -814,8 +860,8 @@ class SpecController(Controller):
         if have:
             return have
         row = self.unit(uid)
-        if row is None:
-            return None
+        if row is None or self.retired(row):
+            return None                                 # finished work is not placed, and not "unplaceable" either
         pool = self.eligible(row, self._pool(workers))
         best, free, near = self._pick(pool, uid)
         if best is None:
@@ -843,6 +889,7 @@ class SpecController(Controller):
     # capacity 3; the seventh waits; a third worker arriving takes only the seventh.
     def ensure_placed(self, workers: list[str] | None = None) -> list[Placement]:
         self.unplace_deleted()
+        self.unplace_retired()
         out = []
         for r in self.units():
             pl = self.place(r["id"], workers)
@@ -856,7 +903,8 @@ class SpecController(Controller):
         """Units nothing live can serve — the console's honest answer, with the labels named."""
         live = self._pool(None)
         return [{"id": r["id"], "labels": r.get("labels", []), "workers_live": len(live)}
-                for r in self.units() if self.placement(r["id"]) is None and not self.eligible(r, live)]
+                for r in self.units()
+                if self.placement(r["id"]) is None and not self.retired(r) and not self.eligible(r, live)]
 
     # The placed worker.
     def where(self, uid) -> str | None:
