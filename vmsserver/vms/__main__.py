@@ -326,8 +326,8 @@ def _sweep_loop(controllers, every: float = 60.0) -> None:
 # The console's second pass, beside the sweep: a job's row follows the worker that finished it. The worker
 # cannot write the row (its ACL forbids configuration) and the controller must not (one row, one writer),
 # so the console — which already reads these heartbeats — is where the fact lands. See `vms/jobs.py`.
-def _reap_loop(controllers, requests=(), every: float = 30.0) -> None:
-    from .jobs import clear_requests, reap
+def _reap_loop(controllers, requests=(), rec_ctl=None, every: float = 30.0) -> None:
+    from .jobs import ask_for_footage, clear_requests, reap
     while not stop.is_set():
         for c in controllers:
             try:
@@ -336,6 +336,13 @@ def _reap_loop(controllers, requests=(), every: float = 30.0) -> None:
                     logging.info("%s: %d done, %d failed", c.spec.name, moved["done"], moved["failed"])
             except Exception:                         # noqa: BLE001
                 logging.exception("the job reaper failed in %s — finished jobs will stay open", c.spec.name)
+        for c in controllers if rec_ctl is not None else ():
+            try:
+                asked = ask_for_footage(c, rec_ctl)       # a job stuck on footage the DEVICE has: ask the recorder
+                if asked:
+                    logging.info("%s: asked the recorder for %d range(s)", c.spec.name, asked)
+            except Exception:                             # noqa: BLE001
+                logging.exception("asking for footage failed in %s — those jobs will wait", c.spec.name)
         for c in requests:                            # the same division, one row simpler: fetched, so gone
             try:
                 gone = clear_requests(c)
@@ -367,7 +374,7 @@ def console() -> None:
     det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
     job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
     threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl],), daemon=True).start()
-    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl]), daemon=True).start()
+    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl], rec_ctl), daemon=True).start()
     stop.wait()
     srv.shutdown()
 

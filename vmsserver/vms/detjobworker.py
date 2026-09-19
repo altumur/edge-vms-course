@@ -30,6 +30,7 @@ import os
 import time
 
 from w2cplatform import runtime
+from w2cplatform.console import holder_of
 from w2cplatform.contract import Worker
 from w2cplatform.events import EventLog
 from w2cplatform.variables import Variables
@@ -74,6 +75,16 @@ class DetJobWorker(Worker):
         it, _ = self.vars.get(DETJOB.config("jobs", job))
         return DETJOB_SPEC.row(it) if it and it.get("deleted") != "true" else None
 
+    # Whether the camera's own device holds any of `[t0, t1)`. The summary in the HOLDER's heartbeat —
+    # `from`, `to`, `fragments` — never an index: the device has no manifest and this is all anyone gets
+    # (М10B Lesson 15). Enough to tell "nobody recorded this" from "somebody did, just not us".
+    def device_has(self, cam, t0: float, t1: float) -> bool:
+        found = holder_of(self.objects, "vms/", str(cam), self.wall(), field="coverage")
+        if found is None or not found[2].get("coverage"):
+            return False
+        cov = found[2]["coverage"]
+        return float(cov["to"]) > t0 and float(cov["from"]) < t1
+
     # -- one stretch, decoded from the file's head and reported only inside the window ------------------
     #
     # `ts` starts at the SEGMENT's start and not the stretch's: a file opened at 10:00 has to be decoded
@@ -105,12 +116,22 @@ class DetJobWorker(Worker):
             scans = plan(self.archive_root, row["rec"], row["from"], row["to"])
             log_ = ScanLog(self.archive_root, job)
             if not scans:
-                # Not "no events": no FOOTAGE, here. The recording may live on another server — `near` is a
-                # preference, so a job can be placed away from what it reads — and saying which of the two
-                # it is, is the whole difference between "nothing happened" and "I could not look".
+                # Not "no events": no FOOTAGE, here. Two different silences, and which one it is decides
+                # what happens next — so the worker says which.
+                #
+                # If the DEVICE has those minutes (a card, an NVR — М10B Lesson 15), this is not a dead end
+                # but a step: the footage exists, it is simply not ours yet. Asking the scan to read it
+                # over the device's playback door would be wrong twice — that door admits two sessions per
+                # device and they belong to the operator watching and to the recorder saving — so the job
+                # says `fetching`, the console asks the recorder for the range (Lesson 16), and the scan
+                # runs afterwards over footage we own, unchanged.
                 self._stop(job)
-                self.status_by_unit[job] = self._status(job, row, "waiting",
-                                                        why="no footage for that interval on this server — the recording may be on another server")
+                if self.device_has(row["cam"], row["from"], row["to"]):
+                    self.status_by_unit[job] = self._status(job, row, "fetching",
+                                                            why="the device has these minutes and we do not — asking the recorder")
+                else:
+                    self.status_by_unit[job] = self._status(job, row, "waiting",
+                                                            why="no footage for that interval on this server — the recording may be on another server")
                 continue
 
             left = remaining(scans, log_)

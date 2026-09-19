@@ -193,3 +193,46 @@ def test_a_stretch_that_failed_halfway_is_not_recorded_as_done():
     assert len(log.read()) == 0, "a stretch that never finished is written down as finished"
     w2 = _worker(box, name="j-1"); w2.reconcile_once()
     assert len(ScanLog(box.archive, "7-lpr-1").read()) == 3                     # it was redone, and finished
+
+
+def _holder_of_camera(box, cam, cov=None):
+    """A VMS worker holding the camera, its status carrying the DEVICE's coverage
+    summary — `from`, `to`, `fragments`, never an index (М10B Lesson 15)."""
+    from w2cplatform.console import Heartbeat
+    st = {"id": str(cam), "phase": "running", "live_url": f"rtsp://srv-1:8554/{cam}"}
+    if cov is not None:
+        st["coverage"] = cov
+    box.objects.put("vms/heartbeats/w-1",
+                    Heartbeat("w-1", box.wall(), [st], {"server": "srv-1", "capacity": 50, "headroom": 49}).to_bytes())
+
+
+def test_footage_the_device_has_and_we_do_not_is_a_step_not_a_dead_end():
+    """`fetching`, not `waiting`: the minutes exist, they are simply not ours yet.
+    The console turns this into a request to the recorder; the scan never opens the
+    device's own door, because those two sessions belong to the operator watching
+    and to the recorder saving."""
+    box = Box(); _job(box)                                                  # no manifest on this server
+    _holder_of_camera(box, 7, {"from": m(-100), "to": m(100), "fragments": 5})
+    w = _worker(box)
+    w.reconcile_once()
+    st = w.status_by_unit["7-lpr-1"]
+    assert st["phase"] == "fetching" and "device" in st["why"]
+    assert "7-lpr-1" not in w.epochs                                        # nothing is being written yet
+
+
+def test_nobody_recorded_it_is_a_different_answer():
+    box = Box(); _job(box)
+    _holder_of_camera(box, 7, None)                                         # held, but the device has no archive
+    w = _worker(box)
+    w.reconcile_once()
+    assert w.status_by_unit["7-lpr-1"]["phase"] == "waiting"
+
+
+def test_a_device_whose_coverage_misses_the_interval_is_not_asked():
+    """The card keeps three days. A search over last month is not a fetch that will
+    ever succeed, and saying `fetching` would leave the job hopeful for ever."""
+    box = Box(); _job(box, frm=0, to=10)
+    _holder_of_camera(box, 7, {"from": m(500), "to": m(900), "fragments": 5})
+    w = _worker(box)
+    w.reconcile_once()
+    assert w.status_by_unit["7-lpr-1"]["phase"] == "waiting"
