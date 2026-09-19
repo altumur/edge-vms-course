@@ -193,9 +193,20 @@ def _controller_loop(ctl) -> None:
             ctl.ensure_placed()                       # deleted rows unplaced; new units onto the workers it sees
             ctl.redistribute()                        # units of a RELEASED slot (scale-in) onto the rest
             ctl.ensure_home(1)                        # ONE unit a pass back to the server its row names, if it is back
-            ctl.publish_snapshot()
         except Exception:                             # noqa: BLE001
             logging.exception("placement pass failed")
+        # Its OWN try, and this is not tidiness. Publishing is the last call in the pass, so when it threw
+        # inside the block above, placement had already succeeded — and the log said "placement pass
+        # failed", naming the one thing that had not. The reverse hid the other half: a placement that
+        # threw skipped the publish, the layer above went quietly stale, and the word "snapshot" appeared
+        # nowhere. Two jobs, two failures, two sentences.
+        try:
+            ctl.publish_snapshot()
+        except Exception:                             # noqa: BLE001
+            # What the layer above loses by this: its copy stops ageing forward. The age itself is on
+            # `/metrics` as `<sub>_snapshot_age_seconds`, read from the store rather than kept in this
+            # process, so it survives a restart and any console can answer it.
+            logging.exception("publishing the snapshot failed — the layer above is now reading a stale copy")
         stop.wait(5)
 
 
@@ -267,6 +278,27 @@ def gateway() -> None:
 #   this box's archive and write operator marks into its own bucket.
 # - `serve(ctl, archive, $CONSOLE_HOST, $CONSOLE_PORT)` from `vms/console.py` starts the
 #   `ThreadingHTTPServer` in a daemon thread; the main thread waits on `stop`, then `srv.shutdown()`.
+# Housekeeping the console owns BECAUSE THE ACL SAYS SO. `<sub>/blobs/*` is the console's to write
+# (Lesson 27), so it is the console's to collect; the controller could not delete a blob if it wanted to,
+# and that is the right way round — the process that creates a thing is the one that can be trusted to
+# know when nothing names it.
+#
+# Its own loop and its own log line. That is Lesson 28 applied before the same mistake is made twice: a
+# sweep that fails inside somebody else's `try` would be reported as somebody else's failure, and the
+# consequence — blobs accumulating with nothing reclaiming them — is exactly the kind that shows up as a
+# disk full a year later.
+def _sweep_loop(controllers, every: float = 60.0) -> None:
+    while not stop.is_set():
+        for c in controllers:
+            try:
+                r = c.sweep_blobs()
+                if r["deleted"]:
+                    logging.info("swept %d blob(s) nothing names in %s", r["deleted"], c.spec.name)
+            except Exception:                         # noqa: BLE001
+                logging.exception("the blob sweep failed in %s — nothing is reclaiming its blobs", c.spec.name)
+        stop.wait(every)
+
+
 def console() -> None:
     """The screen and the API: its own process, count as many as you like, a
     token for the operator's rows and nothing else."""
@@ -283,6 +315,8 @@ def console() -> None:
                 live_ctl=SpecController(LIVE_SPEC, vars_, objects),
                 mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects)})
     logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
+    det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
+    threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl],), daemon=True).start()
     stop.wait()
     srv.shutdown()
 

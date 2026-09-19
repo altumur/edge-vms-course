@@ -76,7 +76,7 @@ type Move struct {
 }
 
 type FieldSpec struct {
-	Name     string
+	Name string
 	// string | int | float | bool | list | url | blob. A `blob` holds a DIGEST (`sha256-<hex>`); the
 	// bytes live in the object store under `<name>/blobs/<digest>` and the platform never looks inside
 	// them — see blobs.go.
@@ -356,6 +356,7 @@ func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
 func (s *SubsystemSpec) ACLConsole() []string {
 	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*", // idem: a retried POST answered the same by ANY instance
 		s.Name + "/policy", // the administrator's knobs: servers shared | distinct
+		s.Name + "/sweep",  // what the blob sweep marked, and when
 		DrainKey}           // "this machine is about to stop": the operator's, and the same row for every subsystem
 	for _, d := range s.Derived {
 		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")

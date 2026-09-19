@@ -10,12 +10,15 @@
 package w2cplatform_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
 	"vmsserver/testbox"
+	"vmsserver/vms"
 	p "vmsserver/w2cplatform"
 )
 
@@ -342,5 +345,220 @@ func TestTheThreeObjectDirectoriesHaveOneWriterEach(t *testing.T) {
 				t.Fatal(c.grants[0], "also covers", other)
 			}
 		}
+	}
+}
+
+// Collecting blobs nothing names any more — the one thing in the platform that deletes an object.
+//
+// A blob key is the digest of its bytes, so every edit of a blob field makes a NEW permanent object. That
+// is what makes blobs different from everything else in the object store: a heartbeat's key is reused by
+// the next instance of the slot, so stale heartbeats are bounded and are kept on purpose (a worker reads
+// the previous instance's heartbeat to measure its own failover). Blobs grow with the number of EDITS.
+func blobNames(t *testing.T, box *testbox.Box) []string {
+	t.Helper()
+	keys, _ := box.Objects.List("det/blobs/")
+	out := []string{}
+	for _, k := range keys {
+		out = append(out, strings.TrimPrefix(k, "det/blobs/"))
+	}
+	sort.Strings(out)
+	return out
+}
+
+var maskA, maskB = bytes.Repeat([]byte("a"), 900), bytes.Repeat([]byte("b"), 900)
+
+func TestABlobNothingNamesIsCollectedButNeverOnThePassThatNoticedIt(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	d1, _ := ctl.PutBlob(maskA)
+	ctl.Update("7-linecross", map[string]any{"mask": d1})
+	d2, _ := ctl.PutBlob(maskB)
+	ctl.Update("7-linecross", map[string]any{"mask": d2}) // maskA is now an orphan
+	if len(blobNames(t, box)) != 2 {
+		t.Fatal(blobNames(t, box))
+	}
+
+	r, err := ctl.SweepBlobs(0, 0)
+	if err != nil || r.Marked != 1 || r.Deleted != 0 {
+		t.Fatal(r, err)
+	}
+	if len(blobNames(t, box)) != 2 {
+		t.Fatal("the pass that noticed also deleted")
+	}
+	if r, _ := ctl.SweepBlobs(0, 0); r.Waiting != 1 { // inside the grace period
+		t.Fatal(r)
+	}
+
+	box.Wall.Advance(301)
+	if r, err := ctl.SweepBlobs(0, 0); err != nil || r.Deleted != 1 {
+		t.Fatal(r, err)
+	}
+	if got := blobNames(t, box); len(got) != 1 || got[0] != d2 {
+		t.Fatal("the referenced blob went too, or the orphan stayed:", got)
+	}
+}
+
+// The race the design exists for. PutBlob writes the object first and the row second; a sweep that decided
+// in one breath would delete the bytes a row is about to name. It cannot: the digest was not on the list.
+func TestABlobWrittenBetweenTheTwoPassesSurvives(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	d1, _ := ctl.PutBlob(maskA)
+	ctl.Update("7-linecross", map[string]any{"mask": d1})
+	d2, _ := ctl.PutBlob(maskB)
+	ctl.Update("7-linecross", map[string]any{"mask": d2})
+	ctl.SweepBlobs(0, 0) // marks maskA
+
+	box.Wall.Advance(301)
+	ctl.Create(map[string]any{"name": "8-linecross", "cam": "8", "kind": "linecross"})
+	fresh, _ := ctl.PutBlob([]byte("a brand new mask")) // object written; the row not yet
+	ctl.SweepBlobs(0, 0)                                // …and the sweep runs right here
+	if raw, _ := box.Objects.Get("det/blobs/" + fresh); raw == nil {
+		t.Fatal("the sweep ate a blob whose row was in flight")
+	}
+	if _, err := ctl.Update("8-linecross", map[string]any{"mask": fresh}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The residual race, closed. The same bytes can be uploaded for a second unit while the first unit's copy
+// is marked. PutBlob takes the digest off the list, which makes the sweep's own CAS fail — and a sweep
+// that loses that CAS deletes NOTHING, because the clear comes before any delete.
+func TestReUploadingAMarkedBlobCallsTheWholeSweepOff(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	d1, _ := ctl.PutBlob(maskA)
+	ctl.Update("7-linecross", map[string]any{"mask": d1})
+	d2, _ := ctl.PutBlob(maskB)
+	ctl.Update("7-linecross", map[string]any{"mask": d2})
+	ctl.SweepBlobs(0, 0)
+
+	box.Wall.Advance(301)
+	ctl.Create(map[string]any{"name": "8-linecross", "cam": "8", "kind": "linecross"})
+	again, _ := ctl.PutBlob(maskA) // the marked digest, uploaded again
+	items, _, _ := box.Vars.Get("det/sweep")
+	if items["digests"] != "[]" {
+		t.Fatal("PutBlob did not take it off the list:", items)
+	}
+	ctl.Update("8-linecross", map[string]any{"mask": again})
+
+	ctl.SweepBlobs(0, 0)
+	if raw, _ := box.Objects.Get("det/blobs/" + again); raw == nil {
+		t.Fatal("the sweep deleted a blob a row names")
+	}
+}
+
+// The invariant Lesson 4 stated as "nothing deletes" is narrower now, and the narrower one has to be
+// checked: the READERS still assume an object stays. Sweep the heartbeats and failover measurement goes
+// with them. So the sweep touches blobs/ and nothing else.
+func TestNothingButTheSweepLeansOnObjectsGoingAway(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	box.Objects.Put("det/heartbeats/d-1", []byte(`{"worker":"d-1","ts":0,"status":[]}`))
+	box.Objects.Put("det/snapshot/d-1", []byte(`{"cluster":"c","worker":"d-1","ts":0,"units":[]}`))
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	ctl.PutBlob(maskA) // an orphan from the first breath
+
+	ctl.SweepBlobs(0, 0)
+	box.Wall.Advance(301)
+	ctl.SweepBlobs(0, 0)
+	if len(blobNames(t, box)) != 0 {
+		t.Fatal("the orphan stayed:", blobNames(t, box))
+	}
+	if raw, _ := box.Objects.Get("det/heartbeats/d-1"); raw == nil {
+		t.Fatal("the sweep took a heartbeat")
+	}
+	if raw, _ := box.Objects.Get("det/snapshot/d-1"); raw == nil {
+		t.Fatal("the sweep took a snapshot shard")
+	}
+}
+
+// `det/sweep` is a Variable, and a Variable has the store's ceiling over it (Lesson 26). So the sweep
+// collects at most limit per pass — the rule applies to the thing written under it.
+func TestTheSweepIsBoundedBecauseItsOwnBookkeepingIsARow(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := detCtl(t, box, nil)
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	for i := 0; i < 10; i++ {
+		d, _ := ctl.PutBlob(bytes.Repeat([]byte{byte(i)}, 500))
+		ctl.Update("7-linecross", map[string]any{"mask": d})
+	}
+	if len(blobNames(t, box)) != 10 {
+		t.Fatal(len(blobNames(t, box)))
+	}
+	if r, _ := ctl.SweepBlobs(4, 0); r.Marked != 4 {
+		t.Fatal(r)
+	}
+	box.Wall.Advance(301)
+	if r, _ := ctl.SweepBlobs(4, 0); r.Deleted != 4 {
+		t.Fatal(r)
+	}
+	if len(blobNames(t, box)) != 6 {
+		t.Fatal(blobNames(t, box))
+	}
+}
+
+// A subsystem with no blob field must not list, not decide and not write a row: nothing to collect is not
+// the same as nothing collected.
+func TestASubsystemWithNoBlobFieldIsNotSweptAtAll(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := p.NewSpecController(vms.Spec, box.Vars, box.Objects, 50, box.Wall.Now, "cluster-a")
+	r, err := ctl.SweepBlobs(0, 0)
+	if err != nil || (r != p.SweepResult{}) {
+		t.Fatal(r, err)
+	}
+	if items, _, _ := box.Vars.Get("vms/sweep"); items != nil {
+		t.Fatal("a subsystem with nothing to sweep wrote bookkeeping:", items)
+	}
+}
+
+// racingVars fires a hook the first time something lists — which, inside SweepBlobs, is BlobsReferenced
+// walking the rows: after the sweep read its decision and before it writes the row back.
+type racingVars struct {
+	p.Variables
+	hook func()
+}
+
+func (v *racingVars) List(prefix string) ([]string, error) {
+	if v.hook != nil {
+		h := v.hook
+		v.hook = nil
+		h()
+	}
+	return v.Variables.List(prefix)
+}
+
+// The ordering argument, exercised where it lives: INSIDE one pass.
+//
+// The sweeper reads the list, checks, clears the row by CAS, and only then removes the bytes. If somebody
+// re-uploads a marked blob after that read, the CAS fails — and because the clear comes FIRST, nothing has
+// been deleted when it does. Delete first and the same interleaving destroys bytes whose row is in flight.
+func TestTheDecisionIsClearedBeforeAnythingIsDeleted(t *testing.T) {
+	box := testbox.NewBox()
+	other := detCtl(t, box, nil)
+	racing := &racingVars{Variables: box.Vars}
+	ctl := p.NewSpecController(detSpec(t), racing, box.Objects, 8, box.Wall.Now, "cluster-a")
+
+	ctl.Create(map[string]any{"name": "7-linecross", "cam": "7", "kind": "linecross"})
+	d1, _ := ctl.PutBlob(maskA)
+	ctl.Update("7-linecross", map[string]any{"mask": d1})
+	d2, _ := ctl.PutBlob(maskB)
+	ctl.Update("7-linecross", map[string]any{"mask": d2})
+	ctl.SweepBlobs(0, 0) // maskA is marked
+	box.Wall.Advance(301)
+
+	// the real interleaving: the OBJECT is written and the row naming it is still in flight, so the digest
+	// is genuinely unreferenced at the re-check — and the only thing between it and deletion is that
+	// PutBlob took it off the list, which the CAS is about to notice
+	racing.hook = func() { other.PutBlob(maskA) }
+
+	if _, err := ctl.SweepBlobs(0, 0); !errors.Is(err, p.ErrConflict) {
+		t.Fatal("the sweeper wrote over a decision something had contradicted:", err)
+	}
+	if raw, _ := box.Objects.Get("det/blobs/" + p.Digest(maskA)); raw == nil {
+		t.Fatal("the CAS was lost AFTER the delete: the bytes of a row still in flight are gone")
 	}
 }

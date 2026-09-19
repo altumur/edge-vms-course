@@ -79,6 +79,25 @@ def test_every_object_the_code_writes_is_granted():
             assert may_write(policy, key), f"{policy} does not let it write {key}"
 
 
+def test_every_row_the_code_writes_is_granted_too():
+    """The same direction for Variables, which the first version of this file left
+    out — and left out is how `<sub>/sweep` got added to `acl_console()` with no
+    line in the policy: the console would have been refused its own bookkeeping the
+    first time the blob sweep ran on a cluster. The gap was the same shape as the
+    three this file was written for."""
+    cases = [
+        ("vmsworker-policy.hcl", SPEC.sub.acl_worker(), ["w-1"]),
+        ("recworker-policy.hcl", REC_SPEC.sub.acl_worker(), ["r-1"]),
+        ("vmscontroller-policy.hcl", SPEC.acl_controller(), ["7"]),
+        ("reccontroller-policy.hcl", REC_SPEC.acl_controller(), ["7"]),
+        ("console-policy.hcl", SPEC.acl_console() + REC_SPEC.acl_console(), ["7"]),
+    ]
+    for policy, prefixes, samples in cases:
+        for pre in prefixes:
+            for key in ([pre.rstrip("*") + s for s in samples] if pre.endswith("*") else [pre]):
+                assert may_write(policy, key), f"{policy} does not let it write {key}"
+
+
 def test_nothing_writes_an_object_it_has_no_business_writing():
     """Direction two, and the one that costs something to keep true: a grant wider
     than the code needs is how a worker ends up able to write М12's directory."""

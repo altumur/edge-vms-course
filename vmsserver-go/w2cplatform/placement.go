@@ -965,10 +965,149 @@ func (c *SpecController) PutBlob(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// These exact bytes may be on the sweep's list right now — the same mask uploaded again for a second
+	// unit, while the copy the first unit stopped naming is marked for collection. Taking it off the list
+	// makes the sweep's own CAS fail, and a sweep that loses that CAS deletes nothing at all. The
+	// alternative is a lock, for a window two store calls wide.
+	sweepKey := c.Sub.SweepKey()
+	items, idx, _ := c.Vars.Get(sweepKey)
+	marked := markedDigests(items)
+	if _, ok := marked[d]; ok {
+		keep := []string{}
+		for _, m := range sortedKeysOf(marked) {
+			if m != d {
+				keep = append(keep, m)
+			}
+		}
+		raw, _ := json.Marshal(keep)
+		next := Items{}
+		for k, v := range items {
+			next[k] = v
+		}
+		next["digests"] = string(raw)
+		if _, err := c.Vars.Put(sweepKey, next, idx); err != nil {
+			return "", err
+		}
+	}
 	if err := c.Objects.Put(key, data); err != nil {
 		return "", err
 	}
 	return d, nil
+}
+
+func markedDigests(items Items) map[string]bool {
+	out := map[string]bool{}
+	var list []string
+	if items != nil {
+		_ = json.Unmarshal([]byte(items["digests"]), &list)
+	}
+	for _, d := range list {
+		out[d] = true
+	}
+	return out
+}
+
+func sortedKeysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SweepBlobs collects blobs nothing names any more — the one thing in the platform that deletes an object.
+//
+// A blob key is the digest of its bytes, so every edit of a blob field makes a NEW permanent object:
+// unlike a heartbeat, whose key is reused by the next instance of the slot, blobs grow with the number of
+// edits over the system's lifetime and nothing ever reclaims them.
+//
+// The obvious implementation is wrong. "Delete every blob no row names" races with PutBlob: the object is
+// written BEFORE the row that names it, so a sweep landing between those two writes deletes the bytes a
+// row is about to point at. So noticing and deleting happen in DIFFERENT PASSES — the mark writes the
+// candidates to `<name>/sweep` and deletes nothing; a later pass, after grace, re-checks them, CLEARS THE
+// ROW BY CAS, and only then removes the objects.
+//
+// The order of those last two is the whole safety argument: a lost CAS costs nothing when the clear comes
+// first, because not one object has been deleted yet.
+//
+// limit is not a nicety either: `<name>/sweep` is a row, and a row has the store's ceiling over it.
+const (
+	SweepLimit = 64
+	SweepGrace = 300.0
+)
+
+type SweepResult struct{ Marked, Deleted, Waiting int }
+
+func (c *SpecController) SweepBlobs(limit int, grace float64) (SweepResult, error) {
+	if limit == 0 {
+		limit = SweepLimit
+	}
+	if grace == 0 {
+		grace = SweepGrace
+	}
+	hasBlob := false
+	for _, f := range c.Spec.Fields {
+		if f.Type == "blob" {
+			hasBlob = true
+		}
+	}
+	if !hasBlob {
+		return SweepResult{}, nil
+	}
+	key, now := c.Sub.SweepKey(), c.Wall()
+	items, idx, err := c.Vars.Get(key)
+	if err != nil {
+		return SweepResult{}, err
+	}
+	marked := sortedKeysOf(markedDigests(items))
+
+	if len(marked) == 0 { // -- mark: notice, write it down, delete nothing
+		referenced := c.BlobsReferenced()
+		prefix := c.Sub.BlobsPrefix()
+		keys, _ := c.Objects.List(prefix)
+		var orphans []string
+		for _, k := range keys {
+			d := strings.TrimPrefix(k, prefix)
+			if !referenced[d] && len(orphans) < limit {
+				orphans = append(orphans, d)
+			}
+		}
+		if len(orphans) > 0 {
+			raw, _ := json.Marshal(orphans)
+			if _, err := c.Vars.Put(key, Items{"at": Str(now), "digests": string(raw)}, idx); err != nil {
+				return SweepResult{}, err
+			}
+		}
+		return SweepResult{Marked: len(orphans)}, nil
+	}
+
+	if at := ToFloat(items["at"]); now-at < grace {
+		return SweepResult{Waiting: len(marked)}, nil
+	}
+
+	// -- sweep: check again, clear the decision, and only then remove the bytes
+	referenced := c.BlobsReferenced()
+	var doomed []string
+	for _, d := range marked {
+		if !referenced[d] {
+			doomed = append(doomed, d)
+		}
+	}
+	if _, err := c.Vars.Put(key, Items{"at": Str(now), "digests": "[]"}, idx); err != nil {
+		return SweepResult{}, err // a Conflict here has deleted nothing
+	}
+	deleted := 0
+	for _, d := range doomed {
+		k, err := c.Sub.BlobKey(d)
+		if err != nil {
+			continue
+		}
+		if ok, _ := c.Objects.Delete(k); ok {
+			deleted++
+		}
+	}
+	return SweepResult{Deleted: deleted}, nil
 }
 
 // Blob is what a worker calls with the digest it read from its row. A nil result is a real state — the row
@@ -1058,6 +1197,44 @@ func (c *SpecController) Snapshot() map[string]any {
 		}
 	}
 	return map[string]any{"cluster": c.Cluster, "ts": c.Wall(), c.Spec.Rows: units}
+}
+
+// SnapshotAge is how old the published snapshot is, in seconds; ok is false when nothing was published.
+//
+// Read from the STORE, not kept in this process: the controller has no port to serve it from, it is
+// restarted freely, and two of them may be running. Whoever can read the objects can answer this, which is
+// what makes it a number a console can put on /metrics.
+//
+// The age of the whole is the age of the STALEST shard, the same rule М12's reader uses: a directory is
+// only as fresh as its oldest part, and taking the newest would report an RPO better than the real one —
+// which is the one direction a number like this must never be wrong in.
+func (c *SpecController) SnapshotAge(now float64) (float64, bool) {
+	if now == 0 {
+		now = c.Wall()
+	}
+	oldest, seen := 0.0, false
+	keys, _ := c.Objects.List(c.Sub.SnapshotPrefix())
+	for _, key := range keys {
+		raw, _ := c.Objects.Get(key)
+		if len(raw) == 0 {
+			continue
+		}
+		var shard map[string]any
+		if json.Unmarshal(raw, &shard) != nil {
+			continue
+		}
+		ts := ToFloat(shard["ts"])
+		if !seen || ts < oldest {
+			oldest, seen = ts, true
+		}
+	}
+	if !seen {
+		return 0, false
+	}
+	if age := now - oldest; age > 0 {
+		return age, true
+	}
+	return 0, true
 }
 
 // PublishSnapshot writes one object per worker under `<name>/snapshot/`.

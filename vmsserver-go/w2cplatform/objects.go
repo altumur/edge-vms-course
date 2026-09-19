@@ -21,6 +21,12 @@ type ObjectStore interface {
 	Put(key string, data []byte) error
 	Get(key string) ([]byte, error)
 	List(prefix string) ([]string, error)
+
+	// Delete removes one object; true if it was there. A capability of the STORE — a store can either
+	// delete or it cannot — and deliberately not "delete, but only under blobs/": that would be policy
+	// welded into the seam, and policy lives with the caller that has it (SpecController.SweepBlobs) and
+	// with the scheduler's ACL, which is the only place that can enforce it.
+	Delete(key string) (bool, error)
 }
 
 type FsObjectStore struct {
@@ -62,6 +68,22 @@ func (f *FsObjectStore) Put(key string, data []byte) error {
 		return err
 	}
 	return os.Rename(p+".tmp", p)
+}
+
+// Delete removes the file; a missing key is not an error, so a sweep that runs twice on the same
+// candidate — two consoles, a retry — does the same thing the second time.
+func (f *FsObjectStore) Delete(key string) (bool, error) {
+	p, err := f.path(key)
+	if err != nil {
+		return false, err
+	}
+	if err := os.Remove(p); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (f *FsObjectStore) Get(key string) ([]byte, error) {

@@ -219,6 +219,15 @@ class Subsystem:
                              f"no worker holds")
         return f"{self.name}/snapshot/{worker or UNPLACED}"
 
+    # `<name>/sweep` — the blob sweep's own bookkeeping: what it decided to collect, and when it decided.
+    # A Variable and not an object, because the decision needs CAS and the blobs do not.
+    def sweep_key(self) -> str:
+        return f"{self.name}/sweep"
+
+    # `<name>/blobs/` — what the sweep lists to find every blob.
+    def blobs_prefix(self) -> str:
+        return f"{self.name}/{BLOBS}/"
+
     # `<name>/snapshot/` — what a reader lists to find every shard.
     def snapshot_prefix(self) -> str:
         return f"{self.name}/snapshot/"

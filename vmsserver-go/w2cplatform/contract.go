@@ -32,7 +32,8 @@ type Subsystem struct{ Name string }
 func (s Subsystem) Config(parts ...string) string {
 	return strings.Join(append([]string{s.Name}, parts...), "/")
 }
-func (s Subsystem) Assignment(worker string) string   { return s.Name + "/workers/" + worker }
+func (s Subsystem) Assignment(worker string) string { return s.Name + "/workers/" + worker }
+
 // HeartbeatKey is `<name>/heartbeats/<worker>`. The worker's name is the LAST segment so that "the
 // workers write here and nowhere else" is a prefix a policy can name; see HeartbeatsDir above.
 func (s Subsystem) HeartbeatKey(worker string) string {
@@ -65,12 +66,19 @@ func (s Subsystem) SnapshotKey(worker string) (string, error) {
 	return s.Name + "/snapshot/" + worker, nil
 }
 
+// SweepKey is `<name>/sweep` — the blob sweep's own bookkeeping: what it decided to collect, and when.
+// A Variable and not an object, because the decision needs CAS and the blobs do not.
+func (s Subsystem) SweepKey() string { return s.Name + "/sweep" }
+
+// BlobsPrefix is what the sweep lists to find every blob.
+func (s Subsystem) BlobsPrefix() string { return s.Name + "/" + Blobs + "/" }
+
 // SnapshotPrefix is what a reader lists to find every shard.
-func (s Subsystem) SnapshotPrefix() string { return s.Name + "/snapshot/" }
-func (s Subsystem) EpochKey(unit string) string       { return s.Name + "/epoch/" + unit }
-func (s Subsystem) SlotKey(worker string) string      { return s.Name + "/slots/" + worker }
-func (s Subsystem) ACLController() []string           { return []string{s.Name + "/*"} }
-func (s Subsystem) ACLWorker() []string               { return []string{s.Name + "/epoch/*", s.Name + "/slots/*"} }
+func (s Subsystem) SnapshotPrefix() string       { return s.Name + "/snapshot/" }
+func (s Subsystem) EpochKey(unit string) string  { return s.Name + "/epoch/" + unit }
+func (s Subsystem) SlotKey(worker string) string { return s.Name + "/slots/" + worker }
+func (s Subsystem) ACLController() []string      { return []string{s.Name + "/*"} }
+func (s Subsystem) ACLWorker() []string          { return []string{s.Name + "/epoch/*", s.Name + "/slots/*"} }
 
 // The object store's half of the same question. Variables have had an ACL since Lesson 1; the object
 // store never did — invisible on one box, and on a cluster a policy file a person maintains by hand,

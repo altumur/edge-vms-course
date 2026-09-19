@@ -373,6 +373,24 @@ class SpecConsole:
                  f"# TYPE {p}_resources_live gauge", f"{p}_resources_live {sum(1 for hb in res.values() if now - float(hb['ts']) <= self.lost_after)}",
                  f"# TYPE {p}_{self.spec.running_gauge} gauge",
                  f"{p}_{self.spec.running_gauge} {sum(1 for hb in live.values() for s in hb.status if s.get('phase') == 'running')}"]
+        # How far behind the copy the layer above reads is. The controller publishes every pass and has no
+        # port; this is read from the store, so a failing publish shows up here as a number that climbs,
+        # rather than only as a log line on a host nobody is looking at. `-1` distinguishes "never
+        # published" from "published a moment ago" — a gauge that is 0 for both would hide a cluster whose
+        # controller has never once succeeded.
+        age = self.ctl.snapshot_age(now)
+        lines += [f"# TYPE {p}_snapshot_age_seconds gauge",
+                  f"{p}_snapshot_age_seconds {-1 if age is None else round(age, 1)}"]
+        # The sweep's backlog, for subsystems that have blobs to collect. Two cheap reads — a prefix
+        # listing and one row — deliberately NOT `blobs_referenced()`, which walks every unit's row: a
+        # gauge scraped every fifteen seconds must not cost a full scan of the configuration.
+        if any(f.type == "blob" for f in self.spec.fields.values()):
+            import json
+            marked = json.loads((self.ctl.vars.get(self.ctl.sub.sweep_key())[0] or {}).get("digests", "[]"))
+            lines += [f"# TYPE {p}_blobs_total gauge",
+                      f"{p}_blobs_total {len(self.ctl.objects.list(self.ctl.sub.blobs_prefix()))}",
+                      f"# TYPE {p}_blobs_marked gauge",
+                      f"{p}_blobs_marked {len(marked)}"]
         return "\n".join(lines) + "\n"
 
     # -- writes ---------------------------------------------------------------------------------

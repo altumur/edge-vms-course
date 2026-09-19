@@ -18,9 +18,20 @@ namespace "default" {
     path "rec/idem/*"      { capabilities = ["write", "read", "list", "destroy"] }
     path "rec/policy"      { capabilities = ["write", "read"] }
     path "rec/*"           { capabilities = ["read", "list"] }
-    path "objects/vms/blobs/*" { capabilities = ["write", "read", "list"] }      # the bytes of a blob field, beside the row that names them
-    path "objects/rec/blobs/*" { capabilities = ["write", "read", "list"] }
+    path "vms/sweep"       { capabilities = ["write", "read"] }                   # what the blob sweep marked, and when
+    path "rec/sweep"       { capabilities = ["write", "read"] }
+    # `destroy` — the only grant in this cluster that lets anything remove an object, and it is bounded to
+    # the one prefix whose contents can be proved unreferenced (М10A Lesson 29). Heartbeats and snapshot
+    # shards are deliberately NOT here: a worker reads the heartbeat its previous instance left to measure
+    # its own failover, so collecting them would collect the measurement.
+    path "objects/vms/blobs/*" { capabilities = ["write", "read", "list", "destroy"] }   # the bytes of a blob field, beside the row that names them
+    path "objects/rec/blobs/*" { capabilities = ["write", "read", "list", "destroy"] }
     path "objects/*"       { capabilities = ["read", "list"] }
+    # The operator's planned stop (М10A Lesson 22): `acl_console()` has named this row since it was
+    # written, and this file did not — so a drain would have been refused on a cluster, and the machine
+    # the operator meant to take out gently would have gone out as a silence instead. Nothing noticed
+    # until the policies were checked against the code.
+    path "platform/drain"  { capabilities = ["write", "read"] }
     path "platform/*"      { capabilities = ["read", "list"] }
   }
 }

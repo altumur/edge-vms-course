@@ -21,8 +21,12 @@ here; MinIO or S3 in М11. An object appears whole or not at all."""
 # ## Notes
 # - The walk in `list` is O(files under root), fine for heartbeats on one box; М11's MinIO gives a real
 #   prefix listing.
-# - No delete: nothing in the platform removes an object. A stale heartbeat simply ages, and readers filter
-#   by `ts`.
+# - `delete` exists, and exactly one caller uses it: the blob sweep (Lesson 29). Everything else in the
+#   platform still relies on objects NEVER going away — a stale heartbeat simply ages and readers filter by
+#   `ts`, and a worker restarting reads the heartbeat its previous instance left to measure its own
+#   failover. That is not an accident waiting to be tidied up: sweep the heartbeats and the measurement
+#   goes with them. The rule is therefore not "nothing deletes" any more but the narrower and truer one:
+#   an object is deleted only by a caller that can prove nothing refers to it, and only the blob sweep can.
 # ================================================================================================
 from __future__ import annotations
 
@@ -42,6 +46,12 @@ class ObjectStore(Protocol):
     def put(self, key: str, data: bytes) -> None: ...
     def get(self, key: str) -> bytes | None: ...
     def list(self, prefix: str) -> list[str]: ...
+
+    # Removes one object; `True` if it was there. A capability of the STORE — a store can either delete or
+    # it cannot — and deliberately not "delete, but only under `blobs/`": that would be policy welded into
+    # the seam, and policy lives with the caller that has it (`SpecController.sweep_blobs`) and with the
+    # scheduler's ACL, which is the only place that can actually enforce it.
+    def delete(self, key: str) -> bool: ...
 
 
 # Implements `ObjectStore` over a directory tree; a key with `/` becomes nested directories.
@@ -70,6 +80,15 @@ class FsObjectStore:
         with open(p + ".tmp", "wb") as f:
             f.write(data)
         os.replace(p + ".tmp", p)
+
+    # Removes the file; a missing key is not an error, so a sweep that runs twice on the same candidate —
+    # two consoles, a retry — does the same thing the second time.
+    def delete(self, key: str) -> bool:
+        try:
+            os.remove(self._p(key))
+            return True
+        except FileNotFoundError:
+            return False
 
     # Reads the file; a missing key returns `None` rather than raising, so callers such as
     # `Controller.workers_seen` can simply skip it.
