@@ -70,6 +70,12 @@ func (s Subsystem) SnapshotKey(worker string) (string, error) {
 // A Variable and not an object, because the decision needs CAS and the blobs do not.
 func (s Subsystem) SweepKey() string { return s.Name + "/sweep" }
 
+// RequestKey is `<name>/requests/<id>` — bounded work the OPERATOR asked a worker to do, outside its
+// ordinary pass. The shape the blob sweep's row already has, generalised: the console writes it, a
+// worker's pass reads it, and the platform never looks inside. What a request MEANS is the subsystem's.
+func (s Subsystem) RequestKey(rid string) string { return s.Name + "/" + Requests + "/" + rid }
+func (s Subsystem) RequestsPrefix() string       { return s.Name + "/" + Requests + "/" }
+
 // BlobsPrefix is what the sweep lists to find every blob.
 func (s Subsystem) BlobsPrefix() string { return s.Name + "/" + Blobs + "/" }
 
@@ -270,6 +276,9 @@ const Unplaced = "unplaced"
 // subsystem, one writer each: heartbeats/ the workers, snapshot/ the controller, blobs/ the console. A
 // prefix that cannot be bounded by a policy is a layout problem, not a missing ACL feature.
 const HeartbeatsDir = "heartbeats"
+
+// Requests: `<name>/requests/<id>` — bounded work an operator asked for, written by the console.
+const Requests = "requests"
 
 // IsHeartbeatKey: `<subsystem>/heartbeats/<worker>`, or the resource's own
 // `platform/resources/<server>/heartbeat`, which has a bounded prefix already and stays as it is.

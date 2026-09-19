@@ -246,6 +246,61 @@ func (c *SpecController) UnplaceDeleted() []string {
 	return gone
 }
 
+// NearID: whose unit of the followed subsystem this one wants to be beside — its own id by default, or
+// the string in the field `near.by` names. The row is read for the second form only, so a subsystem that
+// shares the other's naming pays nothing for the ones that do not.
+func (c *SpecController) NearID(uid string) string {
+	if c.Spec.NearBy == "id" || c.Spec.NearBy == "" {
+		return uid
+	}
+	r := c.Unit(uid)
+	if r == nil {
+		return ""
+	}
+	return Str(r[c.Spec.NearBy])
+}
+
+// Retired: whether this row says the work is over — `retire_when` in the spec, and nothing at all for the
+// subsystems that never end.
+func (c *SpecController) Retired(r Row) bool {
+	if c.Spec.RetireField == "" || r == nil {
+		return false
+	}
+	v := Str(r[c.Spec.RetireField])
+	for _, want := range c.Spec.RetireValues {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// UnplaceRetired is the other half of `retire_when`: a unit that FINISHED while placed gives its
+// assignment back, so the worker drops it and the budget it was holding is free again. Without this the
+// predicate in Place only stops the NEXT placement, and a cluster's whole capacity ends up held by work
+// that is over. The reason says which value did it: "done" and "failed" are very different news to the
+// person reading /where/<id>.
+func (c *SpecController) UnplaceRetired() []string {
+	done := []string{}
+	paths, _ := c.Vars.List(c.Sub.Config("placement") + "/")
+	for _, pth := range paths {
+		uid := pth[strings.LastIndex(pth, "/")+1:]
+		it, _, _ := c.Vars.Get(pth)
+		r := c.Unit(uid)
+		if it == nil || it["worker"] == "" || !c.Retired(r) {
+			continue
+		}
+		state := Str(r[c.Spec.RetireField])
+		c.AssignRemove(it["worker"], uid)
+		c.Write(pth, func(it Items) Items {
+			n, _ := strconv.Atoi(it["rev"])
+			return Items{"worker": "", "reason": state, "at": Str(c.Wall()), "rev": strconv.Itoa(n + 1)}
+		})
+		done = append(done, uid)
+	}
+	return done
+}
+
 func (c *SpecController) Unit(uid string) Row {
 	it, _, _ := c.Vars.Get(c.rowKey(uid))
 	if it == nil || it["deleted"] == "true" {
@@ -562,6 +617,7 @@ func (c *SpecController) HolderNear(uid string) (worker, server string) {
 	if c.Spec.Near == "none" || c.Spec.Near == "" {
 		return "", ""
 	}
+	want := c.NearID(uid)
 	names := []string{}
 	hbs := Heartbeats(c.Objects, c.Spec.Near+"/")
 	for w := range hbs {
@@ -574,7 +630,7 @@ func (c *SpecController) HolderNear(uid string) (worker, server string) {
 			continue
 		}
 		for _, st := range hb.Status {
-			if Str(st["id"]) == uid && Str(st["phase"]) == "running" {
+			if Str(st["id"]) == want && Str(st["phase"]) == "running" {
 				return w, hb.ExtraString("server", "?")
 			}
 		}
@@ -733,8 +789,8 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 		return have, nil
 	}
 	r := c.Unit(uid)
-	if r == nil {
-		return nil, nil
+	if r == nil || c.Retired(r) {
+		return nil, nil // finished work is not placed, and not "unplaceable" either
 	}
 	pool := c.Eligible(r, c.pool(workers))
 	best, free, near := c.pick(pool, uid)
@@ -773,6 +829,7 @@ func (c *SpecController) Place(uid string, workers []string) (*Placement, error)
 
 func (c *SpecController) EnsurePlaced(workers []string) ([]Placement, error) {
 	c.UnplaceDeleted()
+	c.UnplaceRetired()
 	out := []Placement{}
 	for _, r := range c.Units() {
 		pl, err := c.Place(r.ID(), workers)
@@ -797,7 +854,7 @@ func (c *SpecController) Unplaceable() []Unplaceable {
 	live := c.pool(nil)
 	out := []Unplaceable{}
 	for _, r := range c.Units() {
-		if c.Placement(r.ID()) == nil && len(c.Eligible(r, live)) == 0 {
+		if c.Placement(r.ID()) == nil && !c.Retired(r) && len(c.Eligible(r, live)) == 0 {
 			out = append(out, Unplaceable{r["id"], r.List("labels"), len(live)})
 		}
 	}

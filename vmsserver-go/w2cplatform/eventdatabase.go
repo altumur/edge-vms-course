@@ -45,7 +45,11 @@ type IndexedEvent struct {
 	Kind, Server    string
 	Bucket          string
 	Fenced          bool
-	Fields          map[string]any
+	// EpochIs: "current", "fenced", or "earlier-run". Same comparison, two meanings — a writer that lost
+	// the race, or a finished earlier run of work that ends. Fenced is kept, computed from this, so a page
+	// written before the difference existed keeps working.
+	EpochIs string
+	Fields  map[string]any
 }
 
 // CamIs is the test's shorthand: a Cam that is set and equals n.
@@ -71,7 +75,10 @@ type Query struct {
 	Subsystem     *string
 	Unit          *string
 	CurrentEpochs map[[2]string]int // (subsystem, unit) -> epoch: fencing is per unit
-	Limit         int
+	// EpochPolicy: subsystem -> "fenced" | "earlier-run". What an older epoch MEANS there. The database is
+	// told; it does not decide. A subsystem nobody named keeps the default, which is the old behaviour.
+	EpochPolicy map[string]string
+	Limit       int
 }
 
 func IntPtr(n int) *int       { return &n }
@@ -150,7 +157,7 @@ func (d *EventDatabase) ingest(server string, b Bucket, file string) int {
 				fields[k] = v
 			}
 		}
-		d.rows = append(d.rows, IndexedEvent{b.Subsystem, b.Unit, camOf(e, b.Unit), b.Epoch, e.T(), e.Kind(), server, b.Path, false, fields})
+		d.rows = append(d.rows, IndexedEvent{b.Subsystem, b.Unit, camOf(e, b.Unit), b.Epoch, e.T(), e.Kind(), server, b.Path, false, "current", fields})
 		n++
 	}
 	d.seen[[2]string{server, b.Path}] = have + n
@@ -217,9 +224,14 @@ func filterRows(rows []IndexedEvent, q Query) []IndexedEvent {
 		if q.Unit != nil && r.Unit != *q.Unit {
 			continue
 		}
-		if cur, ok := q.CurrentEpochs[[2]string{r.Subsystem, r.Unit}]; ok {
-			r.Fenced = r.Epoch < cur
+		r.EpochIs = "current"
+		if cur, ok := q.CurrentEpochs[[2]string{r.Subsystem, r.Unit}]; ok && r.Epoch < cur {
+			r.EpochIs = "fenced"
+			if was, ok := q.EpochPolicy[r.Subsystem]; ok && was != "" {
+				r.EpochIs = was
+			}
 		}
+		r.Fenced = r.EpochIs == "fenced"
 		out = append(out, r)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].T < out[j].T })
@@ -279,8 +291,12 @@ func (d *EventDatabase) Stop() {
 
 // ToMap renders an indexed event as the console's (and the resource's) JSON row.
 func (e IndexedEvent) ToMap() map[string]any {
+	was := e.EpochIs
+	if was == "" {
+		was = "current"
+	}
 	m := map[string]any{"subsystem": e.Subsystem, "unit": e.Unit, "epoch": e.Epoch, "t": e.T, "kind": e.Kind,
-		"server": e.Server, "bucket": e.Bucket, "fenced": e.Fenced}
+		"server": e.Server, "bucket": e.Bucket, "fenced": e.Fenced, "epoch_is": was}
 	if e.Cam != nil {
 		m["cam"] = *e.Cam
 	} else {
@@ -303,13 +319,14 @@ func EventFromMap(m map[string]any) IndexedEvent {
 	e.Epoch = int(ToFloat(m["epoch"]))
 	e.T = ToFloat(m["t"])
 	e.Fenced, _ = m["fenced"].(bool)
+	e.EpochIs, _ = m["epoch_is"].(string)
 	if c, ok := m["cam"]; ok && c != nil {
 		n := int(ToFloat(c))
 		e.Cam = &n
 	}
 	for k, v := range m {
 		switch k {
-		case "subsystem", "unit", "kind", "server", "bucket", "epoch", "t", "fenced", "cam":
+		case "subsystem", "unit", "kind", "server", "bucket", "epoch", "t", "fenced", "epoch_is", "cam":
 		default:
 			e.Fields[k] = v
 		}
@@ -480,7 +497,7 @@ func (m *MergedIndex) Query(q Query) QueryResult {
 			unreachable[server] = true // silent, and nobody holds its copies
 		}
 	}
-	out := filterRows(events, Query{T0: q.T0, T1: q.T1, CurrentEpochs: q.CurrentEpochs, Limit: q.Limit})
+	out := filterRows(events, Query{T0: q.T0, T1: q.T1, CurrentEpochs: q.CurrentEpochs, EpochPolicy: q.EpochPolicy, Limit: q.Limit})
 	state := "live"
 	if len(unreachable) > 0 {
 		state += "; " + strings.Join(sortedKeys(unreachable), ", ") + " unreachable"

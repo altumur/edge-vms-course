@@ -275,6 +275,11 @@ type SpecConsole struct {
 	Marks    *EventLog
 	Seen     *IdempotencyKeys // in the store: any instance answers a retry
 
+	// EpochPolicy: subsystem -> what an older epoch means there. /events merges ACROSS subsystems, so the
+	// console answering the request has to know the meaning in a subsystem it does not own — the Mount
+	// hands every console the same map by reference.
+	EpochPolicy map[string]string
+
 	mu     sync.Mutex
 	scanAt time.Time
 	scan   map[string][]string
@@ -620,7 +625,7 @@ func (c *SpecConsole) events(req *http.Request) Reply {
 		e, _ := CurrentEpoch(c.Ctl.Vars, pth)
 		cur[[2]string{pth[:strings.Index(pth, "/")], LastSegment(pth)}] = e
 	}
-	qq := Query{CurrentEpochs: cur}
+	qq := Query{CurrentEpochs: cur, EpochPolicy: c.EpochPolicy}
 	qq.T0, qq.T1 = QueryRange(req)
 	cam := q.Get("cam")
 	if cam == "" && q.Get("unit") != "" {
@@ -814,19 +819,34 @@ func (c *SpecConsole) Serve(addr string) (*http.Server, net.Listener, error) {
 // whole process and not about one kind of unit: `/drain` — one machine is about to stop, is it safe yet —
 // and `/schema` — the store's layout, and whether every live process is new enough to raise it.
 type Mount struct {
-	Root   *SpecConsole
-	Mounts map[string]*SpecConsole
-	names  []string
+	Root        *SpecConsole
+	Mounts      map[string]*SpecConsole
+	EpochPolicy map[string]string
+	names       []string
 }
 
 func NewMount(root *SpecConsole) *Mount {
-	return &Mount{Root: root, Mounts: map[string]*SpecConsole{}}
+	m := &Mount{Root: root, Mounts: map[string]*SpecConsole{}, EpochPolicy: map[string]string{}}
+	m.adopt(root)
+	return m
+}
+
+// adopt: one map, SHARED by reference with every console here. A subsystem nobody mounted keeps the
+// default, which is the behaviour this code had before it could be asked.
+func (m *Mount) adopt(c *SpecConsole) {
+	was := c.Spec.OlderEpochs
+	if was == "" {
+		was = "fenced"
+	}
+	m.EpochPolicy[c.Spec.Name] = was
+	c.EpochPolicy = m.EpochPolicy
 }
 
 func (m *Mount) Add(name string, c *SpecConsole) *Mount {
 	if _, have := m.Mounts[name]; !have {
 		m.names = append(m.names, name)
 	}
+	m.adopt(c)
 	m.Mounts[name] = c
 	return m
 }

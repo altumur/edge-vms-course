@@ -185,6 +185,12 @@ type SubsystemSpec struct {
 	Requires         string // "resource": a worker is eligible only while its server's resource is not silent
 	Servers          string // the default of the `servers` policy knob: shared | distinct (the console may change it)
 	Near             string // a subsystem whose worker holding the same unit id this one prefers to be beside (an affinity, never a filter)
+	// WHICH unit of that subsystem. "id" — the same unit id, which is what `near: <sub>` means and all the
+	// VMS needed while a camera and its recording were the same string. A subsystem whose units are named
+	// for something else has to say so: a detector's unit is `7-linecross`, no recorder ever reports that
+	// id, and `near: rec` on it would match nothing — an affinity that reads as followed and is not. So
+	// `near: {sub: rec, by: cam}` — follow the recorder holding the recording my `cam` field names.
+	NearBy string
 	// `spread_by: <field>` — units sharing a value of that field go on DIFFERENT servers. Unlike Near this
 	// is a FILTER, not a preference: the whole point of a second copy is that it is not where the first one
 	// is, and a second copy on the same server is not a second copy. Unplaceable while no other server
@@ -194,11 +200,28 @@ type SubsystemSpec struct {
 	// home: near — wherever the subsystem this one follows is. A PREFERENCE and not a label: a label is a
 	// filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
 	// because the home being down is exactly when the work has to continue somewhere else.
-	Home         string
-	TieBreak     string
-	DeadBand     float64
+	Home     string
+	TieBreak string
+	DeadBand float64
+	// `retire_when: {field: state, in: [done, failed]}` — a unit whose row says one of those values is
+	// FINISHED, and finished work is not placed. The first subsystem to need it is `detjob`, whose unit
+	// ends; everything before it ran until an operator said stop.
+	//
+	// Not `enabled`. That field is read by workers, never here: a disabled camera keeps its assignment and
+	// its line in the console's list, and a unit that has to STAY VISIBLE while doing nothing is a
+	// different thing from one that is over. And it is the ROW that says it, not a heartbeat: un-placing a
+	// finished unit makes its worker drop it, which makes the heartbeat stop mentioning it, which would
+	// erase the only evidence it was ever finished — and it would be placed again, and start over.
+	RetireField  string
+	RetireValues []string
 	Snapshot     []string
 	RunningGauge string // the console's gauge for units in phase "running": <name>_<RunningGauge>
+	// `events: {older_epochs: fenced | earlier-run}` — what it MEANS that a unit's events were written
+	// under an epoch that is not the current one. "fenced" (the default, and right for everything that
+	// runs until stopped): a writer that lost the race. "earlier-run": a unit that ENDS takes a new epoch
+	// every time the operator runs it again, so an older epoch is a finished earlier result — a run to
+	// compare against, not a loser to strike through.
+	OlderEpochs string
 }
 
 func asMap(v any) map[string]any {
@@ -216,7 +239,8 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	unit, pl := asMap(d["unit"]), asMap(d["placement"])
 	s := &SubsystemSpec{Name: name, Rows: "units", ID: "numeric", Fields: map[string]FieldSpec{}, CapacityFrom: "capacity",
-		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", Servers: "shared", Near: "none", TieBreak: "most-free-capacity", DeadBand: 0.10, RunningGauge: "units_running"}
+		CapacityFallback: 50, HeadroomFrom: "headroom", Constraint: "none", Servers: "shared", Near: "none", NearBy: "id",
+		TieBreak: "most-free-capacity", DeadBand: 0.10, RunningGauge: "units_running", OlderEpochs: "fenced"}
 	if r, ok := unit["rows"].(string); ok {
 		s.Rows = r
 	}
@@ -277,6 +301,23 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if nr, ok := pl["near"].(string); ok {
 		s.Near = nr
+	} else if nr := asMap(pl["near"]); len(nr) > 0 {
+		if sub, ok := nr["sub"].(string); ok {
+			s.Near = sub
+		}
+		if by, ok := nr["by"].(string); ok {
+			s.NearBy = by
+		}
+	}
+	if rw := asMap(pl["retire_when"]); len(rw) > 0 {
+		if f, ok := rw["field"].(string); ok {
+			s.RetireField = f
+		}
+		if vals, ok := rw["in"].([]any); ok {
+			for _, v := range vals {
+				s.RetireValues = append(s.RetireValues, Str(v))
+			}
+		}
 	}
 	if sb, ok := pl["spread_by"].(string); ok {
 		s.SpreadBy = sb
@@ -289,6 +330,12 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if rb := asMap(pl["rebalance"]); rb["dead_band"] != nil {
 		s.DeadBand = ToFloat(rb["dead_band"])
+	}
+	// `snapshot:` LEFT OUT means "every field that may go" — a convenience. `snapshot: []` means "no field
+	// of the row leaves the cluster", which is a decision. `snapshot:` with nothing after it is neither, so
+	// it is refused rather than guessed: the author meant one of the two and the file does not say which.
+	if v, present := d["snapshot"]; present && v == nil {
+		return nil, fmt.Errorf("spec %s: `snapshot:` with nothing after it says neither — write `snapshot: []` for no fields, or leave the key out for every field", s.Name)
 	}
 	if snap, ok := d["snapshot"].([]any); ok {
 		for _, f := range snap {
@@ -305,6 +352,9 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if con := asMap(d["console"]); con["running"] != nil {
 		s.RunningGauge = Str(con["running"])
+	}
+	if ev := asMap(d["events"]); ev["older_epochs"] != nil {
+		s.OlderEpochs = Str(ev["older_epochs"])
 	}
 	// A secret in the snapshot is a secret leaving the cluster: the snapshot is what М12's directory
 	// reads. Refused at LOAD time, not watched for at review time — a subsystem written a year from now
@@ -327,6 +377,25 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	// Following nothing cannot say it follows, and a home that names no field is a typo — let both fail
 	// at start rather than turn quietly into "there is no home".
+	if s.NearBy != "id" {
+		if _, ok := s.Fields[s.NearBy]; !ok {
+			return nil, fmt.Errorf("spec %s: near.by names no field: %q", s.Name, s.NearBy)
+		}
+		if s.Near == "none" || s.Near == "" {
+			return nil, fmt.Errorf("spec %s: near.by needs a near to follow", s.Name)
+		}
+	}
+	if s.RetireField != "" {
+		if _, ok := s.Fields[s.RetireField]; !ok {
+			return nil, fmt.Errorf("spec %s: retire_when names no field: %q", s.Name, s.RetireField)
+		}
+	}
+	if (s.RetireField != "") != (len(s.RetireValues) > 0) {
+		return nil, fmt.Errorf("spec %s: retire_when needs both a field and a non-empty `in` — a predicate that matches nothing retires nothing, silently", s.Name)
+	}
+	if s.OlderEpochs != "fenced" && s.OlderEpochs != "earlier-run" {
+		return nil, fmt.Errorf("spec %s: events.older_epochs is fenced or earlier-run, not %q — the page draws one of the two", s.Name, s.OlderEpochs)
+	}
 	if s.Home == "near" && (s.Near == "none" || s.Near == "") {
 		return nil, fmt.Errorf("spec %s: home: near needs a near to follow", s.Name)
 	}
@@ -355,9 +424,10 @@ func (s *SubsystemSpec) Sub() Subsystem { return Subsystem{Name: s.Name} }
 // ACLConsole: the operator's rows — what a console (one per server, any of them) may write; never placement.
 func (s *SubsystemSpec) ACLConsole() []string {
 	out := []string{s.Name + "/" + s.Rows + "/*", s.Name + "/next_id", s.Name + "/idem/*", // idem: a retried POST answered the same by ANY instance
-		s.Name + "/policy", // the administrator's knobs: servers shared | distinct
-		s.Name + "/sweep",  // what the blob sweep marked, and when
-		DrainKey}           // "this machine is about to stop": the operator's, and the same row for every subsystem
+		s.Name + "/policy",     // the administrator's knobs: servers shared | distinct
+		s.Name + "/sweep",      // what the blob sweep marked, and when
+		s.Name + "/requests/*", // bounded work an operator asked a worker for, outside its ordinary pass
+		DrainKey}               // "this machine is about to stop": the operator's, and the same row for every subsystem
 	for _, d := range s.Derived {
 		out = append(out, s.Name+"/"+strings.Split(d.Row, "/")[0]+"/*")
 	}
