@@ -37,7 +37,7 @@ from w2cplatform.variables import Variables
 
 from .config import DETJOB_SPEC
 from .detworker import FakeModel
-from .scan import ScanLog, covered, plan, remaining
+from .scan import ScanLog, covered, covered_by, device_recordings, plan, remaining
 
 DETJOB = DETJOB_SPEC.sub
 TERMINAL = ("done", "failed")
@@ -83,7 +83,20 @@ class DetJobWorker(Worker):
         if found is None or not found[2].get("coverage"):
             return False
         cov = found[2]["coverage"]
-        return float(cov["to"]) > t0 and float(cov["from"]) < t1
+        if not (float(cov["to"]) > t0 and float(cov["from"]) < t1):
+            return False                                  # outside what the device holds at all
+        # Inside the summary is not the same as "there is footage there". A device recording on motion has
+        # mostly nothing between its first and last minute, and a job told `fetching` about minutes that do
+        # not exist waits for a fetch that will never bring anything. So the index is asked — and when the
+        # driver cannot list, the summary stands, because refusing work that would succeed is the worse
+        # of the two mistakes.
+        url = found[2].get("index_url")
+        if not url:
+            return True
+        try:
+            return covered_by(device_recordings(url, t0, t1), t0, t1) > 0
+        except Exception:                                 # noqa: BLE001 — the holder is there and not answering
+            return True
 
     # -- one stretch, decoded from the file's head and reported only inside the window ------------------
     #

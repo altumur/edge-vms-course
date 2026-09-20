@@ -120,9 +120,10 @@ VMS = Subsystem("vms")
 class FakeDevice:
     """A held device: its channels, its own footage, and how many playbacks it allows at once."""
 
-    def __init__(self, key: str, channels=(), coverage=None, max_playbacks: int = 2, bps: int = 1):
+    def __init__(self, key: str, channels=(), coverage=None, max_playbacks: int = 2, bps: int = 1, index=None):
         self.key, self._channels = key, [str(c) for c in channels]
         self._coverage = {str(k): v for k, v in (coverage or {}).items()}   # camera -> (from, to[, fragments])
+        self._index = {str(k): [(float(a), float(b)) for a, b in v] for k, v in (index or {}).items()}
         self.max_playbacks, self.bps = max_playbacks, bps
         self.open: dict[str, tuple] = {}
         self.fetched: list[tuple] = []
@@ -135,6 +136,18 @@ class FakeDevice:
     def coverage(self, cam) -> dict | None:
         c = self._coverage.get(str(cam))
         return None if c is None else {"from": c[0], "to": c[1], "fragments": c[2] if len(c) > 2 else 0}
+
+    # The INDEX: what the device actually holds, span by span. A card recording continuously has one span
+    # and its summary says everything; an NVR recording on motion has hundreds, and between its `from` and
+    # its `to` there is mostly nothing. Without this a scan is promised minutes that do not exist.
+    #
+    # Absent here means "this driver cannot list" — not "the device holds nothing". The two are different
+    # answers and the caller has to be able to tell them apart, so it is `None` rather than `[]`.
+    def recordings(self, cam, t0: float, t1: float) -> list[tuple[float, float]] | None:
+        spans = self._index.get(str(cam))
+        if spans is None:
+            return None
+        return [(max(a, t0), min(b, t1)) for a, b in spans if b > t0 and a < t1]
 
     def in_use(self) -> int:
         return len(self.open)
@@ -529,6 +542,19 @@ class VmsWorker(Worker):
     # capacity here is still cameras, and an exhausted device is a 503 — the same admission control the
     # gateway does for viewers (Lesson 13), one floor down. On a camera, this competes with live for the
     # one uplink; on an NVR it usually does not.
+    # Where the device's footage is, span by span, clipped to `[t0, t1)`. `None` means this driver cannot
+    # list — which is not the same answer as "the device holds nothing here", and the caller must be able
+    # to tell the two apart. Costs no playback session: listing is not reading.
+    def recordings(self, cam, t0: float, t1: float) -> list[tuple[float, float]] | None:
+        row = next((r for r in self.rows if str(r["id"]) == str(cam)), None)
+        if row is None:
+            raise KeyError(cam)
+        dev = self.device_of_row(row)
+        if dev is None or dev.coverage(cam) is None:
+            raise KeyError(cam)
+        lister = getattr(dev, "recordings", None)
+        return None if lister is None else lister(cam, t0, t1)
+
     def playback(self, cam, t0: float, t1: float) -> bytes:
         row = next((r for r in self.rows if str(r["id"]) == str(cam)), None)
         if row is None:
@@ -554,6 +580,10 @@ class VmsWorker(Worker):
         if cov is not None:
             out["playback_url"] = playback_url(self.server, cam["id"])
             out["coverage"] = cov                         # the SUMMARY: from, to, fragments — never the index
+            # …and WHERE to ask for the index, which is not the same thing as carrying it. The heartbeat is
+            # one object under a ceiling; thirty days of motion recording is thousands of spans. A door,
+            # not a field (М10A Lesson 26 made the same choice for a mask).
+            out["index_url"] = playback_url(self.server, cam["id"]).replace("/playback/", "/recordings/")
         return out
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU
@@ -589,8 +619,15 @@ class VmsWorker(Worker):
     # seek inside what it gets, and the recorder fetches ranges through the same door (Lesson 16). The
     # console proxies to it; nothing about a device leaves this process except bytes and the summary.
     #
-    #   GET /playback/<cam>?from&to   the device's own footage for that range
-    #   GET /devices                  what is held, and what channels are not imported yet
+    #   GET /playback/<cam>?from&to      the device's own footage for that range
+    #   GET /recordings/<cam>?from&to    WHERE that footage is: the device's own index, span by span
+    #   GET /devices                     what is held, and what channels are not imported yet
+    #
+    # The index is fetched and not heartbeated, and that is a decision rather than a detail. Thirty days of
+    # motion recording on thirty-two channels is thousands of spans; the heartbeat is ONE object under a
+    # ceiling (М10A Lesson 25 and 26), and a field that grows with the device does not belong in it. The
+    # heartbeat keeps the summary — two numbers, enough to draw a timeline and to know there is something
+    # to ask about — and whoever needs the spans pays a request for them.
     def playback_handler(self):
         gw = self
 
@@ -601,6 +638,12 @@ class VmsWorker(Worker):
                 u = urlsplit(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 if u.path == "/devices":
                     return self._send(200, gw.device_status())
+                if u.path.startswith("/recordings/"):
+                    spans = gw.recordings(u.path.rsplit("/", 1)[1], float(q.get("from", 0)), float(q.get("to", 1e12)))
+                    if spans is None:
+                        return self._send(501, {"detail": "this driver cannot list what the device holds",
+                                                "error": "no index"})
+                    return self._send(200, {"spans": [{"from": a, "to": b} for a, b in spans]})
                 if not u.path.startswith("/playback/"):
                     return self._send(404, {"detail": "no such route", "error": "no such path"})
                 try:

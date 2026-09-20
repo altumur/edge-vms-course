@@ -29,7 +29,39 @@ from w2cplatform.events import unit_dir
 from .archive import Manifest, Segment
 
 SUB = "detjob"          # the scan's own tree, beside `rec/` and `vms/` on the same resource
+SURVEY = "survey"       # the standing survey's own tree, beside it
 MANIFEST = "manifest.jsonl"
+
+
+# -- the OTHER archive: what a device holds, span by span -------------------------------------------
+#
+# The summary in the holder's heartbeat (`from`, `to`, `fragments`) answers "is there anything there at
+# all". It cannot answer "is there anything at 10:05", and for a device recording on motion the difference
+# is most of the day: between its first and its last minute there is mostly nothing.
+#
+# `None` means the driver cannot list — not that the device holds nothing. A caller that folds the two
+# together promises a scan minutes that do not exist, or refuses one that does.
+def device_recordings(url: str, t0: float, t1: float, timeout: float = 10.0) -> list[tuple[float, float]] | None:
+    import json as _json
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{url}?from={t0}&to={t1}", timeout=timeout) as r:
+            body = _json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 501:
+            return None                                  # this driver cannot list; the summary is all there is
+        raise
+    return [(float(sp["from"]), float(sp["to"])) for sp in body.get("spans", [])]
+
+
+# The seconds of `[t0, t1)` a device actually holds. `spans` is what `device_recordings` returned, and the
+# `None` case is the caller's to decide: here it means "we cannot tell", and the honest fallback is the
+# summary — optimistic, which is right, because being wrong the other way refuses work that would succeed.
+def covered_by(spans: list[tuple[float, float]] | None, t0: float, t1: float) -> float:
+    if spans is None:
+        return max(0.0, t1 - t0)
+    return sum(max(0.0, min(b, t1) - max(a, t0)) for a, b in spans)
 
 
 # One stretch of one segment: the footage, and the part of it this scan asked for.
@@ -132,6 +164,64 @@ class ScanLog:
 
     def events(self) -> int:
         return sum(int(d.get("events", 0)) for d in self.read())
+
+
+# Moments into stretches: what to keep when the reason for keeping it is that a model fired.
+#
+# An event is an instant and footage is an interval, so something has to turn one into the other, and the
+# three numbers are all decisions rather than tuning. `pre` and `post` are what makes the clip watchable —
+# a car crossing the line at 10:04:31 is useless as a one-second file and obvious as a twenty-second one.
+# `join` is what keeps a busy minute from becoming three hundred two-second clips: hits closer together
+# than that are one stretch, and the gap between them is cheaper to keep than to cut out.
+#
+# `watched` clips the result to what was actually looked at — padding runs off the end of a span otherwise,
+# and asks for minutes the device never recorded.
+def hit_spans(times: list[float], watched: list[tuple[float, float]],
+              pre: float, post: float, join: float) -> list[tuple[float, float]]:
+    if not times:
+        return []
+    raw = sorted((t - pre, t + post) for t in times)
+    merged: list[list[float]] = []
+    for a, b in raw:
+        if merged and a - merged[-1][1] <= join:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    out = []
+    for a, b in merged:
+        for wa, wb in watched:
+            lo, hi = max(a, wa), min(b, wb)
+            if hi > lo:
+                out.append((lo, hi))
+    return sorted(out)
+
+
+class Frontier:
+    """How far a standing survey has watched: one number, durable, beside its events.
+
+    The same argument as `ScanLog` and the same place for the same reason — a worker
+    may not write configuration — but a different shape, because the work is different.
+    A scan has a plan and ticks stretches off it; a survey has no end, and what it
+    keeps is a moving edge."""
+
+    def __init__(self, archive_root: str, unit):
+        self.path = os.path.join(unit_dir(archive_root, SURVEY, str(unit)), "frontier.json")
+
+    def read(self) -> float | None:
+        try:
+            with open(self.path) as f:
+                return float(json.load(f)["watched_through"])
+        except (FileNotFoundError, ValueError, KeyError):
+            return None                                  # never started, or the file was lost: the row decides where to begin
+
+    # Written after the events of that stretch, and atomically: a crash between the work and the number
+    # costs a re-watch, a half-written number would cost the frontier itself.
+    def set(self, t: float) -> None:
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"watched_through": float(t)}, f)
+        os.replace(tmp, self.path)
 
 
 # The plan minus what the log says is behind us — what a restarted worker picks up.
