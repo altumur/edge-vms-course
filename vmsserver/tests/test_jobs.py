@@ -114,7 +114,7 @@ def test_the_console_process_actually_runs_the_reaper():
     console = inspect.getsource(m.console)
     assert "_reap_loop" in console, "the console process does not start the reaper — no job will ever close"
     assert "job_ctl" in console and "detjob" in console
-    assert "import ask_for_footage, clear_requests, reap" in inspect.getsource(m._reap_loop)
+    assert "import ask_for_footage, clear_requests, keep_what_fired, reap" in inspect.getsource(m._reap_loop)
 
 
 # -- `<name>/requests/<id>`: what an operator asked a worker for ------------------------------------
@@ -208,3 +208,94 @@ def test_the_console_process_asks_for_footage_too():
     loop = inspect.getsource(m._reap_loop)
     assert "ask_for_footage(c, rec_ctl)" in loop, "a job stuck on the device would wait for ever"
     assert "rec_ctl" in inspect.getsource(m.console)
+
+
+# -- footage that arrives from a device is a hole in the detections too ----------------------------
+def _dets(box, *kinds, cam="7", enabled=True):
+    from vms.config import DET_SPEC
+    from w2cplatform.spec import SpecController
+    det = SpecController(DET_SPEC, box.vars.as_writer("console", DET_SPEC.acl_console()), box.objects, wall=box.wall)
+    for k in kinds:
+        det.create({"name": f"{cam}-{k}", "cam": cam, "kind": k, "enabled": enabled, "params": f"{k}-settings"})
+    return det
+
+
+def _recorder_closed(box, *spans):
+    from vms.config import REC_SPEC
+    box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),
+                    Heartbeat("r-1", box.wall(), [], {"server": "srv-1", "closed": ",".join(spans)}).to_bytes())
+
+
+def _rec(box, cam="7"):
+    from vms.config import REC_SPEC
+    from w2cplatform.spec import SpecController
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    rec.create({"cam": cam})
+    return rec
+
+
+def test_what_arrived_from_a_device_is_scanned_by_every_detector_of_that_camera():
+    """The two holes are the same minutes: nothing was recording the camera, so
+    nothing was watching it either. One scan per detector, with the detector's own
+    settings — a retro scan run with different parameters is not the same answer."""
+    from vms.jobs import scan_what_arrived
+    box = Box(); ctl, _ = _ctls(box)
+    rec, det = _rec(box), _dets(box, "lpr", "linecross")
+    _recorder_closed(box, "7|1000|1600")
+
+    assert scan_what_arrived(rec, det, ctl) == 2
+    jobs = {j["id"]: j for j in ctl.units()}
+    assert set(jobs) == {"7-lpr-1000-1600", "7-linecross-1000-1600"}
+    j = jobs["7-lpr-1000-1600"]
+    assert j["rec"] == "7" and j["cam"] == "7" and j["from"] == 1000.0 and j["to"] == 1600.0
+    assert j["params"] == "lpr-settings" and j["state"] == "queued"
+
+
+def test_the_pass_runs_every_thirty_seconds_and_makes_the_job_once():
+    """The recorder reports a range for as long as it stays in its window. The id
+    IS the range, so the second pass finds the row already there."""
+    from vms.jobs import scan_what_arrived
+    box = Box(); ctl, _ = _ctls(box)
+    rec, det = _rec(box), _dets(box, "lpr")
+    _recorder_closed(box, "7|1000|1600")
+    assert scan_what_arrived(rec, det, ctl) == 1
+    assert scan_what_arrived(rec, det, ctl) == 0 and len(ctl.units()) == 1
+
+
+def test_a_job_an_operator_deleted_does_not_come_back():
+    """`unit()` stops seeing a deleted row; the row itself stays, marked. Reading
+    the marker is what keeps a person's decision from being undone by a pass."""
+    from vms.jobs import scan_what_arrived
+    box = Box(); ctl, _ = _ctls(box)
+    rec, det = _rec(box), _dets(box, "lpr")
+    _recorder_closed(box, "7|1000|1600")
+    scan_what_arrived(rec, det, ctl)
+    ctl.delete("7-lpr-1000-1600")
+    assert ctl.unit("7-lpr-1000-1600") is None
+    assert scan_what_arrived(rec, det, ctl) == 0
+
+
+def test_a_detector_that_is_off_does_not_scan_the_past():
+    from vms.jobs import scan_what_arrived
+    box = Box(); ctl, _ = _ctls(box)
+    rec = _rec(box)
+    det = _dets(box, "lpr", enabled=False)
+    _recorder_closed(box, "7|1000|1600")
+    assert scan_what_arrived(rec, det, ctl) == 0
+
+
+def test_another_cameras_detector_is_not_pointed_at_this_footage():
+    from vms.jobs import scan_what_arrived
+    box = Box(); ctl, _ = _ctls(box)
+    rec = _rec(box, cam="7")
+    det = _dets(box, "lpr", cam="9")
+    _recorder_closed(box, "7|1000|1600")
+    assert scan_what_arrived(rec, det, ctl) == 0
+
+
+def test_the_console_process_queues_those_scans():
+    import inspect
+    import vms.__main__ as m
+    loop = inspect.getsource(m._reap_loop)
+    assert "scan_what_arrived(rec_ctl, det_ctl, c)" in loop, "backfilled footage would never be looked at"
+    assert "det_ctl" in inspect.getsource(m.console)

@@ -270,6 +270,29 @@ def detjobworker() -> None:
     j.run(stop=stop)
 
 
+def surveycontroller() -> None:
+    """The sixth subsystem's controller: the platform's class from survey.subsystem.yaml, placing watches
+    beside the worker holding the camera. No code of its own."""
+    from w2cplatform.spec import SpecController
+    from .config import SURVEY_SPEC
+    vars_ = open_vars(CONFIG_URL, writer="surveycontroller", acl={"surveycontroller": SURVEY_SPEC.acl_controller()})
+    _controller_loop(SpecController(SURVEY_SPEC, vars_, FsObjectStore(os.path.join(root, "objects"))))
+
+
+def surveyworker() -> None:
+    """A survey worker: a worker of the `survey` subsystem. It watches a camera's DEVICE archive — a card,
+    an NVR — and copies none of it: what comes out is events. Its budget is its own (`SURVEY_CAPACITY`),
+    because a survey must never be able to spend what live detection is running on, and its real limit is
+    usually the two playback sessions the device allows rather than the GPU."""
+    from .surveyworker import SurveyWorker
+    vars_ = open_vars(CONFIG_URL, writer="surveyworker", acl={"surveyworker": ["survey/epoch/*", "survey/slots/*"]})
+    s = SurveyWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")),
+                     capacity=int(os.environ.get("SURVEY_CAPACITY", "2")),
+                     archive_root=os.environ.get("ARCHIVE", "/data/archive"))
+    logging.info("survey %s (instance %s) claimed its slot; models: %s", s.name, s.instance, ",".join(s.models))
+    s.run(stop=stop)
+
+
 def gateway() -> None:
     """A live gateway: a worker of the `live` subsystem. Its token writes its slot and epochs, its heartbeat,
     and `live/streams/*` — so it can delete the fan-out it holds once nobody has watched it for `grace`."""
@@ -326,8 +349,8 @@ def _sweep_loop(controllers, every: float = 60.0) -> None:
 # The console's second pass, beside the sweep: a job's row follows the worker that finished it. The worker
 # cannot write the row (its ACL forbids configuration) and the controller must not (one row, one writer),
 # so the console — which already reads these heartbeats — is where the fact lands. See `vms/jobs.py`.
-def _reap_loop(controllers, requests=(), rec_ctl=None, every: float = 30.0) -> None:
-    from .jobs import ask_for_footage, clear_requests, reap
+def _reap_loop(controllers, requests=(), rec_ctl=None, det_ctl=None, survey_ctl=None, every: float = 30.0) -> None:
+    from .jobs import ask_for_footage, clear_requests, keep_what_fired, reap, scan_what_arrived
     while not stop.is_set():
         for c in controllers:
             try:
@@ -343,6 +366,20 @@ def _reap_loop(controllers, requests=(), rec_ctl=None, every: float = 30.0) -> N
                     logging.info("%s: asked the recorder for %d range(s)", c.spec.name, asked)
             except Exception:                             # noqa: BLE001
                 logging.exception("asking for footage failed in %s — those jobs will wait", c.spec.name)
+        for c in controllers if rec_ctl is not None and det_ctl is not None else ():
+            try:
+                made = scan_what_arrived(rec_ctl, det_ctl, c)   # footage that arrived from a device is a hole in the detections
+                if made:
+                    logging.info("%s: %d scan(s) queued over footage that just arrived", c.spec.name, made)
+            except Exception:                             # noqa: BLE001
+                logging.exception("queueing scans over new footage failed in %s — the detections keep the hole", c.spec.name)
+        if survey_ctl is not None and rec_ctl is not None:
+            try:
+                kept = keep_what_fired(survey_ctl, rec_ctl)   # watch everything, copy what a model liked
+                if kept:
+                    logging.info("%s: asked the recorder to keep %d stretch(es)", survey_ctl.spec.name, kept)
+            except Exception:                         # noqa: BLE001
+                logging.exception("keeping what fired failed in %s — those minutes stay on the device", survey_ctl.spec.name)
         for c in requests:                            # the same division, one row simpler: fetched, so gone
             try:
                 gone = clear_requests(c)
@@ -359,22 +396,25 @@ def console() -> None:
     from .config import SPEC
     from .console import serve
     from w2cplatform.spec import SpecController
-    from .config import DET_SPEC, DETJOB_SPEC, LIVE_SPEC, REC_SPEC
+    from .config import DET_SPEC, DETJOB_SPEC, LIVE_SPEC, REC_SPEC, SURVEY_SPEC
     vars_ = open_vars(CONFIG_URL, writer="console",
                           acl={"console": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()
-                               + REC_SPEC.acl_console() + DETJOB_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
+                               + REC_SPEC.acl_console() + DETJOB_SPEC.acl_console()
+                               + SURVEY_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     srv = serve(ctl, archive, os.environ.get("CONSOLE_HOST", "127.0.0.1"), int(os.environ.get("CONSOLE_PORT", "8080")),
                 live_ctl=SpecController(LIVE_SPEC, vars_, objects),
                 mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects),
-                        "detjob": SpecController(DETJOB_SPEC, vars_, objects)})
+                        "detjob": SpecController(DETJOB_SPEC, vars_, objects),
+                        "survey": SpecController(SURVEY_SPEC, vars_, objects)})
     logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
     det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
     job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
-    threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl],), daemon=True).start()
-    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl], rec_ctl), daemon=True).start()
+    survey_ctl = SpecController(SURVEY_SPEC, vars_, objects)
+    threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl, survey_ctl],), daemon=True).start()
+    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl], rec_ctl, det_ctl, survey_ctl), daemon=True).start()
     stop.wait()
     srv.shutdown()
 
@@ -423,4 +463,5 @@ def resource() -> None:
 if __name__ == "__main__":
     {"worker": worker, "controller": controller, "recorder": recorder, "reccontroller": reccontroller, "console": console, "resource": resource,
      "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller,
-     "detjobworker": detjobworker, "detjobcontroller": detjobcontroller}[sys.argv[1]]()
+     "detjobworker": detjobworker, "detjobcontroller": detjobcontroller,
+     "surveyworker": surveyworker, "surveycontroller": surveycontroller}[sys.argv[1]]()

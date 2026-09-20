@@ -846,3 +846,158 @@ def test_a_request_waits_while_the_disk_is_over_the_mark():
 
     r.space_probe = lambda root: (1_000_000, 500_000)                        # room again, same request
     assert r.requests() and r.fetched == ["1-b"]
+
+
+def test_the_hole_in_the_footage_and_the_hole_in_the_detections_close_together():
+    """End to end, with the real recorder: the card's minutes arrive, the recorder
+    says which range it closed, and the console turns that into a scan by every
+    detector of that camera. Nothing was recording the camera while the link was
+    down — so nothing was watching it either, and the second hole is the first."""
+    from vms.config import DET_SPEC, DETJOB_SPEC
+    from vms.jobs import scan_what_arrived
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    det = SpecController(DET_SPEC, con_vars, box.objects, wall=box.wall)
+    det.create({"name": "1-lpr", "cam": "1", "kind": "lpr", "params": "plates"})
+    # the console's token in this harness predates `detjob`; in the process it carries that grant too
+    jobs = SpecController(DETJOB_SPEC, box.vars.as_writer("console2", DETJOB_SPEC.acl_console()), box.objects, wall=box.wall)
+
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    now = 1_000_000.0
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+
+    done = r.backfill(budget=1, now=now, force=True)                 # the link came back
+    assert done and done[0]["segments"] > 0
+    r.heartbeat_once()
+
+    hb = Heartbeat.from_bytes(box.objects.get(REC_SPEC.sub.heartbeat_key("r-1")))
+    assert hb.extra["closed"], "the recorder closed a range and told nobody"
+
+    assert scan_what_arrived(con_rec, det, jobs) == 1
+    j = jobs.units()[0]
+    assert j["rec"] == "1" and j["kind"] == "lpr" and j["params"] == "plates"
+    assert (j["from"], j["to"]) == (done[0]["from"], done[0]["to"])   # the footage that arrived, exactly
+
+
+def test_a_fetch_that_brought_nothing_new_queues_no_scan():
+    """`kept == 0` usually means live recording reached those minutes while we were
+    fetching — the overlap check dropped every segment. Those minutes are already
+    ours AND were already watched by the live detector; reporting them as newly
+    arrived would scan them a second time and double every event in them."""
+    from vms.config import DET_SPEC, DETJOB_SPEC
+    from vms.jobs import scan_what_arrived
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    det = SpecController(DET_SPEC, con_vars, box.objects, wall=box.wall)
+    det.create({"name": "1-lpr", "cam": "1", "kind": "lpr"})
+    jobs = SpecController(DETJOB_SPEC, box.vars.as_writer("console2", DETJOB_SPEC.acl_console()), box.objects, wall=box.wall)
+
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    now = 1_000_000.0
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+
+    # our own recording already covers these minutes
+    start, end = now - 80000, now - 76400
+    pth = segment_path(box.archive, 1, r.epochs["1"], datetime.fromtimestamp(start, timezone.utc))
+    os.makedirs(os.path.dirname(pth), exist_ok=True); open(pth, "wb").write(b"x")
+    Manifest(box.archive, 1).append(Segment("1", r.epochs["1"], start, end, os.path.relpath(pth, box.archive), 1))
+
+    got = r.fetch("1", "1", "http://srv-1:8083/playback/1", start, end)
+    assert got["segments"] == 0                                        # everything overlapped what we have
+    r.heartbeat_once()
+    hb = Heartbeat.from_bytes(box.objects.get(REC_SPEC.sub.heartbeat_key("r-1")))
+    assert not hb.extra["closed"], "minutes we already had were announced as newly arrived"
+    assert scan_what_arrived(con_rec, det, jobs) == 0
+
+
+# -- the device's INDEX: where its footage is, not just that it has some ---------------------------
+def test_the_index_is_a_door_and_not_a_field():
+    """The summary answers "is there anything at all"; it cannot answer "is there
+    anything at 10:05". For a device recording on motion that is most of the day.
+    And the index is fetched rather than heartbeated, because the heartbeat is one
+    object under a ceiling and this one grows with the device."""
+    from vms.scan import covered_by, device_recordings
+    box, ctl, con, con_vars = _box()
+    day = 86400.0
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, day, 5)},
+                                          index={"1": [(100.0, 200.0), (5000.0, 5600.0)]}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    srv = w.serve_playback(port=0)
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        st = w.status_extra(w.rows[0])
+        assert st["coverage"] == {"from": 0.0, "to": day, "fragments": 5}
+        assert "/recordings/1" in st["index_url"] and "/playback/1" in st["playback_url"]
+
+        spans = device_recordings(f"{base}/recordings/1", 0.0, day)
+        assert spans == [(100.0, 200.0), (5000.0, 5600.0)]
+        assert device_recordings(f"{base}/recordings/1", 150.0, 5200.0) == [(150.0, 200.0), (5000.0, 5200.0)]
+
+        # the whole point: inside the summary, and empty
+        assert covered_by(device_recordings(f"{base}/recordings/1", 1000.0, 4000.0), 1000.0, 4000.0) == 0.0
+        assert w.device_of_row(w.rows[0]).in_use() == 0            # listing is not reading: no session taken
+    finally:
+        srv.shutdown()
+
+
+def test_a_driver_that_cannot_list_says_so_and_is_not_read_as_empty():
+    """`None` and `[]` are different answers. A caller that folds them together
+    refuses work that would have succeeded."""
+    from vms.scan import covered_by, device_recordings
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 86400.0, 5)}))   # no index
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    srv = w.serve_playback(port=0)
+    try:
+        spans = device_recordings(f"http://127.0.0.1:{srv.server_address[1]}/recordings/1", 0.0, 100.0)
+        assert spans is None
+        assert covered_by(spans, 0.0, 100.0) == 100.0              # cannot tell: the summary stands
+        assert covered_by([], 0.0, 100.0) == 0.0                   # can tell, and there is nothing
+    finally:
+        srv.shutdown()
+
+
+def test_a_job_is_not_promised_minutes_the_device_does_not_have():
+    """`fetching` says "the footage exists, it is simply not ours yet". Said about
+    a gap in the device's own recording it is a promise nothing can keep, and the
+    job waits for a fetch that will never bring anything."""
+    from vms.config import DETJOB_SPEC
+    from vms.detjobworker import DetJobWorker
+    box, ctl, con, con_vars = _box()
+    day = 86400.0
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, day, 5)},
+                                          index={"1": [(100.0, 200.0)]}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    srv = w.serve_playback(port=0)
+    try:
+        # the heartbeat names the holder's own port; in the test the server is on another
+        hb = Heartbeat.from_bytes(box.objects.get("vms/heartbeats/" + w.name))
+        st = dict(hb.status[0]); st["index_url"] = f"http://127.0.0.1:{srv.server_address[1]}/recordings/1"
+        box.objects.put("vms/heartbeats/" + w.name,
+                        Heartbeat(w.name, box.wall(), [st], hb.extra).to_bytes())
+
+        j = DetJobWorker("j-1", box.vars.as_writer("detjobworker", DETJOB_SPEC.sub.acl_worker()), box.objects,
+                         clock=box.clock, wall=box.wall, server="srv-1", archive_root=box.archive, env={"LABELS": "gpu"})
+        assert j.device_has("1", 100.0, 200.0)                     # a span it really has
+        assert not j.device_has("1", 1000.0, 2000.0)               # inside the summary, and empty
+    finally:
+        srv.shutdown()

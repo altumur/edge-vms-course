@@ -52,6 +52,10 @@ class RecWorker(VmsWorker):
 
     SUB = REC
     ROWS = "recordings"
+    # How many closed ranges the heartbeat carries. A window and not a queue: the console acts on what it
+    # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
+    # decision has to be idempotent on its own (it is: the job's id is the range).
+    CLOSED_REPORTED = 32
     SLOT_PREFIX, NAME_ENV = "r", "RECORDER_NAME"
     parse_row = staticmethod(rec_row)
 
@@ -74,6 +78,7 @@ class RecWorker(VmsWorker):
         self.backfill_budget = 0                    # ranges per pass; 0 = only what an operator asks for
         self.backfilled = 0
         self.fetched: list[str] = []                # request ids this worker has fetched — the heartbeat carries them
+        self.closed: list[str] = []                 # ranges promoted from a device: `<unit>|<from>|<to>`, for the console
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
@@ -155,7 +160,8 @@ class RecWorker(VmsWorker):
         # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
         # configuration — so it says which ones are done and the console removes them.
         return {"spool": len(self.archive.closed_in_spool(0.0, self.wall())),
-                "fetched": ",".join(self.fetched[-32:])}
+                "fetched": ",".join(self.fetched[-32:]),
+                "closed": ",".join(self.closed)}
 
     def promote_closed(self) -> int:
         n = 0
@@ -284,6 +290,12 @@ class RecWorker(VmsWorker):
                 os.remove(p); continue                   # live recording got there while we were fetching
             self.archive.promote(p, source="edge"); kept += 1
         self.backfilled += kept
+        if kept:
+            # What arrived is now ordinary footage — and a hole in the DETECTIONS, because nothing was
+            # watching this camera while nothing was recording it. The console turns each of these into a
+            # scan (М10B Lesson 22), so the two holes close together. Reported here and not written
+            # anywhere: a worker's token writes no configuration.
+            self.closed = (self.closed + [f"{unit}|{t0:.0f}|{t1:.0f}"])[-self.CLOSED_REPORTED:]
         return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "segments": kept}
 
     def metrics_text(self) -> str:

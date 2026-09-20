@@ -110,3 +110,79 @@ def ask_for_footage(job_ctl, rec_ctl) -> int:
         asked += 1
         log.info("%s %s: asking the recorder for %s [%.0f, %.0f)", job_ctl.spec.name, st.get("id"), unit, t0, t1)
     return asked
+
+
+# What the recorder just fetched from a device is a hole in the DETECTIONS too: nothing was watching the
+# camera while nothing was recording it. This closes the second hole with the first.
+#
+# One scan per (range × detector), because "no hole" means every model that runs live on that camera also
+# ran over those minutes — and with the SAME settings, so `params` and `mask` are copied from the detector's
+# own row rather than re-entered.
+#
+# The id is the range and the detector, so the pass is idempotent by construction: the recorder keeps
+# reporting a range for as long as it stays in its window, and the second pass finds the row already there.
+# A row an operator DELETED stays deleted — the marker outlives the row, which is what `vars.get` sees and
+# `unit()` does not.
+def scan_what_arrived(rec_ctl, det_ctl, job_ctl) -> int:
+    from w2cplatform.console import heartbeats
+    made = 0
+    for _, hb in heartbeats(rec_ctl.objects, rec_ctl.spec.name + "/").items():
+        for span in str(hb.extra.get("closed", "")).split(","):
+            parts = span.split("|")
+            if len(parts) != 3:
+                continue
+            unit, t0, t1 = parts[0], float(parts[1]), float(parts[2])
+            rec = rec_ctl.unit(unit)
+            if rec is None or t1 <= t0:
+                continue
+            cam = str(rec.get("cam", unit))
+            for d in det_ctl.units():
+                if str(d.get("cam", "")) != cam or not d.get("enabled", True):
+                    continue
+                jid = f"{unit}-{d['kind']}-{int(t0)}-{int(t1)}"
+                if job_ctl.vars.get(job_ctl.sub.config(job_ctl.spec.rows, jid))[0]:
+                    continue                                # made already, or deleted on purpose
+                body = {"name": jid, "cam": cam, "rec": unit, "kind": str(d["kind"]),
+                        "from": t0, "to": t1}
+                for f in ("params", "mask"):                # the same settings the live detector runs with
+                    if d.get(f):
+                        body[f] = d[f]
+                job_ctl.create(body)
+                made += 1
+                log.info("%s: scanning %s [%.0f, %.0f) with %s — the footage arrived from a device",
+                         job_ctl.spec.name, unit, t0, t1, d["kind"])
+    return made
+
+
+# The fourth way to use a device archive: watch everything, keep what a model liked.
+#
+# The survey reports the stretches; this turns them into the request the recorder already understands. The
+# same division as everywhere here — the worker knows and may not write, the console writes — and the same
+# reason the request's id is the range: a pass every thirty seconds must write one row, not a queue.
+#
+# What lands in `rec/<cam>/` this way is ordinary footage with the ordinary retention, and that is the
+# point rather than an omission: when only the interesting minutes are copied, everything on the server is
+# interesting, and "evidence" needs no second archive and no second lifetime.
+def keep_what_fired(survey_ctl, rec_ctl) -> int:
+    from w2cplatform.console import heartbeats
+    asked = 0
+    for _, hb in heartbeats(survey_ctl.objects, survey_ctl.spec.name + "/").items():
+        for span in str(hb.extra.get("hits", "")).split(","):
+            parts = span.split("|")
+            if len(parts) != 3:
+                continue
+            cam, t0, t1 = parts[0], float(parts[1]), float(parts[2])
+            if t1 <= t0:
+                continue
+            unit = next((str(r["id"]) for r in rec_ctl.units() if str(r.get("cam", r["id"])) == cam), None)
+            if unit is None:
+                continue                                # nothing on this server records that camera: nowhere to put it
+            rid = f"{unit}-{int(t0)}-{int(t1)}"
+            key = rec_ctl.sub.request_key(rid)
+            if rec_ctl.vars.get(key)[0]:
+                continue                                # already asked; the recorder clears it when it is fetched
+            rec_ctl.vars.put(key, {"unit": unit, "cam": cam, "from": str(t0), "to": str(t1),
+                                   "at": str(survey_ctl.wall()), "by": f"{survey_ctl.spec.name}/{cam}"})
+            asked += 1
+            log.info("%s: keeping %s [%.0f, %.0f) — a model liked it", survey_ctl.spec.name, unit, t0, t1)
+    return asked
