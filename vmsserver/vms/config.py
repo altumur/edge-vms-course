@@ -62,6 +62,7 @@ LIVE_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__fi
 DET_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "det.subsystem.yaml"))     # the third: detectors
 REC_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rec.subsystem.yaml"))     # the fourth: recorders, on the archive
 DETJOB_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "detjob.subsystem.yaml"))  # the fifth: archive scans, the first work that ends
+SURVEY_SPEC = SubsystemSpec.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "survey.subsystem.yaml"))  # the sixth: watching an archive we do not own
 PLAYBACK_PORT = 8083     # the holder's playback surface: HTTP, because a browser must be able to seek it
 LIVE_PORT_BASE = 20000       # a camera's RTP port on its worker's loopback: the RTSP fan-out's one subscriber (gstvms/livesrv.py)
 SHM_DIR = "/run/vms"         # the tee's shared-memory branch: <SHM_DIR>/<cam>.shm — a subscriber on the SAME server reads it (shmsrc), no RTSP hop

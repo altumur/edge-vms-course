@@ -1,0 +1,57 @@
+# The survey: the SIXTH subsystem, and the only one whose input is an archive we do not own.
+#
+# A unit is one model watching one camera's DEVICE archive — the card, the NVR — forever. It exists for
+# the case where the footage is never going to be ours: thirty days on an NVR that has no analytics of its
+# own, no room on the server for a copy, and a need for our detections anyway. So nothing is copied: the
+# video stays where it is, and what comes out is events.
+#
+#   survey/watches/<name>          the unit: cam, kind, params — written by the console
+#   survey/<name>/e<epoch>/…       what the model saw, on this server's resource
+#   survey/<name>/frontier.json    how far it has watched — durable, beside the events
+#
+# It is NOT `det` with another source, for the reason Lesson 21 gives: the budgets differ. A live detector
+# decodes one stream at one times real time; a survey decodes as fast as the device's door will give it,
+# and its limit is not the GPU but the two playback sessions the device allows. Two numbers, two
+# subsystems — and a survey must never be able to spend what live detection is running on.
+#
+# It is not `detjob` either: its work does not end. There is no `retire_when` here.
+name: survey
+unit:
+  rows: watches                      # survey/watches/<name>
+  id: name                           # "<cam>-<kind>", the operator's name for the pair
+  fields:
+    name:    {type: string, required: true}
+    cam:     {type: string, required: true}      # whose device archive to watch
+    kind:    {type: string, required: true}      # which model: motion | linecross | lpr | …
+    params:  {type: string}                      # the model's settings, opaque to the platform
+    mask:    {type: blob}                        # sha256-<hex>; the bytes are in the object store
+    start:   {type: string, default: now}        # `now` or `earliest`: where the frontier begins the first time.
+                                                 # `earliest` means thirty days of backlog on the day somebody
+                                                 # enables it, which is a decision and not a default.
+    # `keep: hits` is the whole of the fourth way to use a device archive: watch everything, copy only what
+    # a model liked. The network is already spent — those minutes were decoded to look at them — and what
+    # lands on the disk is a few per cent of the recording. There is no second retention and no second
+    # recorder here: what is kept IS the server's archive, and everything else stays on the device.
+    keep:    {type: string, default: none}       # none | hits
+    pre:     {type: float,  default: 5}          # seconds before a hit: a one-second clip is not evidence
+    post:    {type: float,  default: 5}          # …and after
+    join:    {type: float,  default: 30}         # hits closer than this are one stretch, gap and all —
+                                                 # otherwise a busy minute becomes three hundred clips
+    enabled: {type: bool,   default: true}
+    labels:  {type: list,   default: ["gpu"]}
+placement:
+  capacity:   {from: capacity, fallback: 2}      # watches per worker — its own number, in its own heartbeat
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   resource                           # it writes its events into the resource on its own server
+  near:       {sub: vms, by: cam}                # An affinity: be beside the worker HOLDING this camera, so the
+                                                 # archive bytes cross a loopback and not the network. Never a
+                                                 # filter — the door answers over HTTP from anywhere, it is only
+                                                 # cheaper next door. `by: cam` because this unit is `7-lpr` and
+                                                 # no VMS worker ever reports that id.
+  # No `home`, for the same reason `det` has none: nobody owns the answer to "which server does this watch
+  # belong on". And no `retire_when`: it does not end.
+  tie_break:  most-free-capacity
+snapshot: [name, cam, kind, enabled]             # enough for a domain to say camera 7 is being watched
+console:
+  running: watches_running

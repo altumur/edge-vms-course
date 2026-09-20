@@ -28,13 +28,15 @@ def test_the_units_run_the_entrypoints_the_package_has():
     from vms import __main__ as m  # noqa: F401  (imports the module without running it: no __name__ == "__main__")
     entrypoints = set(re.findall(r'"(\w+)": \w+', open(os.path.join(HERE, "vms", "__main__.py")).read().split("__main__")[-1]))
     assert entrypoints == {"worker", "controller", "recorder", "reccontroller", "console", "resource", "gateway",
-                           "livecontroller", "detworker", "detcontroller", "detjobworker", "detjobcontroller"}
+                           "livecontroller", "detworker", "detcontroller", "detjobworker", "detjobcontroller",
+                           "surveyworker", "surveycontroller"}
     for name, entry in [("vmsworker@.container", "worker"), ("vmscontroller.container", "controller"),
                         ("console.container", "console"), ("resource.container", "resource"),
                         ("recworker@.container", "recorder"), ("reccontroller.container", "reccontroller"),
                         ("liveworker@.container", "gateway"), ("livecontroller.container", "livecontroller"),
                         ("detworker@.container", "detworker"), ("detcontroller.container", "detcontroller"),
-                        ("detjobworker@.container", "detjobworker"), ("detjobcontroller.container", "detjobcontroller")]:
+                        ("detjobworker@.container", "detjobworker"), ("detjobcontroller.container", "detjobcontroller"),
+                        ("surveyworker@.container", "surveyworker"), ("surveycontroller.container", "surveycontroller")]:
         u = unit(name)
         assert u["Container"]["Image"] == "localhost/vmsserver:latest"                 # one image, one thing to publish
         assert u["Container"]["Exec"] == f"python3 -m vms {entry}"

@@ -1,0 +1,23 @@
+# /etc/containers/systemd/surveycontroller.container — the survey subsystem's
+# controller: the platform's SpecController run from survey.subsystem.yaml, one
+# per box (one per cluster in М11), no code of its own. Places a watch beside the
+# worker holding that camera (`near: {sub: vms, by: cam}`) so the device's bytes
+# cross a loopback rather than the network. No port; its token writes
+# survey/workers/*, survey/placement/*, survey/slots/*.
+[Unit]
+Description=VMS survey controller — the only writer of survey placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms surveycontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
