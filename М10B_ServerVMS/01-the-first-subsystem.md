@@ -18,10 +18,10 @@
 
 ## Что нужно знать заранее
 
-- **М10A, урок 9** — `SubsystemSpec`, `Field`, `Derived`, `row`/`items`/`parse_id`.
-- **М10A, урок 10** — `PLATFORM_FIELDS` и `refuse`: почему восемь полей, а не пятнадцать.
-- **М10A, уроки 11–13** — `SpecController` целиком: CRUD, размещение, политики, снимок.
-- **М10A, урок 5** — раскладка ключей: `config`, `assignment`, `epoch_key`, `slot_key`.
+- **М10A, урок 8** — `SubsystemSpec`, `Field`, `Derived`, `row`/`items`/`parse_id`.
+- **М10A, урок 8** — `PLATFORM_FIELDS` и `refuse`: почему восемь полей, а не пятнадцать.
+- **М10A, уроки 9 и 10** — `SpecController` целиком: CRUD, размещение, политики, снимок.
+- **М10A, урок 4** — раскладка ключей: `config`, `assignment`, `epoch_key`, `slot_key`.
 
 ## Чему вы научитесь
 

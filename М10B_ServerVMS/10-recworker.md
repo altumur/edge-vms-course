@@ -25,7 +25,7 @@
 - **Урок 4** — две ветви раздачи, `live_url` и `live_shm` в heartbeat'е.
 - **Уроки 7–8** — архив: `promote`, `closed_in_spool`, `ArchivePolicy`.
 - **Урок 9** — `GstRecActuator` и выбор источника по схеме.
-- **М10A, урок 12** — `home`, `near`, `holder_near` и `ensure_home`; **урок 13** — `servers: distinct` и `idle_by_policy`.
+- **М10A, урок 10** — `home`, `near`, `holder_near` и `ensure_home`; **урок 13** — `servers: distinct` и `idle_by_policy`.
 
 ## Чему вы научитесь
 
