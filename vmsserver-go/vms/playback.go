@@ -6,6 +6,7 @@ package vms
 // about a device leaves this process except bytes and the summary.
 //
 //	GET /playback/<cam>?from&to   the device's own footage for that range
+//	GET /recordings/<cam>?from&to WHERE that footage is: the device's own index, span by span
 //	GET /devices                  what is held, and what channels are not imported yet
 
 import (
@@ -15,6 +16,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	p "vmsserver/w2cplatform"
 )
 
 func sendJSON(w http.ResponseWriter, status int, body any) {
@@ -35,6 +38,25 @@ func (w *VmsWorker) PlaybackHandler() http.Handler {
 		}
 		if req.URL.Path == "/devices" {
 			sendJSON(rw, 200, w.DeviceStatus())
+			return
+		}
+		if strings.HasPrefix(req.URL.Path, "/recordings/") {
+			// The index is fetched and not heartbeated, and that is a decision rather than a detail: a field
+			// that grows with the device does not belong in one object under a ceiling.
+			from, to := p.QueryRange(req)
+			spans, err := w.Recordings(req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:], from, to)
+			switch {
+			case errors.Is(err, ErrNoIndex):
+				sendJSON(rw, 501, map[string]any{"detail": err.Error(), "error": "no index"})
+			case err != nil:
+				sendJSON(rw, 404, map[string]any{"detail": err.Error(), "error": "no device archive"})
+			default:
+				out := make([]map[string]any, 0, len(spans))
+				for _, s := range spans {
+					out = append(out, map[string]any{"from": s[0], "to": s[1]})
+				}
+				sendJSON(rw, 200, map[string]any{"spans": out})
+			}
 			return
 		}
 		if !strings.HasPrefix(req.URL.Path, "/playback/") {

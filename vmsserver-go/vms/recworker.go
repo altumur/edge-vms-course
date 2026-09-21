@@ -53,7 +53,16 @@ type RecWorker struct {
 	Stitch         float64
 	BackfillBudget int // ranges per pass; 0 = only what an operator asks for
 	Backfilled     int
+	// Fetched: request ids this recorder has fetched — the heartbeat carries them, the console removes the
+	// rows. Closed: ranges promoted from a device, `<unit>|<from>|<to>`, for the console to scan.
+	Fetched []string
+	Closed  []string
 }
+
+// ClosedReported: how many closed ranges the heartbeat carries. A window and not a queue: the console acts on
+// what it sees, and a range that scrolled out was either acted on or is gone — which is why the console's
+// decision has to be idempotent on its own (it is: the job's id is the range).
+const ClosedReported = 32
 
 func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actuator, archive *ArchiveResource, o VmsWorkerOptions) (*RecWorker, error) {
 	env := o.Env
@@ -143,8 +152,20 @@ func (r *RecWorker) statusExtra(cam Camera) map[string]any {
 
 // heartbeatFix: how deep the spool is — closed segments this recorder has not promoted yet. No grace: the
 // question the drain route asks is "is anything unwritten", and a segment closed a second ago counts.
+//
+// `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
+// configuration — so it says which ones are done and the console removes them.
 func (r *RecWorker) heartbeatFix(extra map[string]any) {
 	extra["spool"] = len(r.Archive.ClosedInSpool(0, r.Wall()))
+	extra["fetched"] = strings.Join(tail(r.Fetched, 32), ",")
+	extra["closed"] = strings.Join(r.Closed, ",")
+}
+
+func tail(xs []string, n int) []string {
+	if len(xs) > n {
+		return xs[len(xs)-n:]
+	}
+	return xs
 }
 
 func (r *RecWorker) statusFix(st []map[string]any) {
@@ -190,6 +211,7 @@ func (r *RecWorker) Resubscribe() []string {
 // device's uplink with live.
 func (r *RecWorker) afterPump() {
 	r.PromoteClosed()
+	r.Requests(2) // what a person asked for: outside the budget and the hour
 	if r.BackfillBudget > 0 {
 		r.Backfill(r.BackfillBudget, 0, false)
 	}

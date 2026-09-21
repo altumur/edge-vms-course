@@ -248,6 +248,9 @@ class RecWorker(VmsWorker):
             if src is None:
                 continue                                     # nobody holds the device right now; ask again next pass
             r = self.fetch(str(it["unit"]), str(it.get("cam", it["unit"])), src[0], float(it["from"]), float(it["to"]))
+            if r.get("skipped"):
+                continue                                     # not fetched: reporting it would have the console
+                                                             # delete a request nobody served
             self.fetched.append(rid)                         # the heartbeat says so; the console removes the row
             done.append({**r, "request": rid})
         return done

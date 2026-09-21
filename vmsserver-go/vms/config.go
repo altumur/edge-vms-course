@@ -7,6 +7,11 @@
 //	worker.go            vmsworker — DriverPack as the worker: holds N cameras against an assignment, one fan-out each, events, no footage
 //	recorder.go          vmsrecorder — the fourth subsystem's worker: subscribes to the worker's tee, writes rec/<cam>/e<epoch>/ on its server's archive
 //	rec.subsystem.yaml   the recorder's spec: requires: resource, servers: distinct, near: vms
+//	det.subsystem.yaml   the detectors' spec: a model on a camera, on a GPU, near the recorder holding it
+//	detworker.go         detworker — the third subsystem's worker: subscribes to a fan-out, writes what a model saw
+//	detjob.subsystem.yaml  archive scans: a model over an interval of a recording; the unit ENDS
+//	scan.go              what to read of an interval and how far we got: one instant, one epoch
+//	detjobworker.go      detjobworker — the scan worker: a budget of stretches per pass, media time on the events
 //	controller.go        vmscontroller — the platform's SpecController run from the spec, in the VMS's words
 //	console.go           the one-box console: the read model from heartbeats; writes go to the controller
 //
@@ -29,11 +34,32 @@ var specYAML string
 //go:embed rec.subsystem.yaml
 var recSpecYAML string
 
+//go:embed det.subsystem.yaml
+var detSpecYAML string
+
+//go:embed detjob.subsystem.yaml
+var detJobSpecYAML string
+
+//go:embed survey.subsystem.yaml
+var surveySpecYAML string
+
 // Spec is the VMS as the platform sees it; everything the controller does is here.
 var Spec = mustSpec(specYAML)
 
 // RecSpec is the recorder — the fourth subsystem — as the platform sees it.
 var RecSpec = mustSpec(recSpecYAML)
+
+// DetSpec is the detectors — a unit is one model on one camera, placed on a GPU-labelled worker by
+// stream headroom, its events in buckets under det/<unit>/e<epoch>/ on the resource.
+var DetSpec = mustSpec(detSpecYAML)
+
+// DetJobSpec is the archive scans — the FIFTH subsystem, and the first whose unit of work ends. Its
+// `retire_when` is the word no other subsystem here needed.
+var DetJobSpec = mustSpec(detJobSpecYAML)
+
+// SurveySpec is the standing survey — the SIXTH subsystem, and the only one whose input is an archive we do
+// not own. No `retire_when`: it does not end.
+var SurveySpec = mustSpec(surveySpecYAML)
 
 // VMS is the subsystem's name, which is all a worker needs of the spec above: the keys its slot, epoch,
 // assignment and heartbeat live under.
@@ -112,6 +138,11 @@ func pathParts(path string) []string {
 // and the recorder fetches ranges from the same door.
 func PlaybackURL(server, cid string) string {
 	return "http://" + server + ":" + strconv.Itoa(PlaybackPort) + "/playback/" + cid
+}
+
+// IndexURL: the holder's door for the device's own index — the same port as playback, another verb.
+func IndexURL(server, cid string) string {
+	return "http://" + server + ":" + strconv.Itoa(PlaybackPort) + "/recordings/" + cid
 }
 
 func mustSpec(text string) *p.SubsystemSpec {

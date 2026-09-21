@@ -12,6 +12,7 @@ package vms
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	p "vmsserver/w2cplatform"
@@ -159,7 +160,63 @@ func (r *RecWorker) Fetch(unit, cam, url string, t0, t1 float64) Filled {
 		kept++
 	}
 	r.Backfilled += kept
+	if kept > 0 {
+		// What arrived is now ordinary footage — and a hole in the DETECTIONS, because nothing was watching
+		// this camera while nothing was recording it. The console turns each of these into a scan (М10B
+		// Lesson 22), so the two holes close together. Reported here and not written anywhere: a worker's
+		// token writes no configuration. `kept == 0` is not reported: those minutes were already ours, and
+		// already watched by the live detector.
+		r.Closed = tail(append(r.Closed, unit+"|"+strconv.FormatFloat(t0, 'f', 0, 64)+"|"+strconv.FormatFloat(t1, 'f', 0, 64)), ClosedReported)
+	}
 	return Filled{Unit: unit, Cam: cam, From: t0, To: t1, Segments: kept}
+}
+
+// Requests: what an operator asked for — `rec/requests/<id>`, written by the console.
+//
+// The ordinary pass is bounded by a budget and an hour because backfill competes with live for the device's
+// uplink. A range a PERSON asked for is different work: they are looking at that gap now, and the night is
+// not a useful answer. So these are fetched outside both — but not outside UnderPressure, because a disk
+// that is being emptied this minute cannot be given more.
+//
+// The request is not cleared here. A worker's token writes its slot and its epochs, never configuration
+// (М10A Lesson 10), so the recorder REPORTS what it fetched in its heartbeat and the console removes the row
+// — the same division as a scan that finishes (М10B Lesson 21).
+func (r *RecWorker) Requests(budget int) []Filled {
+	done := []Filled{}
+	if r.UnderPressure() {
+		return done
+	}
+	mine := map[string]bool{}
+	for _, row := range r.Rows {
+		mine[row.ID] = true
+	}
+	keys, _ := r.Vars.List(REC.RequestsPrefix())
+	for _, key := range keys {
+		if len(done) >= budget {
+			break
+		}
+		it, _, _ := r.Vars.Get(key)
+		if it == nil || !mine[it["unit"]] {
+			continue // another recorder's recording: not ours to fetch — and its lease would refuse it one call later
+		}
+		cam := it["cam"]
+		if cam == "" {
+			cam = it["unit"]
+		}
+		url, _, ok := r.DeviceSource(cam)
+		if !ok {
+			continue // nobody holds the device right now; ask again next pass
+		}
+		t0, _ := strconv.ParseFloat(it["from"], 64)
+		t1, _ := strconv.ParseFloat(it["to"], 64)
+		f := r.Fetch(it["unit"], cam, url, t0, t1)
+		if f.Skipped != "" {
+			continue // not fetched — reporting it would have the console delete a request nobody served
+		}
+		r.Fetched = append(r.Fetched, key[strings.LastIndex(key, "/")+1:]) // the heartbeat says so; the console removes the row
+		done = append(done, f)
+	}
+	return done
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }

@@ -153,23 +153,26 @@ class SurveyWorker(Worker):
                         ts, kind, cam=int(row["cam"]), watch=unit, source="device", **fields)
                     self.events_written += 1
                     fired.append(ts)
+            # The frontier moves over the whole window, not from span to span. A gap in the device's own
+            # recording is nothing to watch and nothing to come back for — leaving the frontier at its edge
+            # would park the survey in front of every quiet night for ever. When the door closed half way, it
+            # moves to the end of what WAS watched: those events are written, and watching them again would
+            # write them twice.
+            through = want[1] if not busy else (watched[-1][1] if watched else None)
+            if through is not None:
+                front.set(through)
+                if row["keep"] == "hits" and fired:
+                    # Watch everything, copy what a model liked. The stretches are reported, not written: a
+                    # worker's token writes no configuration, and the row that asks the recorder for a range
+                    # is configuration (`rec/requests/<id>` — Lesson 21). The console turns these into requests.
+                    for a, b in hit_spans(fired, watched, row["pre"], row["post"], row["join"]):
+                        self.hits = (self.hits + [f"{row['cam']}|{a:.0f}|{b:.0f}"])[-self.HITS_REPORTED:]
             if busy:
-                # Not a failure and not a retry: the two sessions belong to the operator watching this gap
-                # and to the recorder saving it, and a survey is the one of the three that can wait.
+                # Not a failure and not a retry: the two sessions belong to the operator watching this gap and
+                # to the recorder saving it, and a survey is the one of the three that can wait.
                 self.status_by_unit[unit] = self._status(unit, row, "waiting", why="the device has no free session",
                                                          front=front, newest=newest)
                 continue
-
-            # The frontier moves over the whole window, not from span to span. A gap in the device's own
-            # recording is nothing to watch and nothing to come back for — leaving the frontier at its edge
-            # would park the survey in front of every quiet night for ever.
-            front.set(want[1])
-            if row["keep"] == "hits" and fired:
-                # Watch everything, copy what a model liked. The stretches are reported, not written: a
-                # worker's token writes no configuration, and the row that asks the recorder for a range is
-                # configuration (`rec/requests/<id>` — Lesson 21). The console turns these into requests.
-                for a, b in hit_spans(fired, watched, row["pre"], row["post"], row["join"]):
-                    self.hits = (self.hits + [f"{row['cam']}|{a:.0f}|{b:.0f}"])[-self.HITS_REPORTED:]
             self.status_by_unit[unit] = self._status(unit, row, "running", front=front, newest=newest)
 
         for unit in list(self.running):

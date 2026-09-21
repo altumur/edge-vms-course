@@ -54,6 +54,33 @@ func sweepLoop(stop <-chan struct{}, controllers ...*p.SpecController) {
 	}
 }
 
+// The reaper: a pass of its own, beside the sweep and for the same reason — it is the CONSOLE that moves a
+// job's row, because the worker that knows the work is over may not write configuration and the controller
+// would be a second writer of a row the operator is editing. See vms/jobs.go.
+//
+// The same pass carries the rest of what a worker knows and may not write: the recorder's `fetched` (its
+// requests are cleared), a scan's `fetching` (the recorder is asked), the recorder's `closed` (the detectors
+// scan what arrived) and the survey's `hits` (the recorder is asked to keep them). Each is written and
+// tested in vms/ — and would be dead without being named here.
+func reapLoop(stop <-chan struct{}, jobCtl, recCtl, detCtl, surveyCtl *p.SpecController) {
+	for {
+		if moved := vms.Reap(jobCtl, 60); moved["done"]+moved["failed"] > 0 {
+			log.Printf("%s: %d done, %d failed", jobCtl.Spec.Name, moved["done"], moved["failed"])
+		}
+		if n := vms.ClearRequests(recCtl); n > 0 {
+			log.Printf("rec: %d fetched request(s) cleared", n)
+		}
+		vms.AskForFootage(jobCtl, recCtl, 60)       // a job stuck on footage the DEVICE has: ask the recorder
+		vms.ScanWhatArrived(recCtl, detCtl, jobCtl) // footage that arrived from a device is a hole in the detections
+		vms.KeepWhatFired(surveyCtl, recCtl)        // watch everything, copy what a model liked
+		select {
+		case <-stop:
+			return
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -106,6 +133,113 @@ func main() {
 		}
 		log.Printf("recorder %s (instance %s) claimed its slot", r.Name, r.Instance)
 		r.Run(2*time.Second, stop)
+	case "detworker": // the third subsystem's worker: a model on a camera, its events into det/<unit>/e<epoch>/
+		vars := openVars(root, "detworker", "det/epoch/*", "det/slots/*")
+		d, err := vms.NewDetWorker(os.Getenv("DET_NAME"), vars, objects, vms.DetOptions{ArchiveRoot: archive})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("detector %s (instance %s) claimed its slot", d.Name, d.Instance)
+		for {
+			d.ReconcileOnce()
+			if err := d.HeartbeatOnce(); err != nil {
+				log.Println("the detector heartbeat failed:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	case "detcontroller": // count = 1, the only writer of det placement: models onto GPU workers by stream headroom
+		vars := openVars(root, "detcontroller", vms.DetSpec.ACLController()...)
+		ctl := p.NewSpecController(vms.DetSpec, vars, objects, capacity, nil, "")
+		for {
+			if _, err := ctl.EnsurePlaced(nil); err != nil {
+				log.Println("det placement pass failed:", err)
+			}
+			ctl.Redistribute(nil)
+			if err := ctl.PublishSnapshot(); err != nil {
+				log.Println("publishing the det snapshot failed — the layer above is now reading a stale copy:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	case "detjobworker": // the fifth subsystem's worker: a model over an INTERVAL, its events into detjob/<job>/e<epoch>/
+		vars := openVars(root, "detjobworker", "detjob/epoch/*", "detjob/slots/*")
+		d, err := vms.NewDetJobWorker(os.Getenv("DETJOB_NAME"), vars, objects, vms.DetJobOptions{ArchiveRoot: archive})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("scan worker %s (instance %s) claimed its slot", d.Name, d.Instance)
+		for {
+			d.ReconcileOnce()
+			if err := d.HeartbeatOnce(); err != nil {
+				log.Println("the scan heartbeat failed:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	case "detjobcontroller": // count = 1, the only writer of detjob placement: jobs beside the RECORDING they read
+		vars := openVars(root, "detjobcontroller", vms.DetJobSpec.ACLController()...)
+		ctl := p.NewSpecController(vms.DetJobSpec, vars, objects, capacity, nil, "")
+		for {
+			// EnsurePlaced un-places the finished ones too: `retire_when` reads the state the console wrote,
+			// which is why the reaper runs in the console and not here.
+			if _, err := ctl.EnsurePlaced(nil); err != nil {
+				log.Println("detjob placement pass failed:", err)
+			}
+			ctl.Redistribute(nil)
+			if err := ctl.PublishSnapshot(); err != nil {
+				log.Println("publishing the detjob snapshot failed — the layer above is now reading a stale copy:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	case "surveyworker": // the sixth subsystem's worker: a model over a DEVICE's archive, forever, copying nothing
+		vars := openVars(root, "surveyworker", "survey/epoch/*", "survey/slots/*")
+		sw, err := vms.NewSurveyWorker(os.Getenv("SURVEY_NAME"), vars, objects, vms.SurveyOptions{ArchiveRoot: archive})
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("survey worker %s (instance %s) claimed its slot", sw.Name, sw.Instance)
+		for {
+			sw.ReconcileOnce()
+			if err := sw.HeartbeatOnce(); err != nil {
+				log.Println("the survey heartbeat failed:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	case "surveycontroller": // count = 1, the only writer of survey placement: beside the worker HOLDING the camera
+		vars := openVars(root, "surveycontroller", vms.SurveySpec.ACLController()...)
+		ctl := p.NewSpecController(vms.SurveySpec, vars, objects, capacity, nil, "")
+		for {
+			if _, err := ctl.EnsurePlaced(nil); err != nil {
+				log.Println("survey placement pass failed:", err)
+			}
+			ctl.Redistribute(nil)
+			if err := ctl.PublishSnapshot(); err != nil {
+				log.Println("publishing the survey snapshot failed — the layer above is now reading a stale copy:", err)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
 	case "reccontroller": // count = 1, the only writer of rec placement: recordings onto recorders whose resource answers, beside the camera's worker when there is room
 		vars := openVars(root, "reccontroller", vms.RecSpec.ACLController()...)
 		ctl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")
@@ -146,16 +280,25 @@ func main() {
 			}
 		}
 	case "console": // the screen and the API: its own process, a token for the operator's rows and nothing else
-		vars := openVars(root, "console", append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)...) // the operator's rows of EVERY subsystem it fronts
+		acl := append(vms.Spec.ACLConsole(), vms.RecSpec.ACLConsole()...)
+		acl = append(acl, vms.DetSpec.ACLConsole()...)
+		acl = append(acl, vms.DetJobSpec.ACLConsole()...) // the reaper writes the job rows, so the grant has to cover them
+		acl = append(acl, vms.SurveySpec.ACLConsole()...)
+		vars := openVars(root, "console", acl...) // the operator's rows of EVERY subsystem it fronts
 		ctl := vms.NewVmsController(vars, objects, capacity, nil)
-		recCtl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "") // the recorder at /rec/…: the page's Record toggle
+		recCtl := p.NewSpecController(vms.RecSpec, vars, objects, capacity, nil, "")       // the recorder at /rec/…: the page's Record toggle
+		detCtl := p.NewSpecController(vms.DetSpec, vars, objects, capacity, nil, "")       // the detectors at /det/…
+		jobCtl := p.NewSpecController(vms.DetJobSpec, vars, objects, capacity, nil, "")    // the scans at /detjob/…, whose rows only this process moves
+		surveyCtl := p.NewSpecController(vms.SurveySpec, vars, objects, capacity, nil, "") // the surveys at /survey/…
 		res := vms.NewArchiveResource(spool, archive, 600, nil)
-		srv, ln, err := vms.Serve(ctl, res, env("CONSOLE_HOST", "127.0.0.1")+":"+env("CONSOLE_PORT", "8080"), nil, recCtl)
+		srv, ln, err := vms.NewConsoleWith(ctl, res, nil, recCtl, []*p.SpecController{detCtl, jobCtl, surveyCtl}).
+			Serve(env("CONSOLE_HOST", "127.0.0.1") + ":" + env("CONSOLE_PORT", "8080"))
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("console on %s", ln.Addr())
-		go sweepLoop(stop, ctl.SpecController, recCtl)
+		go sweepLoop(stop, ctl.SpecController, recCtl, detCtl, jobCtl, surveyCtl)
+		go reapLoop(stop, jobCtl, recCtl, detCtl, surveyCtl)
 		<-stop
 		srv.Close()
 	case "resource": // the archive has no controller — it has a policy pass, a heartbeat, its HTTP, and the event database

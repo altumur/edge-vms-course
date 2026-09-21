@@ -214,7 +214,8 @@ func TestTheConsoleDrawsTheDeviceOnlyWhereWeHaveNothing(t *testing.T) {
 
 	// and the whole timeline over HTTP: ours and the device's, sorted, in one answer
 	arch := vms.NewArchiveResource(box.Spool, box.Archive, 600, box.Wall.Now)
-	srv, ln, err := vms.Serve(ctl, arch, "127.0.0.1:0", box.Wall.Now, nil)
+	recCon := p.NewSpecController(vms.RecSpec, box.Vars, box.Objects, 0, box.Wall.Now, "")
+	srv, ln, err := vms.Serve(ctl, arch, "127.0.0.1:0", box.Wall.Now, recCon)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,11 +238,15 @@ func TestTheConsoleDrawsTheDeviceOnlyWhereWeHaveNothing(t *testing.T) {
 		t.Fatal(seg)
 	}
 
-	// and the operator's ask: accepted, not done here — the recorder does the work
+	// and the operator's ask: accepted, not done here — the recorder does the work. Accepted means STORED:
+	// this answered 202 for a long time and wrote nothing down.
 	resp, _ = http.Post(base+"/backfill", "application/json", jsonBody(map[string]any{"cam": 1, "from": 0, "to": 100}))
 	resp.Body.Close()
 	if resp.StatusCode != 202 {
 		t.Fatal(resp.StatusCode)
+	}
+	if it, _, _ := box.Vars.Get(vms.RecSpec.Sub().RequestKey("1-0-100")); it == nil {
+		t.Fatal("202, and nothing was asked of anybody")
 	}
 }
 

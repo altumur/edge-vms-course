@@ -442,6 +442,33 @@ func (w *VmsWorker) Playback(cam string, t0, t1 float64) ([]byte, error) {
 	return dev.Read(sid)
 }
 
+// Recordings: where the device's footage is, span by span, clipped to [t0, t1). Costs no playback session:
+// listing is not reading.
+func (w *VmsWorker) Recordings(cam string, t0, t1 float64) ([][2]float64, error) {
+	for _, r := range w.Rows {
+		if r.ID != cam {
+			continue
+		}
+		dev := w.DeviceOfRow(r)
+		if dev == nil {
+			return nil, ErrNoDeviceArchive
+		}
+		if _, ok := dev.Coverage(cam); !ok {
+			return nil, ErrNoDeviceArchive
+		}
+		l, can := dev.(Lister)
+		if !can {
+			return nil, ErrNoIndex
+		}
+		spans, ok := l.Recordings(cam, t0, t1)
+		if !ok {
+			return nil, ErrNoIndex
+		}
+		return spans, nil
+	}
+	return nil, ErrNoDeviceArchive
+}
+
 // What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`), the loopback
 // port the fan-out serves from, and the shared-memory branch (`live_shm`) for subscribers on this server.
 func (w *VmsWorker) enrichWorker(cam Camera) (Camera, bool) {
@@ -461,6 +488,10 @@ func (w *VmsWorker) statusExtraWorker(cam Camera) map[string]any {
 		if cov, ok := dev.Coverage(cam.ID); ok {
 			out["playback_url"] = PlaybackURL(w.Server, cam.ID)
 			out["coverage"] = cov.ToMap() // the SUMMARY: from, to, fragments — never the index
+			// …and WHERE to ask for the index, which is not the same thing as carrying it. The heartbeat is
+			// one object under a ceiling; thirty days of motion recording is thousands of spans. A door,
+			// not a field (М10A Lesson 26 made the same choice for a mask).
+			out["index_url"] = IndexURL(w.Server, cam.ID)
 		}
 	}
 	return out

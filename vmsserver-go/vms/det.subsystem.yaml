@@ -1,0 +1,48 @@
+# Detectors, as the platform sees them: the THIRD subsystem. Its unit is one
+# model on one camera — "line-crossing on camera 7" — named by the operator
+# from the camera's page (`7-linecross`); its workers are detector workers
+# (vms/detworker.py) on GPU-labelled servers, capacity in STREAMS a GPU can
+# decode and infer on; its events are buckets under det/<unit>/e<epoch>/ on
+# the resource, on the camera's timeline like any other subsystem's. Same
+# controller class, same console class, same ACL shape as the VMS.
+name: det
+unit:
+  rows: units                        # det/units/<name>
+  id: name                           # "<cam>-<kind>", the operator's name for the pair
+  fields:
+    name:      {type: string, required: true}
+    cam:       {type: string, required: true}      # the VMS camera id whose stream the model runs on
+    kind:      {type: string, required: true}      # which model: motion | linecross | lpr | …
+    params:    {type: string}                      # the model's settings, opaque to the platform — and SMALL
+    # The one thing about a detector that does not fit in a row. A polygon mask is a few hundred bytes and
+    # belongs in `params`; a per-pixel one is 345 KB and belongs here — the row keeps the digest, the bytes
+    # go to `det/blobs/<digest>` in the object store, and the platform never looks inside either. Changing
+    # it changes the digest, which changes the row, which moves `revision`, which is what makes the worker
+    # pick it up. See М10A Lesson 26.
+    mask:      {type: blob}                        # sha256-<hex>; the bytes are in the object store
+    enabled:   {type: bool,   default: true}
+    labels:    {type: list,   default: ["gpu"]}    # where it may run: a worker whose server has these labels
+placement:
+  capacity:   {from: capacity, fallback: 8}        # streams per worker — its own number, from its heartbeat
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  requires:   resource                          # a detector writes its events into the resource on its own server
+  near:       {sub: rec, by: cam}               # An affinity, never a filter: be beside the recorder holding this
+                                                # camera's recording. Those are the servers with the disks, and here
+                                                # they are the servers with the GPUs too — so the model reads the
+                                                # fan-out from shared memory on its own box instead of pulling the
+                                                # stream across the network, next to the footage already crossing it.
+                                                # `by: cam` and not the bare `near: rec`, because a detector's unit is
+                                                # `7-linecross` and no recorder ever reports that id: the short form
+                                                # would match nothing and read as if it did.
+                                                # Where the affinity cannot be had, the filters and `most-free-capacity`
+                                                # below spread detectors over the GPU servers. That is the fallback and
+                                                # not a failure — a fan-out is readable over RTSP from anywhere.
+  # No `home`. A recording has one because an operator can answer "which disk does this footage live on";
+  # a detector has nobody to answer "which server does this model live on", and a preference nobody sets is
+  # a field nobody maintains. The affinity above is the whole of its topology.
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+snapshot: [name, cam, kind, enabled]
+console:
+  running: units_running               # det_units_running

@@ -848,6 +848,30 @@ def test_a_request_waits_while_the_disk_is_over_the_mark():
     assert r.requests() and r.fetched == ["1-b"]
 
 
+def test_a_request_the_recorder_could_not_serve_is_not_reported_as_served():
+    """A recorder whose lease lapsed fetches nothing. Saying `fetched` anyway would
+    have the console delete a request nobody served — and the operator's range would
+    silently never arrive."""
+    box, ctl, con, con_vars = _box()
+    w = _holder(box, lambda k: FakeDevice(k, channels=["1"], coverage={"1": (0.0, 1_000_000.0, 5)}))
+    con.create_camera({"name": "front", "source": CARD})
+    ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
+    rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
+    r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
+                  FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
+                  env={}, keep_days=1.0, settle=1000.0)
+    r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
+    con_rec.vars.put(REC_SPEC.sub.request_key("1-c"),
+                     {"unit": "1", "cam": "1", "from": "900000", "to": "930000", "at": "1", "by": "anna"})
+    box.clock.advance(26)                                                    # past the lease, short of a renewal
+    assert not r.may_write("1")
+    r.requests()
+    assert r.fetched == []
+    assert box.vars.list(REC_SPEC.sub.requests_prefix()) == ["rec/requests/1-c"]
+
+
 def test_the_hole_in_the_footage_and_the_hole_in_the_detections_close_together():
     """End to end, with the real recorder: the card's minutes arrive, the recorder
     says which range it closed, and the console turns that into a scan by every

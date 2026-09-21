@@ -26,6 +26,9 @@ var ErrDeviceBusy = errors.New("all of this device's playback sessions are in us
 // ErrNoDeviceArchive: this camera has no archive of its own here.
 var ErrNoDeviceArchive = errors.New("this camera has no archive of its own here")
 
+// ErrNoIndex: this driver cannot list what the device holds — which is not "the device holds nothing".
+var ErrNoIndex = errors.New("this driver cannot list what the device holds")
+
 // Coverage is the SUMMARY a device reports for one channel — never the index.
 // Drawing a timeline must not cost a playback session, and on a device that
 // allows two of them, it must not cost a request either.
@@ -52,12 +55,23 @@ type Device interface {
 	Close()
 }
 
+// Lister is the device's INDEX: what it actually holds, span by span. A second interface and not a method
+// of Device, because not every driver can list — and "this driver cannot list" is a different answer from
+// "the device holds nothing here". A card recording continuously has one span and its summary says
+// everything; an NVR recording on motion has hundreds, and between its `from` and its `to` there is mostly
+// nothing. Without this a scan is promised minutes that do not exist.
+type Lister interface {
+	// Recordings: the spans clipped to [t0, t1). ok=false: this channel has no index to read.
+	Recordings(cam string, t0, t1 float64) (spans [][2]float64, ok bool)
+}
+
 // FakeDevice is what the tests hold where a box holds a DriverPack session.
 type FakeDevice struct {
 	mu       sync.Mutex
 	Key      string
 	Chans    []string
 	Cov      map[string]Coverage
+	Index    map[string][][2]float64 // camera -> spans; a camera absent here cannot be listed
 	MaxPlays int
 	Bps      int
 	open     map[string][3]any // sid -> (cam, t0, t1)
@@ -73,6 +87,20 @@ func (d *FakeDevice) Channels() []string { return append([]string(nil), d.Chans.
 func (d *FakeDevice) Coverage(cam string) (Coverage, bool) {
 	c, ok := d.Cov[cam]
 	return c, ok
+}
+
+func (d *FakeDevice) Recordings(cam string, t0, t1 float64) ([][2]float64, bool) {
+	spans, ok := d.Index[cam]
+	if !ok {
+		return nil, false
+	}
+	out := [][2]float64{}
+	for _, s := range spans {
+		if s[1] > t0 && s[0] < t1 {
+			out = append(out, [2]float64{max(s[0], t0), min(s[1], t1)})
+		}
+	}
+	return out, true
 }
 
 func (d *FakeDevice) InUse() int {

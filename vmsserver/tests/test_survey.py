@@ -39,11 +39,11 @@ def _holder(box, cam="7", newest=m(100), spans=((m(0), m(10)), (m(50), m(60))), 
     return [(float(a), float(b)) for a, b in spans]
 
 
-def _worker(box, spans, name="s-1", busy=False, **kw):
+def _worker(box, spans, name="s-1", busy=False, busy_at=0, **kw):
     reads = []
 
     def fetch(url, a, b):
-        if busy:
+        if busy or (busy_at and len(reads) + 1 >= busy_at):
             raise _Busy("the device's two sessions are in use")
         reads.append((a, b))
         return b"\0"
@@ -126,6 +126,23 @@ def test_a_busy_device_is_a_wait_and_the_frontier_does_not_move():
     st = w.status_by_unit["7-lpr"]
     assert st["phase"] == "waiting" and "session" in st["why"]
     assert Frontier(box.archive, "7-lpr").read() is None              # nothing was watched, nothing is claimed
+
+
+def test_a_door_that_closed_half_way_keeps_what_was_watched():
+    """The first span was watched and its events written; the second found both
+    sessions taken. Leaving the frontier where it was would watch the first span
+    again next pass — and write every event in it twice."""
+    box = Box(); spans = _holder(box); _watch(box, start="earliest")
+    w = _worker(box, spans, busy_at=2); w.SECONDS_PER_PASS = m(100) - m(0)
+    w.reconcile_once()
+    assert w.status_by_unit["7-lpr"]["phase"] == "waiting"
+    assert Frontier(box.archive, "7-lpr").read() == m(10)            # the end of what WAS watched
+    first = w.events_written
+
+    w2 = _worker(box, spans, name="s-1"); w2.SECONDS_PER_PASS = m(100) - m(0)
+    w2.reconcile_once()
+    assert w2.reads == [(m(50), m(60))]                              # not the first span again
+    assert w2.events_written == first                                 # the second span has as many looks as the first
 
 
 def test_the_heartbeat_says_how_far_behind_it_is():

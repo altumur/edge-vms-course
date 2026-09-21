@@ -107,10 +107,34 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, recCtl *p.SpecContr
 	return func(w http.ResponseWriter, req *http.Request) bool {
 		path := req.URL.Path
 		if req.Method == "POST" && path == "/backfill" && archive != nil {
+			// This used to answer 202 and store nothing: the text below was true about what the recorder
+			// WOULD do and false about anything having been asked. The request is a row now
+			// (`rec/requests/<id>`), the recorder reads it, and the id is deterministic — a retried POST for
+			// the same range is the same row, not a second fetch.
+			if recCtl == nil {
+				p.SendJSON(w, 503, map[string]any{"detail": "no recorder subsystem behind this console", "error": "no rec"})
+				return true
+			}
 			var body map[string]any
 			json.NewDecoder(req.Body).Decode(&body)
+			cam, t0, t1 := p.Str(body["cam"]), p.ToFloat(body["from"]), p.ToFloat(body["to"])
+			if body["cam"] == nil || cam == "" || t1 <= t0 {
+				p.SendJSON(w, 400, map[string]any{"detail": "a backfill wants a camera and a range", "error": "bad range"})
+				return true
+			}
+			unit := RecordingsOf(recCtl, cam)[0]
+			rid := unit + "-" + strconv.FormatInt(int64(t0), 10) + "-" + strconv.FormatInt(int64(t1), 10)
+			by := req.Header.Get("X-User")
+			if by == "" {
+				by = "operator"
+			}
+			if _, err := recCtl.Vars.Put(recCtl.Spec.Sub().RequestKey(rid), p.Items{"unit": unit, "cam": cam,
+				"from": ftoa(t0), "to": ftoa(t1), "at": ftoa(wall()), "by": by}, p.NoCAS); err != nil {
+				p.SendJSON(w, 500, map[string]any{"detail": err.Error(), "error": "not stored"})
+				return true
+			}
 			p.SendJSON(w, 202, map[string]any{
-				"queued": map[string]any{"cam": body["cam"], "from": body["from"], "to": body["to"]},
+				"queued": map[string]any{"id": rid, "unit": unit, "cam": cam, "from": t0, "to": t1},
 				"detail": "the recorder fetches it on its next pass — outside the budget and the window, " +
 					"because a person asked for it"})
 			return true
@@ -176,6 +200,12 @@ func VmsRoutes(archive *ArchiveResource, ctl *VmsController, recCtl *p.SpecContr
 // NewConsole: the VMS at `/`, and the recorder at `/rec/…` when a rec controller is given (the console's
 // token over RecSpec). Both answer /events from the same merge over the resources' databases.
 func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recCtl *p.SpecController) *p.Mount {
+	return NewConsoleWith(ctl, archive, wall, recCtl, nil)
+}
+
+// NewConsoleWith: the same, and every other subsystem the console fronts mounted at `/<name>/…` — the
+// detectors, the scans, the surveys. A subsystem with rows and no screen is one only a script can use.
+func NewConsoleWith(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recCtl *p.SpecController, more []*p.SpecController) *p.Mount {
 	index := p.NewMergedIndex(ctl.Objects, nil, wall) // no database here: the resource process's, asked over HTTP
 	o := p.ConsoleOptions{Wall: wall, Extra: VmsRoutes(archive, ctl, recCtl, wall), Media: archive != nil, Index: index}
 	if archive != nil {
@@ -184,6 +214,9 @@ func NewConsole(ctl *VmsController, archive *ArchiveResource, wall p.Clock, recC
 	m := p.NewMount(p.NewSpecConsole(ctl.SpecController, o))
 	if recCtl != nil {
 		m.Add("rec", p.NewSpecConsole(recCtl, p.ConsoleOptions{Wall: wall, Index: index}))
+	}
+	for _, c := range more {
+		m.Add(c.Spec.Name, p.NewSpecConsole(c, p.ConsoleOptions{Wall: wall, Index: index}))
 	}
 	return m
 }
