@@ -19,6 +19,12 @@ import (
 // It is the cheapest honest check available here and it is worth being clear about its limit: a clean
 // cross-compile says the calls exist and the types line up. It does not say LockFileEx takes the lock or
 // that GetDiskFreeSpaceExW returns what we think. Nothing in this repository has run on Windows.
+// The packages that CLAIM portability — and not `./...`, which is every package there happens to be.
+// A media path is cgo over GStreamer and a vendor's driver pack: it cross-compiles for nothing, and a
+// red line here would say that and nothing about the platform. So portability is a property a package
+// DECLARES by being on this list, and adding one is a decision somebody makes on purpose.
+var portable = []string{"./w2cplatform/...", "./vms/...", "./cmd/..."}
+
 func TestThePlatformCompilesForEveryOperatingSystemItClaims(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
@@ -32,7 +38,7 @@ func TestThePlatformCompilesForEveryOperatingSystemItClaims(t *testing.T) {
 		if goos == runtime.GOOS {
 			continue // the suite you are reading this in already proves that one
 		}
-		cmd := exec.Command(goBin, "build", "-o", os.DevNull, "./...")
+		cmd := exec.Command(goBin, append([]string{"build", "-o", os.DevNull}, portable...)...)
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=amd64", "CGO_ENABLED=0")
 		if out, err := cmd.CombinedOutput(); err != nil {
