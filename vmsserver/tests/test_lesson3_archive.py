@@ -20,8 +20,8 @@ def write_segment(root, cam, epoch, start, size=1000, mtime=None):
 
 
 def test_parse_and_paths():
-    # The middle segment is the UNIT, and it comes back as a string: the path grammar does not know that
-    # `id: cam` makes today's unit a camera number, and a recording named `7-backup` parses the same way.
+    # The middle segment is the UNIT, and it comes back as a string: the path grammar never knew that a
+    # unit tended to be a camera number, and a recording named `7-backup` parses exactly the same way.
     assert parse("/a/rec/7/e5/20260912T101000Z.mp4", "/a") == ("7", 5, utc("2026-09-12T10:10:00"))
     assert parse("/a/rec/7-backup/e5/20260912T101000Z.mp4", "/a") == ("7-backup", 5, utc("2026-09-12T10:10:00"))
     assert parse("/a/rec/7/e5/manifest.jsonl", "/a") is None and parse("/a/vms/7/e5/20260912T101000Z.mp4", "/a") is None   # the worker's tree holds no media

@@ -13,8 +13,8 @@ Two subsystems, two trees, one camera. The worker (`vms`) holds the camera —
 one connection, one epoch, the fan-out — and writes what it observes into
 `vms/<cam>/`. The recorder (`rec`) is placed on a server with an archive,
 subscribes to the worker's fan-out, and writes footage under its own epoch
-into `rec/<unit>/` — the recording's own directory, which `id: cam` makes the
-camera's number today and need not tomorrow. A camera that is watched and never recorded has buckets
+into `rec/<unit>/` — the recording's own directory, named by the operator
+(`7`, `7-cloud`) and not by the camera. A camera that is watched and never recorded has buckets
 and no `rec/` tree; a camera whose recorder moved has footage under two
 servers' `rec/` trees, merged by the console. The manifest indexes media
 only; events are indexed by the resource's event database.
@@ -79,11 +79,11 @@ EPOCH_DIR = re.compile(r"^e(\d+)$")
 
 # `<root>/rec/<unit>/e<epoch>/<start>Z.mp4` — the same grammar in the spool and the archive.
 #
-# The middle segment is the UNIT, not the camera. Today they are the same string, because
-# `rec.subsystem.yaml` says `id: cam` — a recording is named by the camera it records. But the path code
-# must not know that: the day a camera gets two recordings (two servers, two profiles), the unit is
-# `7-main` and `7-backup` and this grammar keeps working unchanged. Naming the argument `cam` and casting
-# it with `int()` is how that day becomes a rewrite of four modules instead of one line of YAML.
+# The middle segment is the UNIT, not the camera. They were the same string for a long time, because
+# `rec.subsystem.yaml` said `id: cam` — a recording was named by the camera it recorded. The path code
+# never knew that, and the day a camera got a second archive the unit became `7` and `7-cloud` and this
+# grammar kept working unchanged. Naming the argument `cam` and casting it with `int()` is how that day
+# becomes a rewrite of four modules instead of one line of YAML.
 def segment_path(root: str, unit: str, epoch: int, start: datetime) -> str:
     return os.path.join(root, SUB, str(unit), f"e{epoch}", start.strftime("%Y%m%dT%H%M%SZ") + ".mp4")
 
@@ -109,7 +109,7 @@ def event_log(root: str, cam, epoch: int, bucket_seconds: int = 600) -> EventLog
 # `bytes`.
 @dataclass(frozen=True)
 class Segment:
-    unit: str             # the recording this footage belongs to; `id: cam` makes it the camera's id today
+    unit: str             # the recording this footage belongs to — `7`, or `7-cloud`: the operator's name
     epoch: int
     start: float          # unix seconds
     end: float
@@ -208,8 +208,9 @@ class ArchiveResource:
         Manifest(self.root, unit).append(seg)           # 2. then the line
         return seg
 
-    # The units with a `rec/<unit>/` directory. Strings, and sorted so that numeric names — which is all
-    # of them while `id: cam` holds — come out in numeric order rather than "1, 10, 2".
+    # The units with a `rec/<unit>/` directory. Strings, and sorted so that numeric names — which is most
+    # of them, a recording taking its camera's number unless it was given another — come out in numeric
+    # order rather than "1, 10, 2".
     def units(self) -> list[str]:
         try:
             names = [d for d in os.listdir(os.path.join(self.root, SUB))

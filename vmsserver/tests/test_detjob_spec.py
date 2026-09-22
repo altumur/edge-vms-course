@@ -25,9 +25,11 @@ def test_the_scan_writes_into_its_own_tree():
 
 def test_the_recording_is_named_separately_from_the_camera():
     """`rec` is which recording to read, `cam` is which camera the footage is of.
-    `id: cam` in rec.subsystem.yaml makes them the same string today — and that is
-    the recording spec's statement, not this one's to assume."""
-    assert REC_SPEC.id == "cam"
+    They were the same string while `rec.subsystem.yaml` said `id: cam`, and this
+    test never relied on it — the day a camera got a second archive the recording
+    took a name of its own (`7-cloud`), and a job that scans it names THAT, not the
+    camera. Nothing here changed: the fields were separate all along."""
+    assert REC_SPEC.id == "name"
     assert DETJOB_SPEC.fields["rec"].required and DETJOB_SPEC.fields["cam"].required
     assert DETJOB_SPEC.fields["rec"].name != DETJOB_SPEC.fields["cam"].name
 

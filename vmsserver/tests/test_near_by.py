@@ -1,8 +1,11 @@
-"""Following a subsystem whose units are named differently: `near: {sub: rec, by: cam}`.
+"""Following a subsystem whose units are named differently: `by` and `of`.
 
-A detector's unit is `7-linecross`; no recorder ever reports that id. The bare
-`near: rec` therefore matches nothing on it — an affinity that reads as followed
-and is not. These tests are about the difference being visible."""
+A detector's unit is `7-linecross`; no recorder ever reports that id. The bare `near: rec`
+therefore matches nothing on it — an affinity that reads as followed and is not. `by: cam`
+says which value of MINE to look for. `of: cam` says where in THEIR status to look for it,
+and it arrived when recordings stopped being named by their camera: `7-cloud` is a recording
+of camera 7, and nothing but the recorder's own `cam` field says so. These tests are about
+both differences being visible."""
 import json
 
 from w2cplatform.console import Heartbeat
@@ -20,10 +23,15 @@ def _worker(box, spec, worker: str, server: str, capacity: int = 8, status=None)
 
 
 def _recorder_holding(box, worker: str, server: str, *recordings):
-    """A recorder whose heartbeat says it is running these recordings — `id: cam`
-    in rec.subsystem.yaml makes each id a camera number."""
-    _worker(box, REC_SPEC, worker, server,
-            status=[{"id": r, "phase": "running"} for r in recordings])
+    """A recorder whose heartbeat says it is running these recordings, each entry carrying both
+    identities the way `RecWorker.status_extra` does: `id` is WHICH recording, `cam` is WHOSE
+    footage. Since `id: name` those are two strings — write `"7-cloud:7"` when they differ, `"7"`
+    when the operator left the name to default to the camera."""
+    status = []
+    for r in recordings:
+        uid, _, cam = str(r).partition(":")
+        status.append({"id": uid, "cam": cam or uid, "phase": "running"})
+    _worker(box, REC_SPEC, worker, server, status=status)
 
 
 def test_the_detector_lands_beside_the_recorder_holding_its_camera():
@@ -110,3 +118,41 @@ def test_a_near_by_naming_no_field_is_refused_at_load():
             raise AssertionError(f"accepted near: {bad}")
         except ValueError as e:
             assert "near" in str(e)
+
+
+def test_the_affinity_survives_the_name_the_operator_chose():
+    """The reason `of` exists. Camera 7's only recording is called `7-cloud` — the operator
+    picked the network archive and the page named the row after it. Nothing in det's row, and
+    nothing in det's controller, can know that string; the recorder's `cam` says it instead."""
+    box = Box()
+    ctl = SpecController(DET_SPEC, box.vars, box.objects, wall=box.wall)
+    _worker(box, DET_SPEC, "d-1", "srv-1")
+    _worker(box, DET_SPEC, "d-2", "srv-2")
+    _recorder_holding(box, "r-2", "srv-2", "7-cloud:7")          # the recording of camera 7, by another name
+
+    ctl.create({"name": "7-linecross", "cam": "7", "kind": "linecross"})
+    ctl.ensure_placed()
+    assert ctl.server_of(ctl.placement("7-linecross").worker) == "srv-2"
+
+    # and matching their id, as the spec did while `id: cam` held, would find nothing at all
+    short = SubsystemSpec.from_dict({"name": "det4", "unit": short_unit(),
+                                     "placement": {"capacity": {"from": "capacity", "fallback": 8},
+                                                   "near": {"sub": "rec", "by": "cam"}}})
+    other = SpecController(short, box.vars, box.objects, wall=box.wall)
+    other.create({"name": "7-linecross", "cam": "7", "kind": "linecross"})
+    assert other.holder_near("7-linecross") is None
+
+
+def test_two_recordings_of_one_camera_settle_the_tie_the_same_way_twice():
+    """Two archives, two recordings, two recorders: the affinity has to pick one, and pick the
+    same one next pass, or the follower walks between them forever. The smallest id wins."""
+    box = Box()
+    ctl = SpecController(DET_SPEC, box.vars, box.objects, wall=box.wall)
+    _worker(box, DET_SPEC, "d-1", "srv-1")
+    _worker(box, DET_SPEC, "d-2", "srv-2")
+    _recorder_holding(box, "r-1", "srv-1", "7-cloud:7")
+    _recorder_holding(box, "r-2", "srv-2", "7:7")
+
+    ctl.create({"name": "7-linecross", "cam": "7", "kind": "linecross"})
+    assert ctl.holder_near("7-linecross") == ("r-2", "srv-2")     # "7" sorts before "7-cloud"
+    assert ctl.holder_near("7-linecross") == ("r-2", "srv-2")

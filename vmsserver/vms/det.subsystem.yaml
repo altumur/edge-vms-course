@@ -27,7 +27,7 @@ placement:
   headroom:   {from: headroom}
   constraint: labels-subset
   requires:   resource                          # a detector writes its events into the resource on its own server
-  near:       {sub: rec, by: cam}               # An affinity, never a filter: be beside the recorder holding this
+  near:       {sub: rec, by: cam, of: cam}      # An affinity, never a filter: be beside the recorder holding this
                                                 # camera's recording. Those are the servers with the disks, and here
                                                 # they are the servers with the GPUs too — so the model reads the
                                                 # fan-out from shared memory on its own box instead of pulling the

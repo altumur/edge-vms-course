@@ -2,12 +2,14 @@
 
 A recorder is a worker in the platform's sense (a slot claimed by CAS —
 `r-1` — an assignment read from the store, an epoch per unit, a heartbeat
-with capacity and headroom) whose unit is one camera's RECORDING,
-`rec/recordings/<cam>`. It does not hold the camera: it subscribes to the
-fan-out of whichever VMS worker does (`live_url` in the VMS heartbeat, found
-the way a gateway finds it — never by calling a worker, never a second
-connection to the camera) and writes footage into `rec/<cam>/e<epoch>/` on
-ITS server's archive, with the manifest beside it. The worker that holds
+with capacity and headroom) whose unit is ONE RECORDING of a camera,
+`rec/recordings/<name>` — a camera written to two archives has two of them,
+and the row's `cam` field says whose footage this one holds. It does not
+hold the camera: it subscribes to the fan-out of whichever VMS worker does
+(`live_url` in the VMS heartbeat, found the way a gateway finds it — never
+by calling a worker, never a second connection to the camera) and writes
+footage into `rec/<name>/e<epoch>/` on the archive it is homed to, with the
+manifest beside it. The worker that holds
 the camera may be anywhere, `servers: shared`; the recorder must be where
 the disks are — `requires: resource`, `servers: distinct` by default — and
 when its server dies the controller moves its recordings to a server whose
@@ -111,8 +113,8 @@ class RecWorker(VmsWorker):
     # reconciler backs off and retries, and the status says `waiting`.
     def enrich(self, cam: dict) -> dict | None:
         # Two identities, and this is the one method where both are used in three lines: `cam["cam"]` is
-        # WHOSE fan-out to subscribe to, `cam["id"]` is WHICH recording is subscribing. `id: cam` makes
-        # them equal today; nothing here would change if it stopped.
+        # WHOSE fan-out to subscribe to, `cam["id"]` is WHICH recording is subscribing. They were the same
+        # string while the spec said `id: cam`; they stopped being it, and nothing here changed.
         src = self.source(cam["cam"])
         if src is None:
             self.waiting.add(cam["id"])

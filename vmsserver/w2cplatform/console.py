@@ -338,6 +338,10 @@ class SpecConsole:
             if hb.extra.get("archive"):
                 s["archive"] = hb.extra["archive"]
             s["workers"].append({"worker": w, "load": ctl.load(w), "capacity": ctl.capacity_of(w), "labels": hb.extra.get("labels", ""),
+                                 # WHERE this worker is, in whatever the spec counts places in (`place_by`): the server
+                                 # for almost everyone, the volume for the recorder. The page needs it to offer the
+                                 # archives that exist when a recording is created — `home` names one of these.
+                                 "place": ctl.place_of(w),
                                  "state": "live" if now - hb.ts <= self.lost_after else "stale", "idle_by_policy": False})
         for w in ctl.idle_by_policy(list(heartbeats(ctl.objects, ctl.sub.name + "/"))):    # servers: distinct — one worker per server carries units
             for s in out.values():

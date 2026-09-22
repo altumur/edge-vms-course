@@ -1,22 +1,35 @@
 # rec.subsystem.yaml — the recorder: the FOURTH subsystem, and the only one placed on top of the archive.
 #
-# A unit is one camera's recording, named by the camera: `rec/recordings/<cam>`. The recorder worker
+# A unit is ONE RECORDING of one camera, named by the operator: `rec/recordings/<name>`. The recorder worker
 # (`vms/recworker.py`, `recworker@`) subscribes to the camera's fan-out from whichever VMS worker holds it
-# (the `live_url` in the VMS heartbeat — never a second connection to the camera), takes `rec/epoch/<cam>`,
-# and writes footage into `rec/<cam>/e<epoch>/` on ITS server's archive, with the manifest beside it. The
-# worker that holds the camera may be anywhere; the recorder must be where disks are — `requires: resource`
-# — and one per VOLUME (`servers: distinct` over `place_by: volume`): a second recorder on the same disk is
-# no second place to record, while a second one on another disk of the same box is exactly that. Retention of the footage is this row's `retention_days`, read by `ArchivePolicy` on the
-# resource job; the camera's events are the worker's and retained by the VMS row's `events_retention_days`.
+# (the `live_url` in the VMS heartbeat — never a second connection to the camera), takes `rec/epoch/<name>`,
+# and writes footage into `rec/<name>/e<epoch>/` on the archive it is homed to, with the manifest beside it.
+# The worker that holds the camera may be anywhere; the recorder must be where disks are — `requires:
+# resource` — and one per VOLUME (`servers: distinct` over `place_by: volume`): a second recorder on the
+# same disk is no second place to record, while a second one on another disk of the same box is exactly
+# that. Retention of the footage is this row's `retention_days`, read by `ArchivePolicy` on the resource
+# job; the camera's events are the worker's and retained by the VMS row's `events_retention_days`.
+#
+# WHY A NAME AND NOT THE CAMERA. `id: cam` stood here while every camera had at most one recording, and it
+# stopped being true the day an archive stopped meaning "this box's disks": with a network archive as a
+# second volume, "camera 7 on the local disk" and "camera 7 in the network archive" are two recordings, of
+# one camera, with their own retention, their own tree and their own epoch — and two rows cannot share the
+# key `rec/recordings/7`. The name says which one it is; `cam` below says whose footage it holds. The two
+# were always separate in the recorder (`enrich` reads both in three lines) — only the spec tied them.
+#
+# The page keeps the simple case simple: with no archive chosen the name IS the camera, so a box with one
+# volume still writes `rec/recordings/7` and `rec/7/e1/…`, and the rule is visible in one place
+# (`#recadd` in `console.html`) instead of hidden in a default here.
 #
 # Created by the operator: a camera exists without a recording (watched: live, detected, its events kept),
-# and records when a row is here — from the page's Record toggle, which POSTs `/rec/recordings`.
+# and records when a row is here — from the page's Record form, which POSTs `/rec/recordings`.
 name: rec
 unit:
-  rows: recordings                   # rec/recordings/<cam>
-  id: cam                            # one recording per camera, named by it
+  rows: recordings                   # rec/recordings/<name>
+  id: name                           # "7", "7-cloud" — the operator's name for THIS recording
   fields:
-    cam:            {type: string, required: true}   # the VMS camera id
+    name:           {type: string, required: true}   # which recording this is: its key, its epoch, its tree
+    cam:            {type: string, required: true}   # WHOSE footage it holds — the VMS camera id
     retention_days: {type: int,    default: 30}      # media: the recorder's own policy, on its manifest
     enabled:        {type: bool,   default: true}
     labels:         {type: list}                     # where it may run: a recorder whose server has these labels
@@ -47,6 +60,14 @@ placement:
   # orders what is already eligible. With no home, the pick is the disk with the most room.
   home:       home                                   # the row's field naming the volume whose archive holds it
   rebalance:  {dead_band: 0.10}
-snapshot: [cam, retention_days, enabled, labels, home]
+  # No `spread_by: cam`, deliberately, though `id: name` is what makes it possible. `spread_by` is a filter
+  # over SERVERS — two recordings of one camera may not share a machine — and that is right for the reason
+  # it exists (redundancy: a second copy on the failed server is not a second copy) and wrong for the
+  # reason the name arrived here (a local volume and a network archive on the SAME box are two archives,
+  # and the filter would refuse the pair outright). Which one the operator is buying is not visible from
+  # the rows, so the spec does not guess: `home` names the volume for each recording, and an installation
+  # that wants copies to survive a server adds the line — `/unplaceable` then says so out loud instead of
+  # quietly putting both in one place.
+snapshot: [name, cam, retention_days, enabled, labels, home]
 console:
   running: recordings_running          # rec_recordings_running: recordings whose pipeline is writing — what the health check reads

@@ -238,7 +238,7 @@ def test_the_console_turns_a_kept_stretch_into_a_request():
     box = Box()
     survey = SpecController(SURVEY_SPEC, box.vars.as_writer("console", SURVEY_SPEC.acl_console()), box.objects, wall=box.wall)
     rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
-    rec.create({"cam": "7", "enabled": False})              # a tree and a retention; no live recording
+    rec.create({"name": "7", "cam": "7", "enabled": False})              # a tree and a retention; no live recording
     box.objects.put(SURVEY_SPEC.sub.heartbeat_key("s-1"),
                     Heartbeat("s-1", box.wall(), [], {"server": "srv-1", "hits": "7|1000|1120"}).to_bytes())
 

@@ -182,6 +182,23 @@ class SubsystemSpec:
     # and `near: rec` on it would match nothing — an affinity that reads as followed and is not. So
     # `near: {sub: rec, by: cam}` — follow the recorder holding the recording my `cam` field names.
     near_by: str = "id"
+    # `near: {sub: rec, of: cam}` — WHAT OF THEIRS the value is matched against. `by` says which value of
+    # MINE to look for (my id, or a field of my row); `of` says where in THEIR status to look for it (their
+    # unit id by default, or a field they report). The two are independent, and the second arrived when
+    # recordings stopped being named by their camera: "the recorder running a recording whose `cam` is
+    # camera 7" holds whether the operator called it `7`, `7-cloud` or `gate-lobby`, while "the recorder
+    # running unit `7`" was only ever true by coincidence — and silently false when the coincidence ended.
+    #
+    #   vms:    near: {sub: rec, of: cam}            my id (7)        vs their `cam`     — whoever records me
+    #   det:    near: {sub: rec, by: cam, of: cam}   my field `cam`   vs their `cam`     — likewise, for a pair
+    #   detjob: near: {sub: rec, by: rec}            my field `rec`   vs their id        — I name the recording
+    #
+    # The field is read from the heartbeat STATUS (`status_extra` puts it there), not from the other
+    # subsystem's rows, which this controller has no business reading. Several of their units may answer —
+    # two recordings of one camera — and then the affinity takes the smallest of their ids, so two passes
+    # over the same heartbeats reach the same server. Being beside one of them is the point; the other
+    # reads the same fan-out over the network.
+    near_of: str = ""
     # `home: <field>` — the server named in that field of the unit's own row is where it prefers to run;
     # `home: near` — wherever the subsystem this one follows is. A PREFERENCE and not a label: a label is a
     # filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
@@ -266,6 +283,7 @@ class SubsystemSpec:
                    constraint=pl.get("constraint", "none"), requires=str(pl.get("requires", "none")), servers=str(pl.get("servers", "shared")), tie_break=pl.get("tie_break", "most-free-capacity"),
                    near=str((pl.get("near") or {}).get("sub", "none") if isinstance(pl.get("near"), dict) else pl.get("near", "none")),
                    near_by=str((pl.get("near") or {}).get("by", "id") if isinstance(pl.get("near"), dict) else "id"),
+                   near_of=str((pl.get("near") or {}).get("of", "") if isinstance(pl.get("near"), dict) else ""),
                    spread_by=str(pl.get("spread_by", "") or ""),
                    place_by=str(pl.get("place_by", "server") or "server"),
                    home=str(pl.get("home", "") or ""),
@@ -306,6 +324,11 @@ class SubsystemSpec:
             raise ValueError(f"spec {spec.name}: near.by names no field: {spec.near_by!r}")
         if spec.near_by != "id" and spec.near == "none":
             raise ValueError(f"spec {spec.name}: near.by needs a near to follow")
+        if spec.near_of and spec.near == "none":
+            raise ValueError(f"spec {spec.name}: near.of needs a near to follow")
+        # `of` names a field of the OTHER subsystem's status, which this loader cannot see — nothing to
+        # check here. A name that matches nothing behaves like an affinity that finds no holder: units are
+        # placed by the filters alone, `_pick` says so in its reason, and nobody is refused.
         if spec.home == "near" and spec.near == "none":
             raise ValueError(f"spec {spec.name}: home: near needs a near to follow")
         if spec.home and spec.home != "near" and spec.home not in fields:
@@ -804,17 +827,32 @@ class SpecController(Controller):
 
     # `near: <sub>`: the worker of that subsystem whose heartbeat status lists this unit's id in phase
     # `running` — `(worker, server)` — or None. The recorder says `near: vms`: the camera's holder.
+    #
+    # `near.of` names the field of THEIR status entry the value is matched against, instead of their unit
+    # id: how a camera finds the recorder running a recording OF it without knowing what the operator named
+    # that recording. Ties (two recordings of one camera) go to the smallest of their ids, so two passes
+    # over the same heartbeats reach the same server.
     def holder_near(self, uid) -> tuple[str, str] | None:
         if self.spec.near == "none":
             return None
-        want = self.near_id(uid)
+        field = self.spec.near_of
+        want = self.near_id(uid)                                   # `by`: which value of mine to look for
+        if not want:
+            return None
         from .console import heartbeats                            # the read model's scan, without the age filter
+        found: list[tuple[str, str, str]] = []                     # (their unit id, worker, server)
         for w, hb in heartbeats(self.objects, self.spec.near + "/").items():
             if self.wall() - hb.ts > 45.0:
                 continue
             for st in hb.status:
-                if str(st.get("id")) == str(want) and st.get("phase") == "running":
-                    return w, hb.extra.get("server", "?")
+                key = st.get(field) if field else st.get("id")
+                if str(key) == want and st.get("phase") == "running":
+                    if not field:
+                        return w, hb.extra.get("server", "?")
+                    found.append((str(st.get("id")), w, hb.extra.get("server", "?")))
+        if found:
+            _, w, server = sorted(found)[0]
+            return w, server
         return None
 
     # Whose unit of the followed subsystem this one wants to be beside: its own id by default, or the

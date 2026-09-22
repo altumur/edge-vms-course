@@ -130,7 +130,7 @@ def test_a_backfill_request_is_a_row_and_not_a_202():
 
     box = Box()
     rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
-    rec.create({"cam": "7"})
+    rec.create({"name": "7", "cam": "7"})
     routes = vms_routes(ArchiveResource(box.spool, box.archive), None, None, rec)
 
     class H:                                                        # the handler surface the route uses
@@ -230,7 +230,7 @@ def _rec(box, cam="7"):
     from vms.config import REC_SPEC
     from w2cplatform.spec import SpecController
     rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
-    rec.create({"cam": cam})
+    rec.create({"name": cam, "cam": cam})
     return rec
 
 

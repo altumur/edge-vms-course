@@ -118,8 +118,9 @@ def rec_row(items: dict) -> dict:
     It used to read `r["id"] = int(r["cam"])` — and that one line was the whole of "a recording is named
     by its camera", hidden in a parser rather than declared in the YAML. With it gone the two identities
     are separate everywhere: `id` is WHICH RECORDING (its epoch, its slot, its tree), `cam` is WHOSE
-    FAN-OUT to subscribe to. `id: cam` in the spec still makes them the same string today — the difference
-    is that now that is the spec's statement and nothing else's."""
+    FAN-OUT to subscribe to. The spec said `id: cam` for a long time and they were the same string; the
+    difference the line made was that this was the spec's statement and nothing else's — which is why
+    `id: name` cost no Python here when a second archive made a camera's recordings two."""
     return REC_SPEC.row(items)
 OPERATOR_FIELDS = tuple(SPEC.fields)
 FORBIDDEN_FIELDS = PLATFORM_FIELDS

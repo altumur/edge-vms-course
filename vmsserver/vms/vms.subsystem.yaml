@@ -99,7 +99,12 @@ placement:
   # over RTSP, so the camera is the one that can follow. Both together mean the recorder reads shared
   # memory instead of the network, and after an outage the pair comes back in that order — the recording
   # to the server its row names, the camera behind it, one a pass.
-  near:       rec                               # an affinity: the recorder holding this camera's recording
+  # `of: cam`, not a bare `near: rec`: a recording is named by the operator now (`id: name`), so "the rec
+  # unit with my id" is a coincidence — true while a camera has one recording called `7`, false the moment
+  # it also has `7-cloud`, and silently false, which is worse. `of` reads the recorder's status entry and
+  # takes the recording whose `cam` is this camera, whatever it is called. Two of them: the smallest id,
+  # and the other one reads the same fan-out over the network.
+  near:       {sub: rec, of: cam}               # an affinity: the recorder running a recording OF this camera
   home:       near                              # …and, unlike a bare affinity, maintained: `ensure_home` follows it back
   # `rebalance(budget)` stops when the spread in `load/capacity` between the most and least loaded workers
   # is under 10 %. Rebalance runs only when asked, never in the controller's pass.

@@ -195,9 +195,10 @@ def device_spans(objects, cam, ours: list[dict], t0: float, t1: float, now: floa
 
 
 # A camera's footage lives under the units that record it, and the archive is keyed by unit (Lesson 7).
-# With `id: cam` there is exactly one such unit and its name is the camera's number — so this returns
-# `["7"]` for camera 7 and the answer is the one the console always gave. The day a camera has two
-# recordings it returns both, and the timeline below merges them without another line changing.
+# A camera has as many recordings as archives it is written to: one (named `7`, the camera) on a box whose
+# only archive is its disks, two (`7` and `7-cloud`) once the footage also goes to a network archive. This
+# is the one function that turns a camera into that list, and the timeline below merges what it returns —
+# which is why the day the second recording appeared, nothing above this line changed.
 def recordings_of(rec_ctl, cam) -> list[str]:
     if rec_ctl is None:
         return [str(cam)]                      # no rec controller mounted: the old assumption, said out loud
@@ -233,7 +234,13 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
             cam, t0, t1 = str(body.get("cam", "")), float(body.get("from", 0)), float(body.get("to", 0))
             if not cam or t1 <= t0:
                 return 400, {"detail": "a backfill wants a camera and a range", "error": "bad range"}
-            unit = recordings_of(rec_ctl, cam)[0]
+            # WHICH recording gets the missing footage: the one the operator named, or the camera's first.
+            # A backfill writes into a unit's tree, and with several recordings of one camera there is no
+            # "the" tree any more — the caller says, or takes the first and the answer says which it was.
+            units = recordings_of(rec_ctl, cam)
+            unit = str(body.get("rec") or "") or units[0]
+            if unit not in units:
+                return 400, {"detail": f"camera {cam} has no recording {unit}", "error": "no such recording"}
             rid = f"{unit}-{int(t0)}-{int(t1)}"
             rec_ctl.vars.put(rec_ctl.spec.sub.request_key(rid),
                              {"unit": str(unit), "cam": cam, "from": str(t0), "to": str(t1),

@@ -368,6 +368,7 @@ class IdempotencyKeys:
             if hb.extra.get("archive"):
                 s["archive"] = hb.extra["archive"]
             s["workers"].append({"worker": w, "load": ctl.load(w), "capacity": ctl.capacity_of(w), "labels": hb.extra.get("labels", ""),
+                                 "place": ctl.place_of(w),
                                  "state": "live" if now - hb.ts <= self.lost_after else "stale", "idle_by_policy": False})
 ```
 
@@ -378,6 +379,8 @@ class IdempotencyKeys:
 `archive` — путь, куда воркеры этого сервера пишут архив; на кластере это `meta.archive` из Nomad, метка, по которой планировщик и разместил. Консоль её не вычисляет, она её пересказывает.
 
 `state` — `live` или `stale` по `lost_after`. Не «мёртв»: консоль не выносит приговоров, это дело контроллера и его `failover_seconds`.
+
+`place` — **где** воркер, в том, в чём подсистема считает места (`place_by`, урок 11). Для почти всех это сервер, и поле повторяет ключ словаря. Для рекордера — том: коробка с тремя дисками держит трёх рекордеров на одном сервере, и `place` — единственное, что их различает. Страница берёт отсюда список архивов, которые можно предложить оператору, когда он заводит запись: имя, за которым стоит живой рекордер, вместо строки, которую никто не подтверждает.
 
 ```python
         for w in ctl.idle_by_policy(list(heartbeats(ctl.objects, ctl.sub.name + "/"))):    # servers: distinct — one worker per server carries units

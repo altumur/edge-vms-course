@@ -51,8 +51,9 @@ spans and ticks, `−−fenced` grey, `−−live` green and `−−stale` red f
 - `main`
   - `#title` — the selected unit's label, or "Pick one".
   - `#meta` — phase · worker · server · epoch · placement reason · "last known state" when stale.
-        - `#recbox` — the unit's recording, from `/rec/recordings` when the console mounts `rec`: Record (with days to keep) /
-    Stop recording, and the recorder's word on it (phase, worker, server).
+        - `#recbox` — the unit's recordings, from `/rec/recordings` when the console mounts `rec`: one line per
+    recording of this camera with the recorder's word on it (phase, worker, server) and *stop*, and
+    `#recadd` — an archive to write to (empty: this box's disks) and days to keep.
   - `#media` (only when `spec.media`) — a legend (recorded / fenced), `#timeline` (spans
       and ticks), `#axis` with `#t0`, `#t1` and the `#last24` / `#all` window buttons, `#note` (the
       cluster's `note`, e.g. unreachable servers), `#player` (`<video controls>`), `#playing` caption,
@@ -199,14 +200,18 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
   </div>
   <div id="recbox" style="display:none">
     <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Recording</strong><span id="recstate"></span>
-      <form id="recstart" style="margin:0;padding:0;border:0;display:flex;gap:6px;align-items:center">
-        <label style="display:flex;gap:4px;align-items:center">keep <input type="number" name="retention_days" value="30" min="1" style="width:4em"> days</label>
-        <button type="submit">Record</button>
-      </form>
-      <button type="button" id="recstop" style="display:none">Stop recording</button>
-      <small>the rec subsystem, when the console mounts it: a recording is a unit placed where an archive is, fed by the worker's fan-out</small>
-      <div class="err" id="recerr"></div>
+      <small>the rec subsystem, when the console mounts it: a recording is a unit placed where its archive is, fed by the worker's fan-out — one row per archive this unit is written to</small>
     </div>
+    <ul id="reclist"></ul>
+    <form id="recadd" style="margin-top:6px;padding-top:0;border-top:0">
+      <div class="row">
+        <label>archive <input type="text" name="archive" list="archives" placeholder="this box's disks" style="width:10em"></label>
+        <datalist id="archives"></datalist>
+        <label>keep <input type="number" name="retention_days" value="30" min="1" style="width:4em"> days</label>
+        <button type="submit">Record</button>
+        <div class="err" id="recerr"></div>
+      </div>
+    </form>
   </div>
   <div id="dets" style="display:none">
     <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Detectors</strong><small>models on this unit — the det subsystem, when the console mounts it: placed on GPU-labelled workers, its events on the timeline</small></div>
@@ -562,29 +567,62 @@ function stopLive() {
 }
 $('#live').onclick = () => { if (current) startLive(); };
 
-// -- recording: the `rec` subsystem, mounted by the console at /rec. A recording is a unit named by this
-// unit's id, created with the console's token; placement is the rec controller's pass — on a recorder, where
-// an archive is — and the row's phase (running / waiting / pending) is the recorder's word from its heartbeat.
-// No recording: the unit is held (live, detectors, events) and not recorded.
+// -- recording: the `rec` subsystem, mounted by the console at /rec. A recording is a unit of its OWN —
+// `rec/recordings/<name>` — with its own epoch, its own tree and its own retention, and this unit may
+// have several: one per archive it is written to. The name is composed HERE and nowhere else: this
+// unit's id when no archive is named (so an installation with one archive keeps `rec/recordings/7`),
+// `7-cloud` when the operator picks the archive `cloud`. Placement is the rec controller's pass — on a
+// recorder, where that archive is — and the row's phase (running / waiting / pending) is the recorder's
+// word from its heartbeat. No recording: the unit is held (live, detectors, events) and not recorded.
 let rec = null;                                                       // the /rec/spec reply, or false when the console mounts no rec
+let archives = null;                                                  // the places rec workers report — `place_by: volume`, so: the archives
+async function loadArchives() {
+  if (archives !== null) return;
+  try {
+    const d = await (await fetch('/rec/servers')).json();
+    archives = [...new Set(Object.values(d.servers || {}).flatMap(s => (s.workers || []).map(w => w.place)).filter(Boolean))].sort();
+  } catch (_) { archives = []; }
+  $('#archives').innerHTML = archives.map(a => `<option value="${a}"></option>`).join('');
+}
 async function loadRec() {
   if (rec === null) { try { const r = await fetch('/rec/spec'); rec = r.ok ? await r.json() : false; } catch (_) { rec = false; } }
   $('#recbox').style.display = rec && current != null ? 'block' : 'none';
   if (!rec || current == null) return;
+  loadArchives();
   const d = await (await fetch('/rec/recordings')).json();
-  const row = (d.rows || []).find(r => String(r.id) === String(current)) || (d.configured || []).find(r => String(r.id) === String(current));
-  $('#recstart').style.display = row ? 'none' : 'flex'; $('#recstop').style.display = row ? '' : 'none';
-  $('#recstate').textContent = row ? `${row.phase || 'placed'}${row.why ? ' · ' + row.why : ''}${row.worker ? ' · ' + row.worker + (row.server ? ' on ' + row.server : '') : ' · unplaced'}${row.via ? ' · via ' + row.via : ''} · keep ${row.retention_days} days`
-                                   : 'not recorded — watched: live, detectors and events only';
+  const byId = {};                                                    // this unit's recordings: configured rows first, the placed ones over them
+  for (const u of d.configured || []) if (String(u.cam) === String(current)) byId[u.id] = { ...u, phase: 'silent' };
+  for (const r of d.rows || []) if (String(r.cam) === String(current)) byId[r.id] = { ...byId[r.id], ...r };
+  const list = Object.values(byId);
+  $('#recstate').textContent = list.length ? '' : 'not recorded — watched: live, detectors and events only';
+  const ul = $('#reclist'); ul.innerHTML = '';
+  for (const r of list) {
+    const li = document.createElement('li'); li.className = r.phase === 'running' ? 'running' : '';
+    li.innerHTML = `<span><span class="dot"></span>${r.id} <small>${r.home ? 'archive ' + r.home : 'wherever there is room'}</small></span>` +
+                   `<small>${r.phase || 'placed'}${r.why ? ' · ' + r.why : ''}${r.worker ? ' · ' + r.worker + (r.server ? ' on ' + r.server : '') : ' · unplaced'}` +
+                   `${r.via ? ' · via ' + r.via : ''} · keep ${r.retention_days} days <a href="#" data-act="del">stop</a></small>`;
+    li.querySelector('[data-act=del]').onclick = async e => {
+      e.preventDefault();
+      if (!confirm(`Stop recording ${r.id}? The footage stays on the archive until retention removes it.`)) return;
+      try { await send('DELETE', `/rec/recordings/${encodeURIComponent(r.id)}`); } catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
+      loadRec();
+    };
+    ul.appendChild(li);
+  }
 }
-$('#recstart').onsubmit = async e => {
+$('#recadd').onsubmit = async e => {
   e.preventDefault(); $('#recerr').textContent = '';
-  try { await send('POST', '/rec/recordings', { cam: String(current), retention_days: parseInt(e.target.elements.retention_days.value, 10) || 30 }); loadRec(); }
-  catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
-};
-$('#recstop').onclick = async () => {
-  if (!confirm('Stop recording? The footage stays on the archive until retention removes it.')) return;
-  try { await send('DELETE', `/rec/recordings/${encodeURIComponent(current)}`); loadRec(); } catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
+  const f = Object.fromEntries(new FormData(e.target));
+  const archive = (f.archive || '').trim();
+  // The whole naming rule, in one visible line: the unit's id when there is one archive, id-archive when
+  // there are more. Not a default inside the spec, where nobody would read it and everybody would depend
+  // on it — the operator sees the name that appears in the list a second later.
+  const name = archive ? `${current}-${archive}` : String(current);
+  try {
+    await send('POST', '/rec/recordings', { name, cam: String(current), home: archive,
+                                            retention_days: parseInt(f.retention_days, 10) || 30 });
+    e.target.reset(); loadRec();
+  } catch (err) { $('#recerr').textContent = 'refused: ' + err.message; }
 };
 
 // -- detectors: the `det` subsystem, mounted by the console at /det. A det unit is one model on this unit,

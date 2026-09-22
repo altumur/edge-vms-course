@@ -188,7 +188,7 @@ def test_backfill_closes_our_gaps_and_what_it_fetches_is_ours():
     w.reconcile_once(); w.heartbeat_once()
 
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
+    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     now = 1000000.0                                   # backfill takes its own `now`; the heartbeats keep the box's
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
@@ -229,7 +229,7 @@ def test_subtraction_is_one_rule():
 
 
 def test_a_units_id_is_a_name_and_not_a_path():
-    """Where the text actually comes from: a subsystem whose id is a FIELD (`rec`, `id: cam`)
+    """Where the text actually comes from: a subsystem whose id is a FIELD (`rec`, `id: name`)
     takes the unit's id verbatim from the operator's body — only `_next_id` protects a numeric
     one. From there the same string becomes the key `rec/recordings/<id>`, the prefix the
     console's token is matched against (`rec/recordings/*` — which `rec/recordings/../../…`
@@ -239,12 +239,12 @@ def test_a_units_id_is_a_name_and_not_a_path():
 
     for bad in ("../../cameras/7", "a/b", ".."):
         try:
-            rec.create({"cam": bad})
+            rec.create({"name": bad, "cam": "7"})
             assert False, f"a unit id was accepted as a path: {bad!r}"
         except Refused as e:
             assert "name, not a path" in str(e), e
 
-    r = rec.create({"cam": "7"})                       # the ordinary case is untouched
+    r = rec.create({"name": "7", "cam": "7"})                       # the ordinary case is untouched
     assert r["id"] == "7" and box.vars.get("rec/recordings/7")[0]["cam"] == "7"
 
     # and one layer down the store refuses the same shapes on its own, whoever calls it
@@ -296,51 +296,44 @@ def test_spread_by_keeps_two_copies_off_one_server():
     assert admin.placement("7-third") is None and "7-third" in [u["id"] for u in admin.unplaceable()]
 
 
-# The claim this file is here to check: two recordings of one camera, on two servers, cost a YAML edit
-# and nothing else. Three lines change — `id`, the `cam` field, `spread_by` — and no Python at all.
-TWO_COPIES_YAML = """
-name: rec
-unit:
-  rows: recordings
-  id: name                                           # was: cam — the unit is now named, not numbered
-  fields:
-    name:           {type: string, required: true}   # "7-main", "7-backup"
-    cam:            {type: string, required: true}   # whose fan-out this recording subscribes to
-    retention_days: {type: int,    default: 30}
-    enabled:        {type: bool,   default: true}
-    labels:         {type: list}
-placement:
-  capacity:   {from: capacity, fallback: 50}
-  headroom:   {from: headroom}
-  constraint: labels-subset
-  requires:   none
-  servers:    shared
-  tie_break:  most-free-capacity
-  near:       vms
-  spread_by:  cam                                    # new: two copies of one camera go on different servers
-  rebalance:  {dead_band: 0.10}
-snapshot: [name, cam, retention_days, enabled, labels]
-console:
-  running: recordings_running
-"""
+# What the note promised, and what actually shipped. The spec names its recordings now — `id: name` —
+# because a camera written to two archives is two rows and one key cannot hold both. What it deliberately
+# does NOT carry is `spread_by: cam`: that filter keeps two recordings of one camera off one SERVER, which
+# is right for the installation buying redundancy and wrong for the one whose second archive hangs off the
+# same box. So this is the test of that one line, added to the spec as shipped.
+def _redundant_spec():
+    """`rec.subsystem.yaml` as shipped, with the placement of an installation that wants the copies apart.
+
+    The `unit:` block is untouched — it is the shipped one, names and all. Only `placement` differs, and
+    of its four lines exactly one is the subject: `spread_by: cam`. The other three take the disks out of
+    the exercise, which is about servers."""
+    import yaml
+    import vms
+    from w2cplatform.spec import SubsystemSpec
+    path = os.path.join(os.path.dirname(vms.__file__), "rec.subsystem.yaml")
+    d = yaml.safe_load(open(path, encoding="utf-8"))
+    d["placement"]["spread_by"] = "cam"                                     # the line under test
+    d["placement"].update({"requires": "none", "servers": "shared", "near": "vms"})
+    d["placement"].pop("place_by", None); d["placement"].pop("home", None)
+    return SubsystemSpec.from_dict(d)
 
 
 def test_two_recordings_of_one_camera_are_a_yaml_edit():
     """Not a rehearsal for a change: the change itself, run against the real classes.
 
-    The spec below is `rec.subsystem.yaml` with three lines different. Everything it drives —
-    SpecController, the archive tree, the console's timeline — is the shipped code,
-    imported unchanged. If any of it still assumed "a recording is named by its camera", this
-    test would not pass, and until the unit-keyed tree it would not have."""
-    import yaml
+    The unit is the shipped one and the placement is one line longer. Everything it drives —
+    SpecController, the archive tree, the console's timeline — is the shipped code, imported
+    unchanged. If any of it still assumed "a recording is named by its camera", this test
+    would not pass, and until the unit-keyed tree it would not have."""
     from w2cplatform.contract import Heartbeat
-    from w2cplatform.spec import SubsystemSpec
     from vms.archive import Manifest, Segment, segment_path
+    from vms.config import REC_SPEC
     from vms.console import recordings_of
 
     box, ctl, con, con_vars = _box()
-    spec = SubsystemSpec.from_dict(yaml.safe_load(TWO_COPIES_YAML))
-    assert spec.id == "name" and spec.spread_by == "cam"
+    spec = _redundant_spec()
+    assert REC_SPEC.id == "name" and not REC_SPEC.spread_by      # what ships: named, and not spread by itself
+    assert spec.id == "name" and spec.spread_by == "cam"         # what this installation runs
 
     rec = SpecController(spec, box.vars, box.objects, wall=box.wall)
     for w, server in (("r-1", "srv-1"), ("r-2", "srv-2")):
@@ -378,28 +371,17 @@ def test_two_recordings_of_one_camera_are_a_yaml_edit():
     assert rec.unit("1-main")["retention_days"] == 30 and rec.unit("1-backup")["retention_days"] == 1
 
 
-class _NamedRec(RecWorker):
-    """A recorder over the two-copies spec: its units are NAMED, not numbered."""
-    parse_row = staticmethod(lambda items: _named_spec().row(items))
-
-
-def _named_spec():
-    import yaml
-    from w2cplatform.spec import SubsystemSpec
-    return SubsystemSpec.from_dict(yaml.safe_load(TWO_COPIES_YAML))
-
-
 def test_a_named_unit_reaches_the_places_that_still_assumed_a_number():
     """Three reads and one write kept `int(...)` on a unit id after the tree stopped assuming one.
 
-    Each of them is unreachable while `id: cam` holds — which is exactly why they survived the
-    change and would have failed on the first `1-backup`. Here the two-copies spec is in force,
-    so they are all reachable, and each one answers instead of raising."""
+    Every one of them was unreachable while `id: cam` held — which is exactly why they survived
+    so long, and why the first `7-cloud` would have found all four at once. They are reachable
+    now, in the shipped spec; here each one answers instead of raising."""
     from vms.console import vms_routes as console_routes
     from vms.resource import vms_routes as resource_routes
 
     box, ctl, con, con_vars = _box()
-    spec = _named_spec()
+    spec = _redundant_spec()
     rec = SpecController(spec, box.vars, box.objects, wall=box.wall)
     for w, server in (("r-1", "srv-1"), ("r-2", "srv-2")):
         box.objects.put(spec.sub.heartbeat_key(w),
@@ -427,12 +409,12 @@ def test_a_named_unit_reaches_the_places_that_still_assumed_a_number():
     assert status == 200 and len(spans) == 2
 
     # 3. the lost lease: a reassignment names the unit the way the lease does — as text
-    r1 = _NamedRec("r-1", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-1")
+    r1 = RecWorker("r-1", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-1")
     r1.reconcile_once()
     held = sorted(r1.reconciler.actual)
     assert held and all(not str(u).isdigit() for u in held)                # the point: nothing here is a number
     rec.move(held[0], "r-2", "operator asked")
-    _NamedRec("r-2", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-2").reconcile_once()
+    RecWorker("r-2", box.vars, box.objects, archive=archive, clock=box.clock, wall=box.wall, server="srv-2").reconcile_once()
     assert r1.lease_pass() == [held[0]] and r1.recording_allowed        # released, not fenced — and no ValueError
     assert held[0] not in r1.reconciler.actual
 
@@ -502,7 +484,7 @@ def test_backfill_stops_while_the_disk_is_over_the_mark():
     con.create_camera({"name": "front", "source": CARD})
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
+    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
                   FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
@@ -591,9 +573,9 @@ def test_three_disks_are_three_places_to_record_on_one_server():
 
     assert rec.idle_by_policy(["r-1", "r-2", "r-3"]) == [], "counted by server, two of the three would idle"
 
-    rec.create({"cam": "1", "home": "vol-b"})
-    rec.create({"cam": "2", "home": "vol-c"})
-    rec.create({"cam": "3"})                                   # no home: wherever there is room
+    rec.create({"name": "1", "cam": "1", "home": "vol-b"})
+    rec.create({"name": "2", "cam": "2", "home": "vol-c"})
+    rec.create({"name": "3", "cam": "3"})                                   # no home: wherever there is room
     rec.ensure_placed()
     assert rec.where("1") == "r-2" and "at home on vol-b" in rec.placement("1").reason
     assert rec.where("2") == "r-3" and "at home on vol-c" in rec.placement("2").reason
@@ -604,7 +586,7 @@ def test_three_disks_are_three_places_to_record_on_one_server():
     # camera stops recording because one disk of three went away.
     box.wall.advance(60)
     _rec_alive(box, "r-1", "srv-a", volume="vol-a"); _rec_alive(box, "r-3", "srv-a", volume="vol-c")
-    rec.create({"cam": "4", "home": "vol-b"})
+    rec.create({"name": "4", "cam": "4", "home": "vol-b"})
     rec.ensure_placed()
     assert rec.where("4") in ("r-1", "r-3") and "away from home vol-b" in rec.placement("4").reason
     assert rec.unit("4")["home"] == "vol-b"                    # remembered, so it can go back
@@ -617,6 +599,61 @@ def test_three_disks_are_three_places_to_record_on_one_server():
     assert [m[0] for m in moved] == ["4"] and rec.where("4") == "r-2"
 
 
+def test_one_camera_written_to_two_archives_is_two_recordings_on_one_box():
+    """The requirement that took `id: cam` off the spec — and it is not redundancy.
+
+    A box whose only storage is its disks has one archive, so "record camera 7" is one row and
+    naming that row by the camera costs nothing. Give it a second volume — a network archive
+    mounted beside the local disks — and "camera 7 locally, keep a week" and "camera 7 into the
+    network archive, keep a year" are two recordings of one camera, on ONE server: two rows, and
+    `rec/recordings/7` cannot hold both. The name says which recording; `cam` says whose footage.
+
+    Nothing spreads by camera here, deliberately — both recordings belong on this box, which is
+    what the operator asked for. `spread_by: cam` would refuse the pair outright; the test above
+    is the other installation, the one that buys a second server."""
+    box, rec = _rec_home_box()
+    _rec_alive(box, "r-1", "srv-a", volume="disks")
+    _rec_alive(box, "r-2", "srv-a", volume="cloud")                 # one server, two archives, two recorders
+
+    rec.create({"name": "7", "cam": "7", "home": "disks", "retention_days": 7})
+    rec.create({"name": "7-cloud", "cam": "7", "home": "cloud", "retention_days": 365})
+    rec.ensure_placed()
+
+    assert rec.where("7") == "r-1" and rec.where("7-cloud") == "r-2"            # one recorder per volume
+    assert rec.server_of(rec.placement("7").worker) == "srv-a" == rec.server_of(rec.placement("7-cloud").worker)
+    assert box.vars.list("rec/recordings/") == ["rec/recordings/7", "rec/recordings/7-cloud"]
+    assert rec.unit("7")["cam"] == rec.unit("7-cloud")["cam"] == "7"            # one camera behind both
+    assert rec.unit("7")["retention_days"] == 7 and rec.unit("7-cloud")["retention_days"] == 365
+
+    # the console still answers "where is camera 7's footage" — with both of them, and the page
+    # composed those two names from the one field the operator filled in: the archive.
+    from vms.console import recordings_of
+    assert sorted(recordings_of(rec, 7)) == ["7", "7-cloud"]
+
+    # the simple installation is untouched: with one archive the name IS the camera, and the row,
+    # the tree and every path in the lessons read exactly as they did before.
+    rec.create({"name": "8", "cam": "8"})
+    assert rec.unit("8")["id"] == "8"
+
+
+def test_the_console_names_the_archives_a_recording_can_be_homed_to():
+    """Where the page gets the list it offers when a recording is created.
+
+    `/servers` reports each worker's PLACE — whatever `place_by` counts in: the server for
+    almost everyone, the VOLUME for the recorder. So the operator picks an archive the cluster
+    actually reports instead of typing a name nobody answers to, and `home` is then a name with
+    a recorder behind it. Getting it wrong is still not fatal — `home` is a preference — but a
+    preference nobody can satisfy is a silent one."""
+    from w2cplatform.console import SpecConsole
+    box, rec = _rec_home_box()
+    _rec_alive(box, "r-1", "srv-a", volume="disks")
+    _rec_alive(box, "r-2", "srv-a", volume="cloud")
+
+    con = SpecConsole(rec, wall=box.wall)
+    places = sorted(w["place"] for s in con.servers()["servers"].values() for w in s["workers"])
+    assert places == ["cloud", "disks"]
+
+
 def test_a_recording_prefers_its_home_and_is_written_anywhere_when_it_is_down():
     """The one thing `home` must not be is a label.
 
@@ -626,13 +663,13 @@ def test_a_recording_prefers_its_home_and_is_written_anywhere_when_it_is_down():
     when it returns. The footage written meanwhile stays where it was written until that
     server needs the room (`vms/space.py`)."""
     box, rec = _rec_home_box()
-    rec.create({"cam": "1", "home": "srv-a"})
+    rec.create({"name": "1", "cam": "1", "home": "srv-a"})
     rec.ensure_placed()
     assert rec.where("1") == "r-1" and "at home on srv-a" in rec.placement("1").reason
 
     box.wall.advance(60); _rec_alive(box, "r-2", "srv-b")          # srv-a goes away, with its resource
     rec.move("1", "r-2", "srv-a gone")
-    rec.create({"cam": "2", "home": "srv-a"})                      # a NEW recording of srv-a's, while it is down
+    rec.create({"name": "2", "cam": "2", "home": "srv-a"})                      # a NEW recording of srv-a's, while it is down
     rec.ensure_placed()
     assert rec.where("2") == "r-2" and "away from home srv-a" in rec.placement("2").reason
     assert rec.unplaceable() == []                                 # the point: it records, it is not "unplaceable"
@@ -648,7 +685,7 @@ def test_a_recording_with_no_home_is_never_moved_by_it():
     """Every recording until an operator says otherwise. An empty field is not a server name:
     a homeless recording is placed on the disk with the most room, and stays there."""
     box, rec = _rec_home_box()
-    rec.create({"cam": "1"})
+    rec.create({"name": "1", "cam": "1"})
     rec.ensure_placed()
     where = rec.where("1")
     assert "home" not in rec.placement("1").reason
@@ -663,7 +700,7 @@ def test_the_filters_still_beat_the_preference():
     box, rec = _rec_home_box()
     _rec_alive(box, "r-1", "srv-a", labels=["disks:slow"])
     _rec_alive(box, "r-2", "srv-b", labels=["disks:fast"])
-    rec.create({"cam": "1", "home": "srv-a", "labels": ["disks:fast"]})
+    rec.create({"name": "1", "cam": "1", "home": "srv-a", "labels": ["disks:fast"]})
     rec.ensure_placed()
     assert rec.where("1") == "r-2" and "away from home srv-a" in rec.placement("1").reason
     assert rec.ensure_home(5) == [] and rec.where("1") == "r-2"
@@ -675,11 +712,16 @@ def test_the_camera_follows_its_recording_and_not_the_other_way():
     A recording writes to a disk and a disk does not move; a fan-out can be read from any
     server over RTSP. So the recording names a home and the camera says `home: near` — it
     goes where its recording is. Both pointing at each other would be worse than either:
-    with no anchor, every pass moves each towards where the other was, and they swap."""
+    with no anchor, every pass moves each towards where the other was, and they swap.
+
+    Note WHICH recording it follows: `near: {sub: rec, of: cam}`, the entry whose `cam` is this
+    camera — here one the operator called `1-cloud`, a name this controller never learns and
+    does not need to. Matching by id, as the spec did while recordings were named by camera,
+    would have found nothing and moved the camera nowhere, saying nothing about it."""
     box, ctl, con, con_vars = _box()
     _worker_on(box, "w-a", "srv-a"); _worker_on(box, "w-b", "srv-b")
     box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),               # the recording of camera 1 is on srv-b
-                    Heartbeat("r-1", box.wall(), [{"id": "1", "phase": "running"}], {"server": "srv-b"}).to_bytes())
+                    Heartbeat("r-1", box.wall(), [{"id": "1-cloud", "cam": "1", "phase": "running"}], {"server": "srv-b"}).to_bytes())
     con.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4"})
     ctl.ensure_placed()
     assert ctl.where(1) == "w-b" and "beside r-1 holding it" in ctl.placement(1).reason
@@ -687,7 +729,7 @@ def test_the_camera_follows_its_recording_and_not_the_other_way():
     box.objects.put(REC_SPEC.sub.heartbeat_key("r-1"),               # the recording goes home to srv-a
                     Heartbeat("r-1", box.wall(), [], {"server": "srv-b"}).to_bytes())
     box.objects.put(REC_SPEC.sub.heartbeat_key("r-2"),
-                    Heartbeat("r-2", box.wall(), [{"id": "1", "phase": "running"}], {"server": "srv-a"}).to_bytes())
+                    Heartbeat("r-2", box.wall(), [{"id": "1-cloud", "cam": "1", "phase": "running"}], {"server": "srv-a"}).to_bytes())
     assert ctl.ensure_home(1) == [(1, "w-b", "w-a")]                 # and the camera follows it
     assert "it follows rec onto srv-a" in ctl.placement(1).reason
 
@@ -790,7 +832,7 @@ def test_the_upgrade_script_polls_a_condition_instead_of_sleeping():
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
 
     rec_ctl = SpecController(REC_SPEC, box.vars, box.objects, wall=box.wall)
-    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"cam": "1"})
+    SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall).create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     r = RecWorker("r-1", box.vars, box.objects, FakeActuator(), archive=arch, clock=box.clock,
                   wall=box.wall, server="srv-1", env={})
@@ -848,7 +890,7 @@ def test_a_request_is_fetched_outside_the_window_and_the_budget():
 
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
     con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)
-    con_rec.create({"cam": "1"})
+    con_rec.create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     now = 1000000.0
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
@@ -881,7 +923,7 @@ def test_a_request_for_somebody_elses_recording_is_left_alone():
     con.create_camera({"name": "front", "source": CARD})
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
     con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall)
-    con_rec.create({"cam": "1"})
+    con_rec.create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
                   FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1", env={})
@@ -904,7 +946,7 @@ def test_a_request_waits_while_the_disk_is_over_the_mark():
     con.create_camera({"name": "front", "source": CARD})
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
                   FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
@@ -932,7 +974,7 @@ def test_a_request_the_recorder_could_not_serve_is_not_reported_as_served():
     con.create_camera({"name": "front", "source": CARD})
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"name": "1", "cam": "1"})
     arch = ArchiveResource(box.spool, box.archive, wall=box.wall)
     r = RecWorker("r-1", box.vars.as_writer("recworker", ["rec/epoch/*", "rec/slots/*"]), box.objects,
                   FakeActuator(), archive=arch, clock=box.clock, wall=box.wall, server="srv-1",
@@ -960,7 +1002,7 @@ def test_the_hole_in_the_footage_and_the_hole_in_the_detections_close_together()
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
 
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"name": "1", "cam": "1"})
     det = SpecController(DET_SPEC, con_vars, box.objects, wall=box.wall)
     det.create({"name": "1-lpr", "cam": "1", "kind": "lpr", "params": "plates"})
     # the console's token in this harness predates `detjob`; in the process it carries that grant too
@@ -999,7 +1041,7 @@ def test_a_fetch_that_brought_nothing_new_queues_no_scan():
     ctl.ensure_placed(); w.reconcile_once(); w.heartbeat_once()
 
     rec_ctl = SpecController(REC_SPEC, box.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), box.objects, wall=box.wall)
-    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"cam": "1"})
+    con_rec = SpecController(REC_SPEC, con_vars, box.objects, wall=box.wall); con_rec.create({"name": "1", "cam": "1"})
     det = SpecController(DET_SPEC, con_vars, box.objects, wall=box.wall)
     det.create({"name": "1-lpr", "cam": "1", "kind": "lpr"})
     jobs = SpecController(DETJOB_SPEC, box.vars.as_writer("console2", DETJOB_SPEC.acl_console()), box.objects, wall=box.wall)

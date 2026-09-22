@@ -47,7 +47,7 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     r = _recorder(box); r2 = _recorder(box, "r-2", "srv-2", capacity=1)                            # two servers with archives; the camera's worker is on srv-1
     assert r.name == "r-1" and r.SUB.name == "rec" and box.vars.list("rec/slots/") == ["rec/slots/r-1", "rec/slots/r-2"]
     # the operator records camera 1: a row under rec/, the console's token; placement is the rec controller's pass
-    row = rec_con.create({"cam": "1", "retention_days": 7})
+    row = rec_con.create({"name": "1", "cam": "1", "retention_days": 7})
     assert row["id"] == "1" and row["retention_days"] == 7 and box.vars.list("rec/recordings/") == ["rec/recordings/1"]
     try:
         rec_con.place("1"); raise AssertionError("a console token never writes placement")
@@ -89,7 +89,7 @@ def test_a_recording_is_a_unit_placed_on_the_archive_and_fed_by_the_workers_fan_
     con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4"}); con.create_camera({"name": "dock", "source": "driverpack://file/dock.mp4"})
     ctl.ensure_placed(); ctl.move(2, "w-2", "test"); ctl.move(3, "w-2", "test")
     w2.reconcile_once(); w2.heartbeat_once(); w.reconcile_once(); w.heartbeat_once()
-    rec_con.create({"cam": "2", "home": "srv-2"}); rec_con.create({"cam": "3", "home": "srv-1"})
+    rec_con.create({"name": "2", "cam": "2", "home": "srv-2"}); rec_con.create({"name": "3", "cam": "3", "home": "srv-1"})
     pl2, pl3 = rec_ctl.ensure_placed()[-2:]                                                        # (the pass returns every placement, camera 1's first)
     assert (pl2.worker, pl3.worker) == ("r-2", "r-1")
     assert pl2.reason.endswith("on srv-2, whose resource is unknown, at home on srv-2")
@@ -113,7 +113,7 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     box, ctl, con, rec_con, rec_ctl, w = _box()
     con.create_camera({"name": "yard", "source": "driverpack://file/yard.mp4"})                    # camera 2: created, not placed yet
     r = _recorder(box)
-    rec_con.create({"cam": "2"}); rec_ctl.ensure_placed()
+    rec_con.create({"name": "2", "cam": "2"}); rec_ctl.ensure_placed()
     assert r.reconcile_once() == [("failed", "2")]                                                   # no fan-out to subscribe to
     r.heartbeat_once()
     st = rec_ctl.workers_seen()["r-1"].status[0]
@@ -122,7 +122,7 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     box.clock.advance(10)
     assert r.reconcile_once() == [("start", "2")] and r.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"   # held here: the tee's shared memory
     # a camera with no recording is watched, not recorded: it is held (live, detection, events), and has no rec/ tree
-    assert rec_ctl.units() == [{"id": "2", "cam": "2", "retention_days": 30, "enabled": True, "labels": [], "home": "", "revision": 1}]
+    assert rec_ctl.units() == [{"id": "2", "name": "2", "cam": "2", "retention_days": 30, "enabled": True, "labels": [], "home": "", "revision": 1}]
     assert [c["id"] for c in ctl.cameras()] == [1, 2] and subsystems_under(box.archive) == {}
     w.observe(1, "motion")
     assert subsystems_under(box.archive) == {"vms": ["1"]}
