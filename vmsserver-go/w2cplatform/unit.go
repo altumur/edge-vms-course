@@ -201,6 +201,12 @@ type SubsystemSpec struct {
 	// filter, and a unit whose home is down would become unplaceable — the one thing it must not be,
 	// because the home being down is exactly when the work has to continue somewhere else.
 	Home     string
+	// place_by: <field> — WHAT the policy and the home are counted in: the heartbeat field naming the
+	// place a worker occupies. "server" by default, and for everything whose unit of storage is a server
+	// that is the truth. A recorder's is not: a box with three disks runs three recorders, one per volume,
+	// and servers: distinct has to mean one per DISK. Only the policy and home follow this field —
+	// reachability, draining and spread_by stay on the server, because those are about a machine.
+	PlaceBy  string
 	TieBreak string
 	DeadBand float64
 	// `retire_when: {field: state, in: [done, failed]}` — a unit whose row says one of those values is
@@ -324,6 +330,10 @@ func SpecFromMap(d map[string]any) (*SubsystemSpec, error) {
 	}
 	if hm, ok := pl["home"].(string); ok {
 		s.Home = hm
+	}
+	s.PlaceBy = "server"
+	if pb, ok := pl["place_by"].(string); ok && pb != "" {
+		s.PlaceBy = pb
 	}
 	if tb, ok := pl["tie_break"].(string); ok {
 		s.TieBreak = tb

@@ -74,6 +74,28 @@ func (c *SpecController) ServerOf(worker string) string {
 	return "?"
 }
 
+// PlaceOf is the place this worker occupies, in the units the spec counts in: its server, or its volume
+// when the subsystem says place_by: volume.
+//
+// A worker that does not say which volume it is on is treated as one volume named after its server. That
+// is the truth for every box with one disk, it is what a worker written before the field existed means,
+// and where it is NOT the truth it errs the safe way: three recorders on three disks that nobody told
+// apart read as three on one place, and distinct idles two of them rather than letting two think they own
+// the same disk.
+func (c *SpecController) PlaceOf(worker string) string {
+	if c.Spec.PlaceBy == "" || c.Spec.PlaceBy == "server" {
+		return c.ServerOf(worker)
+	}
+	hb, ok := c.WorkersSeen(1e12)[worker]
+	if !ok {
+		return "?"
+	}
+	if v := hb.ExtraString(c.Spec.PlaceBy, ""); v != "" {
+		return v
+	}
+	return hb.ExtraString("server", "?")
+}
+
 func (c *SpecController) Headroom() int {
 	n := 0
 	for _, hb := range c.WorkersSeen(45) {
@@ -478,7 +500,7 @@ func (c *SpecController) IdleByPolicy(workers []string) []string {
 	sorted := append([]string{}, workers...)
 	sort.Slice(sorted, func(i, j int) bool { return SlotNumber(sorted[i]) < SlotNumber(sorted[j]) })
 	for _, w := range sorted {
-		s := c.ServerOf(w)
+		s := c.PlaceOf(w) // the place, not the machine: a disk is a place to record, a box is not
 		byServer[s] = append(byServer[s], w)
 	}
 	for server, ws := range byServer {
@@ -720,7 +742,7 @@ func (c *SpecController) pick(pool []string, uid string) (best string, free int,
 	if home != "" {
 		var atHome []string
 		for _, w := range pool {
-			if c.ServerOf(w) == home {
+			if c.PlaceOf(w) == home {
 				atHome = append(atHome, w)
 			}
 		}
@@ -750,7 +772,7 @@ func (c *SpecController) pick(pool []string, uid string) (best string, free int,
 	if best != "" && holder != "" && c.ServerOf(best) != server {
 		note = ", away from " + holder + " on " + server + " (no room there)"
 	}
-	if best != "" && home != "" && !follows && c.ServerOf(best) != home {
+	if best != "" && home != "" && !follows && c.PlaceOf(best) != home {
 		note += "; away from home " + home
 	}
 	return best, free, note
@@ -777,12 +799,12 @@ func (c *SpecController) EnsureHome(budget int, workers []string) []Move {
 		}
 		uid, home := row.ID(), c.HomeFor(row)
 		pl := c.Placement(uid)
-		if home == "" || pl == nil || c.ServerOf(pl.Worker) == home {
+		if home == "" || pl == nil || c.PlaceOf(pl.Worker) == home {
 			continue
 		}
 		var atHome []string
 		for _, w := range c.Eligible(row, pool) {
-			if c.ServerOf(w) == home {
+			if c.PlaceOf(w) == home {
 				atHome = append(atHome, w)
 			}
 		}

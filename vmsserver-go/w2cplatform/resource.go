@@ -47,7 +47,8 @@ type ResourceHeartbeat struct {
 	Build   string              `json:"build"`
 	Usage   int64               `json:"usage"`    // every FILE under the root, measured once a pass
 	UsageAt float64             `json:"usage_at"` // …and when: a stale number must say so
-	Space   DiskFree            `json:"space"`    // the disk, live in every heartbeat: what a peer reads before sending anything here
+	Space   DiskFree            `json:"space"`    // every volume summed: what a fleet view wants
+	Volumes map[string]DiskFree `json:"volumes"`  // …and each disk on its own: what DECIDES anything
 	Units   map[string][]string `json:"units"`
 	Mirrors map[string]int      `json:"mirrors"`
 }
@@ -245,9 +246,25 @@ type Freer interface {
 	Free(need int64, now, minDays float64) map[string]any
 }
 
+// VolumeFreer is the same door on a box with more than one disk: the resource measured ONE volume, so the
+// answer has to come off that volume — bytes freed on another close nothing, because the unit that cannot
+// write is on this one. A subsystem whose files are all on one disk implements Freer and is asked the old
+// way; nothing had to change on the day the second disk arrived.
+type VolumeFreer interface {
+	FreeOn(need int64, now, minDays float64, volume string) map[string]any
+}
+
+// Volume is one disk of this server, named. Ordered, because "the first" and "the emptiest" are both
+// answers a caller gets and a map would give them differently on every run.
+type Volume struct {
+	Name string
+	Path string
+}
+
 // Resource is one server's resource: its tree, its heartbeat, its policy pass.
 type Resource struct {
-	Root, Server, URL string
+	Root, Server, URL string // Root is the FIRST volume's path: what single-volume callers still mean
+	Volumes           []Volume
 	Vars              Variables
 	Objects           ObjectStore
 	BucketSeconds     int
@@ -274,15 +291,102 @@ func NewResource(root, server, url string, vars Variables, objects ObjectStore, 
 	}
 	mustSchema(vars) // a build older than the store does not run at all
 	os.MkdirAll(root, 0o755)
-	return &Resource{Root: root, Server: server, URL: url, Vars: vars, Objects: objects,
+	return &Resource{Root: root, Volumes: []Volume{{Name: "default", Path: root}},
+		Server: server, URL: url, Vars: vars, Objects: objects,
 		BucketSeconds: bucketSeconds, Wall: wall, Peers: peers, LostAfter: 45,
 		Hooks: map[string]Hook{}, SpaceProbe: DiskSpace}
+}
+
+// NewResourceOn is the same resource on several disks. It is still ONE resource, because reachability is a
+// property of a server and a volume has no address: the volumes are its internal structure. What a volume
+// does have is its own bottom, which is why the watermark — the only thing here that ever measured a disk
+// — becomes a loop over them.
+func NewResourceOn(volumes []Volume, server, url string, vars Variables, objects ObjectStore, bucketSeconds int, wall Clock, peers PeerClient) *Resource {
+	if len(volumes) == 0 {
+		panic("a resource needs at least one volume")
+	}
+	r := NewResource(volumes[0].Path, server, url, vars, objects, bucketSeconds, wall, peers)
+	r.Volumes = append([]Volume(nil), volumes...)
+	for _, v := range r.Volumes {
+		os.MkdirAll(v.Path, 0o755)
+	}
+	return r
+}
+
+// SpaceOf is one volume's disk. Space sums them, and the sum is the number that LIES: a box half full
+// across two disks with one of them at 98% is a box that has stopped recording.
+func (r *Resource) SpaceOf(name string) DiskFree {
+	for _, v := range r.Volumes {
+		if v.Name == name {
+			total, free := r.SpaceProbe(v.Path)
+			out := DiskFree{Total: total, Free: free, Used: total - free}
+			if total > 0 {
+				out.Full = float64(total-free) / float64(total)
+			}
+			return out
+		}
+	}
+	return DiskFree{}
+}
+
+// Spaces is every volume by name: what the console shows and what Relieve walks.
+func (r *Resource) Spaces() map[string]DiskFree {
+	out := map[string]DiskFree{}
+	for _, v := range r.Volumes {
+		out[v.Name] = r.SpaceOf(v.Name)
+	}
+	return out
+}
+
+// VolumeOf answers which disk holds a unit — and it is not written down anywhere. The unit's directory IS
+// the answer, exactly as SubsystemsUnder already derives what is on this resource at all. A map would be a
+// second truth about the disks, and it would drift.
+func (r *Resource) VolumeOf(sub, unit string) string {
+	for _, v := range r.Volumes {
+		if st, err := os.Stat(filepath.Join(v.Path, sub, unit)); err == nil && st.IsDir() {
+			return v.Name
+		}
+	}
+	return ""
+}
+
+// PlaceVolume is where a unit that is not here yet goes: the emptiest disk. After that VolumeOf answers,
+// and a unit does not move between disks — that would be copying terabytes as a side effect of a pass.
+func (r *Resource) PlaceVolume() string {
+	best, most := r.Volumes[0].Name, int64(-1)
+	for _, v := range r.Volumes {
+		if _, free := r.SpaceProbe(v.Path); free > most {
+			best, most = v.Name, free
+		}
+	}
+	return best
+}
+
+// PathOf is the absolute path of something named relative to a volume: the volume that has it, else the
+// emptiest.
+func (r *Resource) PathOf(rel string) string {
+	for _, v := range r.Volumes {
+		full := filepath.Join(v.Path, rel)
+		if _, err := os.Stat(full); err == nil {
+			return full
+		}
+	}
+	for _, v := range r.Volumes {
+		if v.Name == r.PlaceVolume() {
+			return filepath.Join(v.Path, rel)
+		}
+	}
+	return filepath.Join(r.Root, rel)
 }
 
 // Space is the disk, and how full it is. Free is what a peer reads before sending anything here: an
 // evacuation onto a disk that is itself tight only moves the problem.
 func (r *Resource) Space() DiskFree {
-	total, free := r.SpaceProbe(r.Root)
+	var total, free int64
+	for _, v := range r.Volumes {
+		t, f := r.SpaceProbe(v.Path)
+		total, free = total+t, free+f
+	}
 	out := DiskFree{Total: total, Free: free, Used: total - free}
 	if total > 0 {
 		out.Full = float64(total-free) / float64(total)
@@ -313,33 +417,69 @@ func (r *Resource) Relieve() map[string]any {
 	if !knob.Enabled {
 		return map[string]any{"space": "off"}
 	}
-	sp := r.Space()
-	if sp.Total == 0 || float64(sp.Used) <= float64(sp.Total)*knob.High {
-		return map[string]any{"space": "ok", "full": round3(sp.Full)}
-	}
-	need := int64(float64(sp.Used) - float64(sp.Total)*knob.Low)
-	var freed int64
+	// Per VOLUME, and that is the whole difference from the single-disk case: space does not average. A
+	// box that is 50% full across two disks, one of them at 98%, is a box that stops recording — and
+	// freeing bytes on the empty one closes nothing, because the unit that cannot write is on the full
+	// one. So the loop is over volumes, and the volume goes to the hook: only the subsystem knows which
+	// of its files are where, only the resource knows which disk is short.
 	out := map[string]any{}
-	for _, sub := range hookNames(r.Hooks) {
-		free, ok := r.Hooks[sub].(Freer)
-		if !ok {
+	var over []map[string]any
+	worst := 0.0
+	for _, v := range r.Volumes {
+		sp := r.SpaceOf(v.Name)
+		if sp.Full > worst {
+			worst = sp.Full
+		}
+		if sp.Total == 0 || float64(sp.Used) <= float64(sp.Total)*knob.High {
 			continue
 		}
-		rep := free.Free(need-freed, r.Wall(), knob.MinDays)
-		freed += int64(ToFloat(rep["freed"]))
-		for k, v := range rep {
-			out[sub+"."+k] = v
+		need := int64(float64(sp.Used) - float64(sp.Total)*knob.Low)
+		var freed int64
+		for _, sub := range hookNames(r.Hooks) {
+			rep := askToFree(r.Hooks[sub], need-freed, r.Wall(), knob.MinDays, v.Name)
+			if rep == nil {
+				continue // a subsystem that keeps only buckets: retention by days is its whole policy
+			}
+			freed += int64(ToFloat(rep["freed"]))
+			for k, val := range rep {
+				if len(r.Volumes) == 1 {
+					out[sub+"."+k] = val
+				} else {
+					out[sub+"."+v.Name+"."+k] = val
+				}
+			}
+			if freed >= need {
+				break
+			}
 		}
-		if freed >= need {
-			break
+		short := need - freed
+		if short < 0 {
+			short = 0
 		}
+		over = append(over, map[string]any{"volume": v.Name, "full": round3(sp.Full),
+			"need": need, "freed": freed, "short": short})
 	}
-	out["space"], out["full"], out["need"], out["freed"] = "over", round3(sp.Full), need, freed
-	out["short"] = need - freed
-	if freed >= need {
-		out["short"] = int64(0)
+	if len(over) == 0 {
+		return map[string]any{"space": "ok", "full": round3(worst)}
 	}
+	first := over[0] // single-volume callers read these at the top level, as they always did
+	out["space"], out["full"] = "over", first["full"]
+	out["need"], out["freed"], out["short"] = first["need"], first["freed"], first["short"]
+	out["volumes"] = over
 	return out
+}
+
+// askToFree asks the richer door first: a hook that knows about volumes is told WHICH disk is short, and
+// one written before there were volumes is asked the way it has always been asked. nil when the hook does
+// not free at all.
+func askToFree(h Hook, need int64, now, minDays float64, volume string) map[string]any {
+	if vf, ok := h.(VolumeFreer); ok {
+		return vf.FreeOn(need, now, minDays, volume)
+	}
+	if f, ok := h.(Freer); ok {
+		return f.Free(need, now, minDays)
+	}
+	return nil
 }
 
 func round3(f float64) float64 { return math.Round(f*1000) / 1000 }
@@ -355,16 +495,34 @@ func hookNames(m map[string]Hook) []string {
 
 func (r *Resource) Register(subsystem string, h Hook) { r.Hooks[subsystem] = h }
 
-func (r *Resource) Units() map[string][]string { return SubsystemsUnder(r.Root) }
+func (r *Resource) Units() map[string][]string {
+	out := map[string][]string{}
+	for _, v := range r.Volumes {
+		for sub, units := range SubsystemsUnder(v.Path) {
+			for _, u := range units {
+				if !contains(out[sub], u) {
+					out[sub] = append(out[sub], u)
+				}
+			}
+		}
+	}
+	for sub := range out {
+		sort.Strings(out[sub])
+	}
+	return out
+}
+
 
 func (r *Resource) ClosedBuckets() []Bucket {
 	var out []Bucket
 	now := r.Wall()
 	for sub, units := range r.Units() {
 		for _, unit := range units {
-			for _, b := range BucketsUnder(r.Root, sub, unit, r.BucketSeconds) {
-				if b.End <= now {
-					out = append(out, b)
+			for _, v := range r.Volumes {
+				for _, b := range BucketsUnder(v.Path, sub, unit, r.BucketSeconds) {
+					if b.End <= now {
+						out = append(out, b)
+					}
 				}
 			}
 		}
@@ -374,24 +532,29 @@ func (r *Resource) ClosedBuckets() []Bucket {
 
 func (r *Resource) Usage() int64 {
 	var total int64
-	filepath.WalkDir(r.Root, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if info, e := d.Info(); e == nil {
-				total += info.Size()
+	for _, v := range r.Volumes {
+		filepath.WalkDir(v.Path, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if info, e := d.Info(); e == nil {
+					total += info.Size()
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	return total
 }
 
 func (r *Resource) Heartbeat() (ResourceHeartbeat, error) {
 	mirrors := map[string]int{}
-	for _, s := range MirroredServers(r.Root) {
-		mirrors[s] = len(MirroredBuckets(r.Root, s, r.BucketSeconds))
+	for _, v := range r.Volumes {
+		for _, s := range MirroredServers(v.Path) {
+			mirrors[s] += len(MirroredBuckets(v.Path, s, r.BucketSeconds))
+		}
 	}
 	hb := ResourceHeartbeat{Server: r.Server, Ts: r.Wall(), URL: r.URL, Schema: Schema, Build: Build,
-		Usage: r.UsageCached(), UsageAt: r.usageAt, Space: r.Space(), Units: r.Units(), Mirrors: mirrors}
+		Usage: r.UsageCached(), UsageAt: r.usageAt, Space: r.Space(), Volumes: r.Spaces(),
+		Units: r.Units(), Mirrors: mirrors}
 	raw, _ := json.Marshal(hb)
 	return hb, r.Objects.Put(Resources+"/"+r.Server+"/heartbeat", raw)
 }
@@ -414,10 +577,12 @@ func (r *Resource) Retain() int {
 	for sub, units := range r.Units() {
 		for _, unit := range units {
 			days := RetentionDays(r.Vars, sub, unit)
-			for _, b := range BucketsUnder(r.Root, sub, unit, r.BucketSeconds) {
-				if b.End < now-days*86400 {
-					if os.Remove(filepath.Join(r.Root, b.Path)) == nil {
-						removed = append(removed, b.Path)
+			for _, v := range r.Volumes {
+				for _, b := range BucketsUnder(v.Path, sub, unit, r.BucketSeconds) {
+					if b.End < now-days*86400 {
+						if os.Remove(filepath.Join(v.Path, b.Path)) == nil {
+							removed = append(removed, b.Path)
+						}
 					}
 				}
 			}
@@ -463,7 +628,7 @@ func (r *Resource) Mirror() MirrorReport {
 			if have[b.Path] {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(r.Root, b.Path))
+			data, err := os.ReadFile(r.PathOf(b.Path))
 			if err != nil {
 				continue
 			}
@@ -497,7 +662,7 @@ func (r *Resource) Restore() map[string]any {
 		}
 		sort.Strings(paths)
 		for _, p := range paths {
-			dest := filepath.Join(r.Root, p)
+			dest := r.PathOf(p) // back onto the volume that held it, or the emptiest
 			if _, err := os.Stat(dest); err == nil {
 				continue
 			}

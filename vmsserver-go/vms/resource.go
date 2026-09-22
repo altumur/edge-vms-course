@@ -176,6 +176,29 @@ func NewVmsResource(archive *ArchiveResource, server, url string, vars p.Variabl
 	return r
 }
 
+// NewVmsResourceOn is the same on a box with several disks: one archive tree per volume, one recorder per
+// volume (place_by: volume). The resource is still ONE — reachability is a property of a server — but its
+// watermark is a loop over the volumes, and the volume goes to the hook.
+func NewVmsResourceOn(archives map[string]*ArchiveResource, server, url string, vars p.Variables, objects p.ObjectStore, wall p.Clock, peers p.PeerClient) *p.Resource {
+	names := sortedVolumeNames(archives)
+	if len(names) == 0 {
+		panic("a resource needs at least one volume")
+	}
+	first := archives[names[0]]
+	if wall == nil {
+		wall = first.Wall
+	}
+	vols := make([]p.Volume, 0, len(names))
+	for _, n := range names {
+		vols = append(vols, p.Volume{Name: n, Path: archives[n].Root})
+	}
+	r := p.NewResourceOn(vols, server, url, vars, objects, first.BucketSeconds, wall, peers)
+	r.Register("rec", &ArchivePolicy{Res: first, Vars: vars, Objects: objects,
+		Peers: NewHTTPSegmentPeer(), Server: server, Volumes: archives})
+	r.Database = p.NewEventDatabase(first.Root, server, wall, first.BucketSeconds)
+	return r
+}
+
 // HTTPSegmentPeer is how one archive hands a segment to another over the routes above.
 type HTTPSegmentPeer struct{ Client *http.Client }
 

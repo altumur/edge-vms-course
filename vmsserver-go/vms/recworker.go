@@ -39,6 +39,7 @@ var REC = p.Subsystem{Name: "rec"}
 type RecWorker struct {
 	*VmsWorker
 	Archive      *ArchiveResource
+	Volume       string // the disk it writes to: the place `servers: distinct` and `home` count in
 	GraceSeconds float64
 	Promoted     int
 	Waiting      map[string]bool   // units with nobody holding their camera
@@ -85,6 +86,14 @@ func NewRecWorker(name string, vars p.Variables, objects p.ObjectStore, act Actu
 	}
 	r := &RecWorker{VmsWorker: w, Archive: archive, GraceSeconds: 30, Waiting: map[string]bool{}, Sources: map[string]string{},
 		KeepDays: 30, Settle: 900, Stitch: 2, SpaceProbe: p.DiskSpace}
+	// The disk this recorder writes to, and the place the policy counts in (place_by: volume): one unit
+	// per volume, and the operator configures how many a box has. Unset on a box with one disk — the
+	// volume is then the SERVER's own name, so `home: srv-a` keeps meaning what it meant and
+	// place_by: volume behaves exactly like place_by: server until somebody adds a disk.
+	r.Volume = env.Get("VOLUME")
+	if r.Volume == "" {
+		r.Volume = w.Server
+	}
 	w.Enrich, w.StatusExtra, w.BeforePass, w.AfterPump, w.StatusFix = r.enrich, r.statusExtra, func() { r.Resubscribe() }, r.afterPump, r.statusFix
 	w.HeartbeatFix = r.heartbeatFix
 	for _, pth := range archive.ClosedInSpool(r.GraceSeconds, w.Wall()) { // what the last instance closed but did not promote
@@ -156,6 +165,7 @@ func (r *RecWorker) statusExtra(cam Camera) map[string]any {
 // `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
 // configuration — so it says which ones are done and the console removes them.
 func (r *RecWorker) heartbeatFix(extra map[string]any) {
+	extra["volume"] = r.Volume
 	extra["spool"] = len(r.Archive.ClosedInSpool(0, r.Wall()))
 	extra["fetched"] = strings.Join(tail(r.Fetched, 32), ",")
 	extra["closed"] = strings.Join(r.Closed, ",")

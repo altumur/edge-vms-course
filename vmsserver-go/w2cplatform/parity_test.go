@@ -4,6 +4,8 @@
 package w2cplatform_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -327,5 +329,108 @@ func TestANamedUnitDeletedComesBackUnderItsName(t *testing.T) {
 	}
 	if pl, err := ctl.EnsurePlaced(nil); err != nil || len(pl) != 1 || pl[0].Worker != "w-1" {
 		t.Fatal("the returning unit was not placed again:", pl, err)
+	}
+}
+
+// -- volumes ---------------------------------------------------------------------------------------
+
+// A box with several disks. The resource is still one — reachability is a property of a server and a
+// volume has no address — but the watermark is a loop over volumes, because space does not average: half
+// full across two disks with one of them at 98% is a box that has stopped recording, and bytes freed on
+// the empty one close nothing.
+type countingHook struct{ asked []string }
+
+func (h *countingHook) Pass(now float64) map[string]any { return map[string]any{} }
+func (h *countingHook) FreeOn(need int64, now, minDays float64, volume string) map[string]any {
+	h.asked = append(h.asked, volume)
+	return map[string]any{"freed": need, "volume": volume}
+}
+
+func TestSpaceDoesNotAverageAcrossVolumes(t *testing.T) {
+	box := testbox.NewBox()
+	a, b := t.TempDir(), t.TempDir()
+	res := p.NewResourceOn([]p.Volume{{Name: "vol-a", Path: a}, {Name: "vol-b", Path: b}},
+		"srv-1", "http://srv-1", box.Vars, box.Objects, 600, box.Wall.Now, nil)
+	res.SpaceProbe = func(root string) (int64, int64) {
+		if root == a {
+			return 1_000_000, 20_000 // 98 % full
+		}
+		return 1_000_000, 980_000 // all but empty
+	}
+	hook := &countingHook{}
+	res.Register("counter", hook)
+	box.Vars.Put(p.SpaceKey, p.Items{"enabled": "true", "high": "0.85", "low": "0.75"}, p.Absent)
+
+	if full := res.Space().Full; full != 0.5 {
+		t.Fatalf("the box averages out to %.2f, and that is the number that lies", full)
+	}
+	if res.SpaceOf("vol-a").Full != 0.98 || res.SpaceOf("vol-b").Full != 0.02 {
+		t.Fatal("a volume's own fullness is what decides anything:", res.Spaces())
+	}
+	rep := res.Relieve()
+	if len(hook.asked) != 1 || hook.asked[0] != "vol-a" {
+		t.Fatal("asked on the wrong disk (or on both):", hook.asked)
+	}
+	if rep["space"] != "over" {
+		t.Fatal("the full volume did not put the resource over:", rep)
+	}
+	if hb, _ := res.Heartbeat(); hb.Volumes["vol-a"].Full != 0.98 {
+		t.Fatal("the heartbeat does not carry the volumes:", hb.Volumes)
+	}
+}
+
+// Which disk holds a unit is not written down: the unit's directory IS the answer, the same way
+// SubsystemsUnder already derives what is on this resource at all. A map would be a second truth.
+func TestWhichVolumeHoldsAUnitIsTheDirectory(t *testing.T) {
+	box := testbox.NewBox()
+	a, b := t.TempDir(), t.TempDir()
+	res := p.NewResourceOn([]p.Volume{{Name: "vol-a", Path: a}, {Name: "vol-b", Path: b}},
+		"srv-1", "http://srv-1", box.Vars, box.Objects, 600, box.Wall.Now, nil)
+	res.SpaceProbe = func(root string) (int64, int64) {
+		if root == a {
+			return 1_000_000, 100_000
+		}
+		return 1_000_000, 900_000
+	}
+	if v := res.VolumeOf("rec", "7"); v != "" {
+		t.Fatal("nothing written yet, and it guessed:", v)
+	}
+	if err := os.MkdirAll(filepath.Join(b, "rec", "7"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if v := res.VolumeOf("rec", "7"); v != "vol-b" {
+		t.Fatal("the directory is the answer, and it said:", v)
+	}
+	if res.PlaceVolume() != "vol-b" {
+		t.Fatal("a new unit goes where there is room, not where the list starts")
+	}
+	if units := res.Units(); len(units["rec"]) != 1 || units["rec"][0] != "7" {
+		t.Fatal("the tree is read across volumes:", units)
+	}
+}
+
+// servers: distinct over place_by: volume. A box with three disks is three places to record; counting
+// them by server would idle two thirds of the hardware the operator bought.
+func TestThreeDisksAreThreePlacesToRecord(t *testing.T) {
+	box := testbox.NewBox()
+	s := spec(t, strings.Replace(jobYAML, "placement:", "placement:\n  place_by: volume", 1))
+	ctl := p.NewSpecController(s, box.Vars, box.Objects, 2, box.Wall.Now, "cluster-a")
+	for _, w := range []struct{ name, vol string }{{"r-1", "vol-a"}, {"r-2", "vol-b"}, {"r-3", "vol-c"}} {
+		box.Objects.Put(ctl.Sub.HeartbeatKey(w.name), p.Heartbeat{Worker: w.name, Ts: box.Wall.Now(),
+			Extra: map[string]any{"server": "srv-a", "volume": w.vol, "capacity": 50, "headroom": 50,
+				"labels": "gpu"}}.ToBytes())
+	}
+	if idle := ctl.IdleByPolicy([]string{"r-1", "r-2", "r-3"}); len(idle) != 0 {
+		t.Fatal("counted by server, and idled real places to record:", idle)
+	}
+	if got := ctl.PlaceOf("r-2"); got != "vol-b" {
+		t.Fatal("the place is the volume when the spec says so, and it said:", got)
+	}
+	// A worker that never named its volume reads as one volume named after its server: the truth on a box
+	// with one disk, and the safe way to be wrong on a box with more.
+	box.Objects.Put(ctl.Sub.HeartbeatKey("r-9"), p.Heartbeat{Worker: "r-9", Ts: box.Wall.Now(),
+		Extra: map[string]any{"server": "srv-b", "capacity": 50}}.ToBytes())
+	if got := ctl.PlaceOf("r-9"); got != "srv-b" {
+		t.Fatal("a worker written before volumes must still have a place:", got)
 	}
 }
