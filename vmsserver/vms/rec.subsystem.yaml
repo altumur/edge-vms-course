@@ -5,8 +5,8 @@
 # (the `live_url` in the VMS heartbeat — never a second connection to the camera), takes `rec/epoch/<cam>`,
 # and writes footage into `rec/<cam>/e<epoch>/` on ITS server's archive, with the manifest beside it. The
 # worker that holds the camera may be anywhere; the recorder must be where disks are — `requires: resource`
-# — and by default one per server (`servers: distinct`): a second recorder on the same disks is no second
-# place to record. Retention of the footage is this row's `retention_days`, read by `ArchivePolicy` on the
+# — and one per VOLUME (`servers: distinct` over `place_by: volume`): a second recorder on the same disk is
+# no second place to record, while a second one on another disk of the same box is exactly that. Retention of the footage is this row's `retention_days`, read by `ArchivePolicy` on the
 # resource job; the camera's events are the worker's and retained by the VMS row's `events_retention_days`.
 #
 # Created by the operator: a camera exists without a recording (watched: live, detected, its events kept),
@@ -20,13 +20,18 @@ unit:
     retention_days: {type: int,    default: 30}      # media: the recorder's own policy, on its manifest
     enabled:        {type: bool,   default: true}
     labels:         {type: list}                     # where it may run: a recorder whose server has these labels
-    home:           {type: string}                   # the server whose archive holds it — the operator's answer to "where does this footage live" (a storage tier, say)
+    home:           {type: string}                   # the VOLUME whose archive holds it — the operator's answer to "where does this footage live" (a storage tier, say)
 placement:
   capacity:   {from: capacity, fallback: 50}         # cameras a recorder can write — its own number, from its heartbeat: disks and NIC
   headroom:   {from: headroom}
   constraint: labels-subset
   requires:   resource                               # the only subsystem that must be where the archive is
-  servers:    distinct                               # the default policy: one recorder per server carries recordings (the console may say shared)
+  place_by:   volume                                 # WHAT `distinct` and `home` count in: the disk, not the box —
+                                                     # a server with three volumes runs three recorders, and one
+                                                     # recording's worth of work goes to each. Reachability,
+                                                     # draining and `spread_by` stay on the server: a volume has no
+                                                     # address and cannot be drained on its own.
+  servers:    distinct                               # one recorder per VOLUME carries recordings (the others idle)
   tie_break:  most-free-capacity
   # No `near`. A recorder does not follow a camera around: it is the one thing here that CANNOT move, being
   # pinned to disks (`requires: resource` above), and a fan-out can be read from any server over RTSP. So
@@ -40,7 +45,7 @@ placement:
   # somewhere else, so a server returning from an outage takes its recordings back without anybody running
   # a procedure. The filters (`labels-subset`, `spread_by`, `requires: resource`) still win: this only
   # orders what is already eligible. With no home, the pick is the disk with the most room.
-  home:       home                                   # the row's field naming the server whose archive holds it
+  home:       home                                   # the row's field naming the volume whose archive holds it
   rebalance:  {dead_band: 0.10}
 snapshot: [cam, retention_days, enabled, labels, home]
 console:

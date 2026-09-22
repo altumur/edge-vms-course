@@ -337,6 +337,65 @@ def test_the_tree_is_walked_once_a_pass_and_never_on_a_heartbeat():
     assert res.heartbeat()["usage_at"] == box.wall()
 
 
+def test_space_does_not_average_across_volumes():
+    """A box with three disks is not a box with one big disk.
+
+    Half full across two volumes, one of them at 98%, is a box that stops recording:
+    the unit that cannot write is on the full one, and bytes freed on the empty one
+    close nothing. So the watermark is per volume, and the volume goes to the hook —
+    only the subsystem knows which of its files are where, only the resource knows
+    which disk is short."""
+    import tempfile
+    from w2cplatform.resource import SPACE_KEY, Resource
+
+    class Counter:
+        def __init__(self): self.asked = []
+
+        def pass_(self, now): return {}
+
+        def free(self, need, now, min_days=3.0, volume=None):
+            self.asked.append((volume, need))
+            return {"freed": need, "volume": volume}
+
+    box, hook = Box(), Counter()
+    roots = {"vol-a": tempfile.mkdtemp(prefix="vol-a-"), "vol-b": tempfile.mkdtemp(prefix="vol-b-")}
+    sizes = {roots["vol-a"]: (1_000_000, 20_000),              # 98 % full
+             roots["vol-b"]: (1_000_000, 980_000)}             # all but empty
+    res = Resource(None, "srv-1", "http://srv-1", box.vars, box.objects, wall=box.wall,
+                   volumes=roots, space_probe=lambda root: sizes[root])
+    res.register("counter", hook)
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+
+    summed = res.space()
+    assert summed["full"] == 0.5, "the box averages out to half full, and that is the number that lies"
+    assert res.spaces()["vol-a"]["full"] == 0.98 and res.spaces()["vol-b"]["full"] == 0.02
+
+    rep = res.relieve()
+    assert hook.asked == [("vol-a", 230_000)], "asked on the full volume, and only there"
+    assert rep["space"] == "over" and [v["volume"] for v in rep["volumes"]] == ["vol-a"]
+    assert rep["counter.vol-a.volume"] == "vol-a"              # the report says which disk it was about
+    assert res.heartbeat()["volumes"]["vol-a"]["full"] == 0.98
+
+
+def test_which_volume_holds_a_unit_is_the_directory_and_not_a_map():
+    """A map of unit → volume would be a second truth about the disks, and it would
+    drift. The unit's directory IS the answer, the same way `subsystems_under` already
+    derives what is on this resource at all."""
+    import os
+    import tempfile
+    from w2cplatform.resource import Resource
+
+    box = Box()
+    roots = {"vol-a": tempfile.mkdtemp(prefix="vol-a-"), "vol-b": tempfile.mkdtemp(prefix="vol-b-")}
+    res = Resource(None, "srv-1", "http://srv-1", box.vars, box.objects, wall=box.wall, volumes=roots,
+                   space_probe=lambda root: (1_000_000, 100_000 if root == roots["vol-a"] else 900_000))
+    assert res.volume_of("rec", "7") is None                   # nothing written yet: no answer, not a guess
+    os.makedirs(os.path.join(roots["vol-b"], "rec", "7"))
+    assert res.volume_of("rec", "7") == "vol-b"
+    assert res.place_volume() == "vol-b"                       # a new unit goes where there is room
+    assert res.units() == {"rec": ["7"]}                       # and the tree is read across volumes
+
+
 def test_the_schema_is_raised_after_the_upgrade_and_never_during_it():
     """A rolling upgrade means old and new processes read the same rows for a while.
     Adding a field is free; changing what one MEANS is a new schema number — and the

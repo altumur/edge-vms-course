@@ -384,15 +384,16 @@ def space_settings(vars_) -> dict:
         knob = space_settings(self.vars)
         if not knob["enabled"]:
             return {"space": "off"}
-        sp = self.space()
-        if not sp["total"] or sp["used"] <= sp["total"] * knob["high"]:
-            return {"space": "ok", "full": round(sp["full"], 3)}
-        need, freed, out = int(sp["used"] - sp["total"] * knob["low"]), 0, {}
-        for sub, h in self.hooks.items():
-            free = getattr(h, "free", None)
-            if free is None:
+        for name in self.volumes:                      # по томам: место не усредняется
+            sp = self.space(name)
+            if not sp["total"] or sp["used"] <= sp["total"] * knob["high"]:
                 continue
-            rep = free(need - freed, self.wall(), knob["min_days"])
+            need, freed = int(sp["used"] - sp["total"] * knob["low"]), 0
+            for sub, h in self.hooks.items():
+                free = getattr(h, "free", None)
+                if free is None:
+                    continue
+                rep = _ask_to_free(free, need - freed, self.wall(), knob["min_days"], name)
             freed += int(rep.get("freed", 0))
             out.update({f"{sub}.{k}": v for k, v in rep.items()})
             if freed >= need:
@@ -423,6 +424,47 @@ def space_settings(vars_) -> dict:
 ```
 
 Сначала обещание, потом предохранитель. `retain` удаляет то, что и так пора удалить, — и вполне возможно, что после него `relieve` увидит `space: ok` и не сделает ничего. Обратный порядок резал бы живое, не забрав сначала мёртвое.
+
+### Почему цикл по томам, а не одно число
+
+У сервера бывает не один диск, и это не экзотика: коробка с тремя дисками — обычная поставка. Ресурс при этом **остаётся одним на сервер** — достижимость есть свойство машины, у тома нет адреса, и молчать отдельно от сервера он не может, — но тома становятся его внутренним устройством:
+
+```python
+res = Resource(None, "srv-1", url, vars_, objects,
+               volumes={"vol-a": "/data/a", "vol-b": "/data/b", "vol-c": "/data/c"})
+```
+
+А вот **ватерлиния усреднения не терпит**, и это главное, что стоит унести из шага. Коробка, заполненная на 50% по двум дискам, один из которых на 98%, — это коробка, которая **перестала писать**: единица, которой некуда писать, лежит на полном томе, а байты, освобождённые на пустом, не закрывают ничего. Одно число на сервер здесь врёт ровно в ту сторону, в которую врать нельзя.
+
+Поэтому проход идёт по томам, и **том едет в хук**:
+
+```python
+def _ask_to_free(free, need, now, min_days, volume):
+    try:
+        return free(need, now, min_days, volume=volume)
+    except TypeError:
+        return free(need, now, min_days)
+```
+
+Подсистема знает, какие её файлы что значат; ресурс знает, какому диску тесно. Ни одна из этих двух вещей не выводится из другой — поэтому в вызове теперь обе.
+
+Падение на старую форму — не вежливость, а миграция: подсистема, у которой все файлы на одном диске, выбирать не из чего, и переписывать её в день, когда в коробку добавили второй диск, незачем. Тот же приём, что с правилом свежести в уроке 15: новое знание не должно ломать тех, кому оно не нужно.
+
+### Какой том держит единицу
+
+Нигде не записано — и это сознательно:
+
+```python
+    def volume_of(self, sub: str, unit: str) -> str | None:
+        for name, path in self.volumes.items():
+            if os.path.isdir(os.path.join(path, sub, str(unit))):
+                return name
+        return None
+```
+
+Каталог единицы **и есть** ответ, ровно как `subsystems_under` выводит, что на ресурсе вообще лежит. Карта «единица → том» была бы второй правдой о дисках, и она бы разошлась — в тот день, когда кто-то перенёс каталог руками или том вернулся из бэкапа не тем.
+
+Новая единица уезжает на самый свободный том (`place_volume`) и больше не переезжает: перенос между дисками — это копирование терабайтов, и оно не должно быть побочным эффектом прохода.
 
 ## Шаг 13 — Три ступени, и все три — у подсистемы
 

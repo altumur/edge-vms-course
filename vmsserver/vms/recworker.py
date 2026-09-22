@@ -69,6 +69,12 @@ class RecWorker(VmsWorker):
         self.archive = archive or ArchiveResource(env.get("SPOOL", "/data/spool"), env.get("ARCHIVE", "/data/archive"), wall=wall)
         super().__init__(name, vars_, objects, actuator or FakeActuator(), lease_ttl, lease_margin, clock, wall, server, capacity, instance,
                          slot_ttl, archive_root=self.archive.root, env=env)
+        # The operator configures how many volumes a box has and which recorder writes to which; the
+        # recorder is told its own by `$VOLUME`, the way it is told its name by `$RECORDER_NAME`.
+        # …and with one disk nobody sets it: the volume is then the SERVER's own name. A box with one disk
+        # is a box whose volume and whose server are the same place, so `home: srv-a` keeps meaning what it
+        # meant, and `place_by: volume` behaves exactly like `place_by: server` until somebody adds a disk.
+        self.volume = str(env.get("VOLUME") or self.server or os.path.basename(self.archive.root.rstrip("/")) or "default")
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -157,9 +163,15 @@ class RecWorker(VmsWorker):
     # question a rolling upgrade really asks: is it safe to stop this machine now. A recorder whose units
     # have left promotes what they closed on its next pump, and then this is zero.
     def heartbeat_extra(self) -> dict:
+        # `volume`: the disk this recorder writes to, and the place the policy counts in. A box with three
+        # disks runs three recorders, and `servers: distinct` over `place_by: volume` puts one recording's
+        # worth of work on each — which is what the operator meant by three disks. A recorder that was not
+        # told a volume says the name of its archive root, so a single-disk box keeps working unchanged.
+        #
         # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
         # configuration — so it says which ones are done and the console removes them.
-        return {"spool": len(self.archive.closed_in_spool(0.0, self.wall())),
+        return {"volume": self.volume,
+                "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
                 "fetched": ",".join(self.fetched[-32:]),
                 "closed": ",".join(self.closed)}
 

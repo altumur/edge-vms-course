@@ -533,13 +533,88 @@ def _rec_home_box():
     return box, rec
 
 
-def _rec_alive(box, worker, server, labels=()):
+def _rec_alive(box, worker, server, labels=(), volume=None):
     import json
     box.objects.put(REC_SPEC.sub.heartbeat_key(worker),
                     Heartbeat(worker, box.wall(), [], {"server": server, "capacity": 50, "headroom": 50,
+                                                       **({"volume": volume} if volume else {}),
                                                        "labels": ",".join(labels)}).to_bytes())
     box.objects.put(f"platform/resources/{server}/heartbeat",
                     json.dumps({"server": server, "ts": box.wall(), "url": f"http://{server}", "units": {}}).encode())
+
+
+def test_the_recorder_frees_bytes_on_the_disk_that_is_short():
+    """The resource measured a volume, so the answer has to come off that volume.
+
+    Two disks, one of them full. Freeing on the empty one would report a number and
+    change nothing: the recording that cannot write is on the full one."""
+    import tempfile
+    from vms.archive import ArchivePolicy, ArchiveResource
+    from vms.resource import vms_resource
+    from w2cplatform.resource import SPACE_KEY
+
+    box = Box()
+    archives = {v: ArchiveResource(tempfile.mkdtemp(prefix=v + "-spool-"),
+                                   tempfile.mkdtemp(prefix=v + "-"), wall=box.wall) for v in ("vol-a", "vol-b")}
+    res = vms_resource(archives["vol-a"], "srv-1", "http://srv-1", box.vars, box.objects,
+                       wall=box.wall, archives=archives)
+    sizes = {archives["vol-a"].root: (1_000_000, 10_000),      # 99 % full
+             archives["vol-b"].root: (1_000_000, 990_000)}
+    res.space_probe = lambda root: sizes[root]
+    box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+
+    asked = []
+    policy: ArchivePolicy = res.hooks["rec"]
+    real_free = policy.free
+    policy.free = lambda need, now, min_days=3.0, volume=None: (asked.append((volume, need)) or
+                                                                real_free(need, now, min_days, volume=volume))
+    rep = res.relieve()
+    assert [v for v, _ in asked] == ["vol-a"], "asked about the disk that is short, and only that one"
+    assert [v["volume"] for v in rep["volumes"]] == ["vol-a"]
+    assert res.spaces()["vol-b"]["full"] == 0.01               # the other disk was never touched
+
+
+def test_three_disks_are_three_places_to_record_on_one_server():
+    """`servers: distinct` over `place_by: volume`.
+
+    A box with three disks runs three recorders, and each of them is a place to
+    record: two recorders on ONE disk are not a second place — that is what the policy
+    has always said — but two on two disks of one box are exactly that, and counting
+    them by server would idle two thirds of the hardware the operator bought.
+
+    The home follows the same field: the operator says which disk a camera's recording
+    lives on, and it is a preference, not a filter. A disk that is full or gone means
+    the recording is written elsewhere, not that it stops."""
+    box, rec = _rec_home_box()
+    for name, vol in (("r-1", "vol-a"), ("r-2", "vol-b"), ("r-3", "vol-c")):
+        _rec_alive(box, name, "srv-a", volume=vol)             # one server, three disks, three recorders
+
+    assert rec.idle_by_policy(["r-1", "r-2", "r-3"]) == [], "counted by server, two of the three would idle"
+
+    rec.create({"cam": "1", "home": "vol-b"})
+    rec.create({"cam": "2", "home": "vol-c"})
+    rec.create({"cam": "3"})                                   # no home: wherever there is room
+    rec.ensure_placed()
+    assert rec.where("1") == "r-2" and "at home on vol-b" in rec.placement("1").reason
+    assert rec.where("2") == "r-3" and "at home on vol-c" in rec.placement("2").reason
+    assert rec.where("3") in ("r-1", "r-2", "r-3")
+
+    # vol-b's recorder stops heartbeating — the disk was pulled, or its process died. A recording homed
+    # there is still created and still placed: the home is a PREFERENCE, and a filter here would mean a
+    # camera stops recording because one disk of three went away.
+    box.wall.advance(60)
+    _rec_alive(box, "r-1", "srv-a", volume="vol-a"); _rec_alive(box, "r-3", "srv-a", volume="vol-c")
+    rec.create({"cam": "4", "home": "vol-b"})
+    rec.ensure_placed()
+    assert rec.where("4") in ("r-1", "r-3") and "away from home vol-b" in rec.placement("4").reason
+    assert rec.unit("4")["home"] == "vol-b"                    # remembered, so it can go back
+
+    # …and when the disk comes back, `ensure_home` brings it back, one recording a pass.
+    box.wall.advance(60)
+    for name, vol in (("r-1", "vol-a"), ("r-2", "vol-b"), ("r-3", "vol-c")):
+        _rec_alive(box, name, "srv-a", volume=vol)
+    moved = rec.ensure_home(budget=1)
+    assert [m[0] for m in moved] == ["4"] and rec.where("4") == "r-2"
 
 
 def test_a_recording_prefers_its_home_and_is_written_anywhere_when_it_is_down():

@@ -230,12 +230,33 @@ class PeerClient:
 
 
 # One server's resource: its tree, its heartbeat, its policy pass.
+# A subsystem's `free` is asked with the volume that is short, and older hooks do not take one. Both are
+# right: a subsystem whose files are all on one disk has nothing to choose, and one that spreads them does.
+# The resource asks the richer way first and falls back, rather than making every subsystem change on the
+# day the second disk arrives.
+def _ask_to_free(free, need: int, now: float, min_days: float, volume: str) -> dict:
+    try:
+        return free(need, now, min_days, volume=volume)
+    except TypeError:
+        return free(need, now, min_days)
+
+
 class Resource:
     """One server's resource: its tree, its heartbeat, its policy pass."""
 
-    def __init__(self, root: str, server: str, url: str, vars_, objects, bucket_seconds: int = 600,
-                 wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0, space_probe=None):
-        self.root, self.server, self.url, self.vars, self.objects = root, server, url, vars_, objects
+    def __init__(self, root: str | None, server: str, url: str, vars_, objects, bucket_seconds: int = 600,
+                 wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0, space_probe=None,
+                 volumes: dict[str, str] | None = None):
+        # A server's disks, named. One volume is the common case and stays the whole of `root`; several are
+        # what a box with more than one disk actually has, and they are the resource's INTERNAL structure:
+        # the resource is still one per server, because reachability is a property of a server and a volume
+        # has no address. What a volume does have is its own bottom — which is why the watermark, the only
+        # thing here that ever measured a disk, becomes a loop over them.
+        self.volumes = dict(volumes) if volumes else {"default": root}
+        if not self.volumes or any(not v for v in self.volumes.values()):
+            raise ValueError("a resource needs at least one volume with a path")
+        self.root = next(iter(self.volumes.values()))          # the first: what single-volume callers still mean
+        self.server, self.url, self.vars, self.objects = server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
         check_schema(vars_)                                  # a build older than the store does not run at all
         self.space_probe = space_probe or disk_space         # a test cannot fill a disk
@@ -243,7 +264,39 @@ class Resource:
         self.usage_at = 0.0                                  # …and when it was taken: a stale number must say so
         self.hooks: dict[str, object] = {}         # subsystem -> object with .pass_(now) -> dict: its own policy on ITS part of the tree
         self.database = None                       # an eventdatabase.EventDatabase over this tree, if the job runs one: served as GET /events
-        os.makedirs(root, exist_ok=True)
+        for path in self.volumes.values():
+            os.makedirs(path, exist_ok=True)
+
+    # -- the volumes ---------------------------------------------------------------------
+    # Which volume holds a unit is not written down anywhere: the unit's directory IS the answer, exactly
+    # as `subsystems_under` already derives what is on this resource at all. A map would be a second truth
+    # about the disks, and it would drift.
+    def volume_of(self, sub: str, unit: str) -> str | None:
+        for name, path in self.volumes.items():
+            if os.path.isdir(os.path.join(path, sub, str(unit))):
+                return name
+        return None
+
+    # Where a unit that is not here yet should go: the emptiest volume. Called when something writes for
+    # the first time; after that `volume_of` answers, and a unit does not move between disks — that would
+    # be copying terabytes as a side effect of a pass.
+    def place_volume(self) -> str:
+        best, most = next(iter(self.volumes)), -1
+        for name, path in self.volumes.items():
+            _, free = self.space_probe(path)
+            if free > most:
+                best, most = name, free
+        return best
+
+    # The absolute path of something named relative to a volume: the volume that has it, else the emptiest.
+    def path_of(self, rel: str, volume: str | None = None) -> str:
+        if volume is not None:
+            return os.path.join(self.volumes[volume], rel)
+        for path in self.volumes.values():
+            full = os.path.join(path, rel)
+            if os.path.exists(full):
+                return full
+        return os.path.join(self.volumes[self.place_volume()], rel)
 
     # A subsystem installs an object with `pass_(now) -> dict` for its own part of the tree — the same "code
     # under a name" door `spec.register_constraint` opens.
@@ -253,14 +306,19 @@ class Resource:
     # -- what is here -------------------------------------------------------------------
     # `subsystems_under(root)` — what is here, from the directories.
     def units(self) -> dict[str, list[str]]:
-        return subsystems_under(self.root)
+        out: dict[str, list[str]] = {}
+        for path in self.volumes.values():
+            for sub, units in subsystems_under(path).items():
+                out.setdefault(sub, []).extend(u for u in units if u not in out.get(sub, []))
+        return {k: sorted(v) for k, v in out.items()}
 
     # Every bucket of every unit whose `end <= now`. Only these are mirrored.
     def closed_buckets(self) -> list[Bucket]:
         out = []
         for sub, units in self.units().items():
             for unit in units:
-                out += [b for b in buckets_under(self.root, sub, unit, self.bucket_seconds) if b.end <= self.wall()]
+                for path in self.volumes.values():
+                    out += [b for b in buckets_under(path, sub, unit, self.bucket_seconds) if b.end <= self.wall()]
         return out
 
     # Total bytes under `root` — every file, not only the ones some subsystem accounts for. A walk, and
@@ -270,9 +328,10 @@ class Resource:
     # What decides anything is `space()` — one `statvfs`, cheap enough for every heartbeat.
     def usage(self) -> int:
         total = 0
-        for d, _, files in os.walk(self.root):
-            for f in files:
-                total += os.path.getsize(os.path.join(d, f))
+        for root in self.volumes.values():
+            for d, _, files in os.walk(root):
+                for f in files:
+                    total += os.path.getsize(os.path.join(d, f))
         return total
 
     # The cached number, measured now if it never was: the first heartbeat of a process pays for it once.
@@ -283,10 +342,21 @@ class Resource:
 
     # (total, free) of the disk, and how full it is. `free` is what a peer reads before sending anything
     # here: an evacuation onto a disk that is itself tight only moves the problem.
-    def space(self) -> dict:
-        total, free = self.space_probe(self.root)
+    def space(self, volume: str | None = None) -> dict:
+        """One volume's disk, or every volume summed when none is named. The sum
+        is what a fleet view wants; what DECIDES anything is a single volume —
+        a box 50% full across two disks with one of them at 98% is full."""
+        names = [volume] if volume is not None else list(self.volumes)
+        total = free = 0
+        for n in names:
+            t, f = self.space_probe(self.volumes[n])
+            total += t; free += f
         return {"total": total, "free": free, "used": total - free,
                 "full": (total - free) / total if total else 0.0}
+
+    # Every volume by name, which is what the console shows and what `relieve` walks.
+    def spaces(self) -> dict[str, dict]:
+        return {name: self.space(name) for name in self.volumes}
 
     # Writes `{server, ts, url, usage, usage_at, space, units, mirrors: {server: n copies}}` to
     # `platform/resources/<server>/heartbeat` and returns it. `units` is how the index discovers subsystems;
@@ -295,8 +365,9 @@ class Resource:
         hb = {"server": self.server, "ts": self.wall(), "url": self.url,
               "schema": SCHEMA, "build": BUILD,                      # what this build understands, and what it is
               "usage": self.usage_cached(), "usage_at": self.usage_at,
-              "space": self.space(), "units": self.units(),
-              "mirrors": {s: len(mirrored_buckets(self.root, s, self.bucket_seconds)) for s in mirrored_servers(self.root)}}
+              "space": self.space(), "volumes": self.spaces(), "units": self.units(),
+              "mirrors": {s: sum(len(mirrored_buckets(r, s, self.bucket_seconds)) for r in self.volumes.values())
+                          for r in self.volumes.values() for s in mirrored_servers(r)}}
         self.objects.put(f"{RESOURCES}/{self.server}/heartbeat", json.dumps(hb).encode())
         return hb
 
@@ -317,9 +388,10 @@ class Resource:
         for sub, units in self.units().items():
             for unit in units:
                 days = retention_days(self.vars, sub, unit)
-                for b in buckets_under(self.root, sub, unit, self.bucket_seconds):
-                    if b.end < self.wall() - days * 86400:
-                        os.remove(os.path.join(self.root, b.path)); removed.append(b.path)
+                for path in self.volumes.values():
+                    for b in buckets_under(path, sub, unit, self.bucket_seconds):
+                        if b.end < self.wall() - days * 86400:
+                            os.remove(os.path.join(path, b.path)); removed.append(b.path)
         if removed and self.database is not None:
             self.database.forget(self.server, removed)                  # the rows go with the file
         return len(removed)
@@ -343,7 +415,7 @@ class Resource:
             for b in self.closed_buckets():
                 if b.path in have:
                     continue
-                with open(os.path.join(self.root, b.path), "rb") as f:
+                with open(self.path_of(b.path), "rb") as f:
                     self.peers.put(live[peer]["url"], self.server, b.path, f.read())
                 n += 1
         return {"enabled": True, "mirrored": n, "peers": peers}
@@ -360,7 +432,7 @@ class Resource:
             if peer == self.server or self.server not in hb.get("mirrors", {}):
                 continue
             for path in sorted(b.path for b in self.peers.mirrored(hb["url"], self.server)):
-                dest = os.path.join(self.root, path)
+                dest = self.path_of(path)          # back onto the volume that held it, or the emptiest
                 if os.path.exists(dest):
                     continue
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -380,25 +452,43 @@ class Resource:
     # (evacuating footage to the server that now writes it, say) returns what it managed and is asked again
     # on the next pass — which is why there is no third, "critical" mark and no separate schedule.
     def relieve(self) -> dict:
-        """Over the high mark, ask each subsystem to free bytes down to the low one."""
+        """Over the high mark, ask each subsystem to free bytes down to the low one.
+
+        Per VOLUME, and that is the whole difference from the single-disk case:
+        space does not average. A box that is 50% full across two disks, one of
+        them at 98%, is a box that stops recording — and freeing bytes on the
+        empty one closes nothing, because the unit that cannot write is on the
+        full one. So the loop is over volumes, and the volume goes to the hook:
+        only the subsystem knows which of its files are where, but only the
+        resource knows which disk is short.
+        """
         knob = space_settings(self.vars)
         if not knob["enabled"]:
             return {"space": "off"}
-        sp = self.space()
-        if not sp["total"] or sp["used"] <= sp["total"] * knob["high"]:
-            return {"space": "ok", "full": round(sp["full"], 3)}
-        need, freed, out = int(sp["used"] - sp["total"] * knob["low"]), 0, {}
-        for sub, h in self.hooks.items():
-            free = getattr(h, "free", None)
-            if free is None:
-                continue                                     # a subsystem that keeps only buckets: `retain` is its whole policy
-            rep = free(need - freed, self.wall(), knob["min_days"])
-            freed += int(rep.get("freed", 0))
-            out.update({f"{sub}.{k}": v for k, v in rep.items()})
-            if freed >= need:
-                break
-        return {"space": "over", "full": round(sp["full"], 3), "need": need, "freed": freed,
-                "short": max(0, need - freed), **out}
+        out, worst, over = {}, 0.0, []
+        for name in self.volumes:
+            sp = self.space(name)
+            worst = max(worst, sp["full"])
+            if not sp["total"] or sp["used"] <= sp["total"] * knob["high"]:
+                continue
+            need, freed = int(sp["used"] - sp["total"] * knob["low"]), 0
+            for sub, h in self.hooks.items():
+                free = getattr(h, "free", None)
+                if free is None:
+                    continue                                 # a subsystem that keeps only buckets: `retain` is its whole policy
+                rep = _ask_to_free(free, need - freed, self.wall(), knob["min_days"], name)
+                freed += int(rep.get("freed", 0))
+                out.update({f"{sub}.{k}": v for k, v in rep.items()} if len(self.volumes) == 1
+                           else {f"{sub}.{name}.{k}": v for k, v in rep.items()})
+                if freed >= need:
+                    break
+            over.append({"volume": name, "full": round(sp["full"], 3), "need": need, "freed": freed,
+                         "short": max(0, need - freed)})
+        if not over:
+            return {"space": "ok", "full": round(worst, 3)}
+        first = over[0]                                      # single-volume callers read these three at the top level
+        return {"space": "over", "full": first["full"], "need": first["need"], "freed": first["freed"],
+                "short": first["short"], "volumes": over, **out}
 
     # The timer's body, in order: each subsystem's hook (it may index or drop lines), then `retain`, then
     # `relieve` — the promise first, the watermark only for what the promise left behind — then `mirror`;

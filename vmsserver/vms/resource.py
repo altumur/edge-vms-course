@@ -147,11 +147,16 @@ def vms_writes(archive: ArchiveResource):
 
 
 def vms_resource(archive: ArchiveResource, server: str, url: str, vars_, objects, wall=None, peers=None,
-                 database: str = ":memory:") -> Resource:
+                 database: str = ":memory:", archives: dict | None = None) -> Resource:
     """The platform's resource for this server with the VMS registered on it, and the
-    event database over its tree (created; the process starts it after `restore()`)."""
+    event database over its tree (created; the process starts it after `restore()`).
+
+    `archives` is {volume: ArchiveResource} on a box with several disks — one tree per
+    volume, one recorder per volume (`place_by: volume`). Without it there is one
+    volume, it is the whole box, and nothing here is named."""
     wall = wall or archive.wall
-    r = Resource(archive.root, server, url, vars_, objects, archive.bucket_seconds, wall, peers)
-    r.register("rec", ArchivePolicy(archive, vars_, objects, r.peers, server))   # footage is the recorder's: rec/<unit>/…, rec/recordings/<unit>
+    volumes = {name: a.root for name, a in (archives or {}).items()} or None
+    r = Resource(archive.root, server, url, vars_, objects, archive.bucket_seconds, wall, peers, volumes=volumes)
+    r.register("rec", ArchivePolicy(archive, vars_, objects, r.peers, server, volumes=archives))   # footage is the recorder's: rec/<unit>/…, rec/recordings/<unit>
     r.database = EventDatabase(archive.root, server, database, wall, archive.bucket_seconds)
     return r

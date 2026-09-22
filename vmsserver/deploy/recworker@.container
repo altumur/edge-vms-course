@@ -32,7 +32,13 @@ After=network.target
 Image=localhost/vmsserver:latest
 Exec=python3 -m vms recorder
 Environment=RECORDER_NAME=%i
-# `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `CAPACITY`, `SEGMENT_SECONDS`, `LOG_LEVEL`.
+# The disk this recorder writes to, and the place the policy counts in (`place_by: volume`): one unit per
+# volume, `systemctl start recworker@vol-a recworker@vol-b`. Unset on a box with one disk — the volume is
+# then the server's own name, and everything behaves as it did before there were volumes.
+Environment=VOLUME=%i
+# `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `CAPACITY`, `SEGMENT_SECONDS`, `LOG_LEVEL`. One file for the box: on
+# a box with several disks the per-instance `ARCHIVE` (`/data/archive/vol-a`) comes from a drop-in,
+# `/etc/containers/systemd/recworker@vol-a.container.d/`, which is what drop-ins are for.
 EnvironmentFile=/data/config/vms.env
 # read-write: `rec/epoch/*`, `rec/slots/*` (its token) and its heartbeat object.
 Volume=/data/platform:/data/platform:z

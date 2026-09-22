@@ -338,8 +338,13 @@ class ArchivePolicy:
     when the disk is over its watermark, free bytes — `vms/space.py` decides
     which, and the platform only says how many."""
 
-    def __init__(self, resource: ArchiveResource, vars_, objects=None, peers=None, server: str = ""):
+    def __init__(self, resource: ArchiveResource, vars_, objects=None, peers=None, server: str = "",
+                 volumes: dict | None = None):
+        # One archive tree per VOLUME on a box with several disks, and the resource says which one is
+        # short when it asks. The single-disk case is this dict with one entry and nobody naming it: the
+        # policy that was written before there were volumes reads exactly the same.
         self.res, self.vars = resource, vars_
+        self.volumes = dict(volumes) if volumes else {}
         # Only `free` needs these: the peers' heartbeats say who writes what and who has room, and the
         # client carries the bytes. Absent, the policy still repairs and retains — an archive on a box
         # with no neighbours has nowhere to evacuate to and does not pretend otherwise.
@@ -347,15 +352,18 @@ class ArchivePolicy:
 
     # The resource's watermark, answered in the recorder's own terms. Evacuate what is not ours, then cut
     # above the floor, then report the shortfall — the order is in `vms/space.py`, and so is why.
-    def free(self, need: int, now: float, min_days: float = 3.0) -> dict:
+    def free(self, need: int, now: float, min_days: float = 3.0, volume: str | None = None) -> dict:
         from .space import cut, evacuate
+        # The resource measured a DISK, so the answer has to come off that disk: bytes freed on another
+        # volume of the same box close nothing, because the recording that cannot write is on this one.
+        res = self.volumes.get(volume, self.res) if volume else self.res
         freed, out = 0, {}
         if self.objects is not None and self.peers is not None and self.server:
-            rep = evacuate(self.res, self.objects, self.peers, self.server, need, now, vars_=self.vars)
+            rep = evacuate(res, self.objects, self.peers, self.server, need, now, vars_=self.vars)
             freed += rep["freed"]
             out.update({"evacuated": rep["moved"], **({"skipped": rep["skipped"]} if "skipped" in rep else {})})
         if freed < need:
-            rep = cut(self.res, need - freed, now, min_days)
+            rep = cut(res, need - freed, now, min_days)
             freed += rep["freed"]
             out["cut"] = rep["removed"]
         short = max(0, need - freed)
@@ -364,10 +372,13 @@ class ArchivePolicy:
         return {"freed": freed, **out}
 
     def pass_(self, now: float) -> dict:
-        rep = self.res.repair()
-        removed = 0
-        for unit in self.res.units():
-            items, _ = self.vars.get(f"{SUB}/recordings/{unit}")   # the unit's own row: its retention, not the camera's
-            days = int(items.get("retention_days", 30)) if items else 30
-            removed += self.res.retain(unit, days, now)
-        return {**rep, "media_removed": removed}
+        out, removed = {}, 0
+        for res in (list(self.volumes.values()) or [self.res]):
+            rep = res.repair()
+            for k, v in rep.items():
+                out[k] = out.get(k, 0) + v if isinstance(v, int) else v
+            for unit in res.units():
+                items, _ = self.vars.get(f"{SUB}/recordings/{unit}")   # the unit's own row: its retention, not the camera's
+                days = int(items.get("retention_days", 30)) if items else 30
+                removed += res.retain(unit, days, now)
+        return {**out, "media_removed": removed}

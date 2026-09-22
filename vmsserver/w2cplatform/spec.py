@@ -194,6 +194,17 @@ class SubsystemSpec:
     # is, and a second copy on the same server is not a second copy. Unplaceable while no other server
     # qualifies, and that is the honest answer — `/unplaceable` says so rather than quietly co-locating.
     spread_by: str = ""
+    # `place_by: <field>` — WHAT the policy and the home are counted in: the heartbeat field that names the
+    # place a worker occupies. `server` by default, and for everything whose unit of storage is a server
+    # that is the truth. A recorder's is not: a box with three disks runs three recorders, one per volume,
+    # and `servers: distinct` has to mean one per DISK — two recorders on one volume are no second place to
+    # record, while two on one server with different disks are exactly that.
+    #
+    # Only the policy and `home` follow this field. Reachability (`requires: resource`), draining and
+    # `spread_by` stay on the server, because those are about a machine: a volume has no address, cannot be
+    # drained on its own, and two copies on two disks of one server survive nothing the operator was buying
+    # insurance against.
+    place_by: str = "server"
     # `retire_when: {field: state, in: [done, failed]}` — a unit whose row says one of those values is
     # FINISHED, and finished work is not placed. The first subsystem to need it is `detjob`, whose unit
     # ends; everything before it ran until an operator said stop.
@@ -256,6 +267,7 @@ class SubsystemSpec:
                    near=str((pl.get("near") or {}).get("sub", "none") if isinstance(pl.get("near"), dict) else pl.get("near", "none")),
                    near_by=str((pl.get("near") or {}).get("by", "id") if isinstance(pl.get("near"), dict) else "id"),
                    spread_by=str(pl.get("spread_by", "") or ""),
+                   place_by=str(pl.get("place_by", "server") or "server"),
                    home=str(pl.get("home", "") or ""),
                    retire_field=str((pl.get("retire_when") or {}).get("field", "") or ""),
                    retire_values=tuple(str(v) for v in ((pl.get("retire_when") or {}).get("in") or [])),
@@ -464,6 +476,22 @@ class SpecController(Controller):
     def server_of(self, worker: str) -> str:
         hb = self.workers_seen(max_age=1e12).get(worker)
         return hb.extra.get("server", "?") if hb else "?"
+
+    # The place this worker occupies, in the units the spec counts in: its server, or its volume when the
+    # subsystem says `place_by: volume`. `"?"` when the worker has not said — and an unknown place never
+    # matches a home, so a unit with a home waits rather than landing somewhere at random.
+    def place_of(self, worker: str) -> str:
+        if self.spec.place_by == "server":
+            return self.server_of(worker)
+        hb = self.workers_seen(max_age=1e12).get(worker)
+        if hb is None:
+            return "?"
+        # A worker that does not say which volume it is on is treated as one volume named after its
+        # server. That is the truth for every box with one disk, it is what a worker written before the
+        # field existed means, and where it is NOT the truth it errs the safe way: three recorders on
+        # three disks that nobody told apart read as three on one place, and `distinct` idles two of them
+        # rather than letting two think they own the same disk.
+        return str(hb.extra.get(self.spec.place_by) or hb.extra.get("server", "?"))
 
     # Sum of `extra[headroom_from]` over workers seen in the last 45 s — what the autoscaler reads via
     # `/metrics`. Stale until the workers heartbeat again after a placement.
@@ -687,11 +715,11 @@ class SpecController(Controller):
     def idle_by_policy(self, workers) -> list[str]:
         if self.policy()["servers"] != "distinct":
             return []
-        by_server: dict[str, list[str]] = {}
+        by_place: dict[str, list[str]] = {}
         for w in sorted(workers, key=slot_number):
-            by_server.setdefault(self.server_of(w), []).append(w)
+            by_place.setdefault(self.place_of(w), []).append(w)
         idle = []
-        for server, ws in by_server.items():
+        for server, ws in by_place.items():
             if server == "?" or len(ws) < 2:
                 continue
             keep = max(ws, key=lambda w: (self.load(w), -slot_number(w)))
@@ -834,7 +862,7 @@ class SpecController(Controller):
         home = near[1] if self.spec.home == "near" and near else self.home_of(uid)
         follows = self.spec.home == "near"
         if home:
-            best, free = self._best([w for w in pool if self.server_of(w) == home])
+            best, free = self._best([w for w in pool if self.place_of(w) == home])
             if best is not None:
                 return best, free, (f", beside {near[0]} holding it" if follows else f", at home on {home}")
         if near is not None and not follows:
@@ -846,7 +874,7 @@ class SpecController(Controller):
         note = ""
         if best is not None and near is not None and self.server_of(best) != near[1]:
             note = f", away from {near[0]} on {near[1]} (no room there)"
-        if best is not None and home and not follows and self.server_of(best) != home:
+        if best is not None and home and not follows and self.place_of(best) != home:
             note += f"; away from home {home}"
         return best, free, note
 
@@ -1003,9 +1031,9 @@ class SpecController(Controller):
                 break
             uid, home = row["id"], self.home_for(row)
             pl = self.placement(uid)
-            if not home or pl is None or self.server_of(pl.worker) == home:
+            if not home or pl is None or self.place_of(pl.worker) == home:
                 continue
-            best, free = self._best([w for w in self.eligible(row, pool) if self.server_of(w) == home])
+            best, free = self._best([w for w in self.eligible(row, pool) if self.place_of(w) == home])
             if best is None:
                 continue                                  # home is not back, or has no room: stay put, quietly
             why = f"it follows {self.spec.near} onto" if self.spec.home == "near" else "home is"
