@@ -52,3 +52,28 @@ def h264_payload_type(offer: str, want_profile: str | None = None) -> int | None
             if pick(found[n]):
                 return n
     return None
+
+
+# -- what the stream turned out to be ------------------------------------------------------------------
+# The profiles a browser decodes. Everything else reaches the tab as bytes it throws away: the connection
+# succeeds, the packet counter climbs and the picture stays black — the most expensive kind of failure,
+# because nothing anywhere says no. So the gateway says it. Not by transcoding (that is a placement
+# decision, a GPU label and a visible cost, never a silent default that puts a server on its knees) but by
+# naming the profile in its status, where the console shows it beside the stream.
+PLAYABLE = {"constrained-baseline", "baseline", "main", "high"}
+
+
+def codec_note(caps_name: str | None, profile: str | None) -> str:
+    """"" while a browser can play this, otherwise the sentence the console shows.
+
+    Read from the caps h264parse NEGOTIATED, not from what the camera's papers
+    say: this is the one place where what the stream actually is, is known.
+    Nothing has flowed yet is not the same as wrong, and answers "".
+    """
+    if not caps_name:
+        return ""
+    if caps_name != "video/x-h264":
+        return f"{caps_name} — a browser plays H.264, and this gateway does not transcode"
+    if not profile or profile in PLAYABLE:
+        return ""
+    return f"H.264 {profile} — no browser decodes this profile, and this gateway does not transcode"

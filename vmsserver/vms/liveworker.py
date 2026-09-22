@@ -64,10 +64,16 @@ class Upstream:
         self.cam, self.server, self.url, self.epoch = cam, server, url, epoch
         self.peers: dict[str, object] = {}
         self.idle_since: float | None = None      # wall time the last viewer left; None while watched
+        # "" while the stream is one a browser can play, otherwise the sentence the console shows beside
+        # it. Filled from the caps the peer's parser negotiated, so it is empty until something flowed.
+        self.codec: str = ""
 
     def to_status(self) -> dict:
-        return {"id": self.cam, "phase": "live" if self.peers else "idle", "sessions": len(self.peers),
-                "server": self.server, "source": self.url, "epoch": self.epoch}
+        st = {"id": self.cam, "phase": "live" if self.peers else "idle", "sessions": len(self.peers),
+              "server": self.server, "source": self.url, "epoch": self.epoch}
+        if self.codec:
+            st["codec"] = self.codec
+        return st
 
 
 class LiveWorker(Worker):
@@ -144,6 +150,11 @@ class LiveWorker(Worker):
                 raise OverflowError("full")
             peer = self.peer_factory(up)
             answer = peer.answer(sdp)
+            # The profile is known only once something has flowed, so the FIRST viewer may well arrive
+            # before it is: ask after the answer, and ask every time.
+            note = getattr(peer, "codec_note", None)
+            if callable(note):
+                up.codec = note() or up.codec
             sid = uuid.uuid4().hex
             up.peers[sid] = peer; up.idle_since = None
             self.sessions[sid] = (str(cam), peer)

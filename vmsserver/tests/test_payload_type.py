@@ -60,3 +60,17 @@ def test_numbers_outside_the_dynamic_range_are_not_taken():
 def test_an_offer_without_h264_is_answered_by_nobody():
     assert h264_payload_type("a=rtpmap:96 VP8/90000\na=rtpmap:98 AV1/90000\n") is None
     assert h264_payload_type("") is None
+
+
+def test_the_gateway_names_what_the_stream_turned_out_to_be():
+    """The profile is read off the caps the parser negotiated — the only place
+    where what the stream IS, rather than what its papers claim, is known."""
+    from gstvms.payload import codec_note
+    assert codec_note("video/x-h264", "main") == ""            # a browser plays it: nothing to say
+    assert codec_note("video/x-h264", "constrained-baseline") == ""
+    assert codec_note("video/x-h264", None) == ""              # nothing has flowed yet: unknown is not wrong
+    assert codec_note(None, None) == ""
+    # `x264enc` and `ffmpeg` without an explicit -pix_fmt give exactly this, and no browser plays it.
+    assert "no browser decodes" in codec_note("video/x-h264", "high-4:4:4")
+    assert "does not transcode" in codec_note("video/x-h265", "main")
+    assert codec_note("video/x-h265", "main").startswith("video/x-h265")

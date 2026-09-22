@@ -22,7 +22,7 @@ gi.require_version("GstWebRTC", "1.0")
 gi.require_version("GstSdp", "1.0")
 from gi.repository import Gst, GstSdp, GstWebRTC  # noqa: E402
 
-from .payload import h264_payload_type  # noqa: E402
+from .payload import codec_note, h264_payload_type  # noqa: E402
 
 log = logging.getLogger("gstvms.webrtc")
 Gst.init(None)
@@ -31,7 +31,7 @@ Gst.init(None)
 # assigns in its offer, so packing into RTP belongs to the viewer's branch — see `payload.py`. One
 # payloader here, fixed at one number, could serve exactly one browser and would silently feed every
 # other one packets it throws away.
-SOURCE = "rtspsrc location={url} latency=200 protocols=tcp ! rtph264depay ! h264parse config-interval=-1 ! tee name=t allow-not-linked=true"
+SOURCE = "rtspsrc location={url} latency=200 protocols=tcp ! rtph264depay ! h264parse name=p config-interval=-1 ! tee name=t allow-not-linked=true"
 
 
 # One camera's subscription on the gateway: the pipeline every viewer of that camera branches from. Built once
@@ -40,8 +40,25 @@ class _Source:
     def __init__(self, url: str):
         self.pipeline = Gst.parse_launch(SOURCE.format(url=url))
         self.tee = self.pipeline.get_by_name("t")
+        self.parse = self.pipeline.get_by_name("p")
         self.pipeline.set_state(Gst.State.PLAYING)
         self.viewers = 0
+
+    # What the stream turned OUT to be, read off the caps `h264parse` negotiated — the one place where
+    # that is known, as opposed to what the camera's papers claim. "" while a browser can play it, and ""
+    # while nothing has flowed yet: unknown is not the same as wrong.
+    def codec_note(self) -> str:
+        pad = self.parse.get_static_pad("src") if self.parse else None
+        caps = pad.get_current_caps() if pad else None
+        if not caps or caps.get_size() == 0:
+            return ""
+        st = caps.get_structure(0)
+        return codec_note(st.get_name(), st.get_string("profile"))
+
+    # What the camera turned out to be sending, for the gateway's status. Asked after every answer:
+    # the first viewer may arrive before anything has flowed and the profile is known.
+    def codec_note(self) -> str:
+        return self.src.codec_note()
 
     def close(self) -> None:
         self.pipeline.set_state(Gst.State.NULL)
