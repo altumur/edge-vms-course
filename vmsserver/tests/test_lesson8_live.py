@@ -130,6 +130,31 @@ def test_the_last_viewer_leaves_and_the_gateway_deletes_the_unit_after_grace():
         srv.shutdown(); srv.server_close()
 
 
+def test_the_first_press_of_live_is_answered_with_wait_and_not_with_not_found():
+    """Between the controller placing the fan-out and the gateway's next pass
+    there is a window of one pass, and the FIRST press of Live lands in it: the
+    row exists, the placement exists, the gateway is up — and it has not
+    subscribed yet, so it answers 404. The page retries on 503 and on nothing
+    else, so a 404 forwarded verbatim ends the attempt and the operator is told
+    the stream does not exist. It does. The console turns that one 404 into a
+    503 and keeps the gateway's word in `detail`."""
+    box, ctl, live_ctl, w, srv, base = _box()
+    try:
+        g = _gateway(box, "g-1")
+        assert _whep(base, 1)[0] == 503              # the press creates the row; nobody holds it yet
+        live_ctl.ensure_placed(); g.heartbeat_once()
+        assert live_ctl.where("1") == "g-1"          # placed, and the gateway has heartbeaten its url
+        assert g.upstreams == {}                     # but it has not made its pass yet
+        code, body, _ = _whep(base, 1)
+        assert code == 503, "the page retries on 503 only: a 404 here is the operator pressing Live twice"
+        d = json.loads(body)
+        assert "g-1" in d["detail"] and d["retry_after"] == 2
+        g.reconcile_once()                           # the pass happens
+        assert _whep(base, 1)[0] == 201              # and the same press now succeeds
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
 def test_a_dead_gateway_loses_its_fan_outs_to_the_survivor_and_viewers_reconnect():
     box, ctl, live_ctl, w, srv, base = _box()
     try:

@@ -175,10 +175,20 @@ class LiveFront:
             with urllib.request.urlopen(req, timeout=10) as r:
                 data, status, loc = r.read(), r.status, r.headers.get("Location", "")
         except urllib.error.HTTPError as e:
-            return e.code, {"error": f"gateway {g} said {e.code}", "detail": e.read().decode(errors="replace")}
+            body = e.read().decode(errors="replace").strip()
+            if e.code == 404:
+                return 503, {"error": f"the fan-out is not up on {g} yet — retry",
+                             "detail": f"placed on {g}; it subscribes on its next pass", "retry_after": 2}
+            return e.code, {"error": f"gateway {g} said {e.code}", "detail": body}
         except OSError:
             return 503, {"error": f"gateway {g} is not answering — unavailable, not lost", "detail": g}
 ```
+
+**404 шлюза не доезжает до браузера, и это не косметика.** Между тем, как контроллер разместил единицу, и тем, как шлюз сделает свой проход, лежит окно в один проход — до двух секунд, — и **первое нажатие Live попадает в него всегда**. Строка есть, размещение есть, шлюз жив и отвечает — и говорит `KeyError` → 404, потому что подписки у него ещё нет (урок 13).
+
+А страница повторяет **только на 503**: `if (r.status !== 503 || ++tries > 8) break;`. Переданный как есть, этот 404 обрывает попытку на первом же круге, и оператор читает «live refused: no such stream here» про вещание, которое существует и будет через секунду. То есть обещание «оператор нажал один раз» не выполняется ни разу.
+
+Поэтому ровно этот 404 превращается в 503: браузеру оба означают одно и то же — ждать, — но повторяет он только один из них. Собственное слово шлюза при этом остаётся в `detail`: 404 «не сюда» и 404 «ещё не подхватил» различаются только тем, кто спрашивает, и человеку, читающему ответ, эта разница нужна.
 
 `urllib` из стандартной библиотеки — никаких зависимостей. Таймаут десять секунд.
 

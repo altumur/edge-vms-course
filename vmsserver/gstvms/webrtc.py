@@ -22,10 +22,16 @@ gi.require_version("GstWebRTC", "1.0")
 gi.require_version("GstSdp", "1.0")
 from gi.repository import Gst, GstSdp, GstWebRTC  # noqa: E402
 
+from .payload import h264_payload_type  # noqa: E402
+
 log = logging.getLogger("gstvms.webrtc")
 Gst.init(None)
 
-SOURCE = "rtspsrc location={url} latency=200 protocols=tcp ! rtph264depay ! h264parse config-interval=-1 ! rtph264pay config-interval=1 pt=96 ! tee name=t allow-not-linked=true"
+# The tee carries the ELEMENTARY stream, not RTP. The payload type is a number the viewer's browser
+# assigns in its offer, so packing into RTP belongs to the viewer's branch — see `payload.py`. One
+# payloader here, fixed at one number, could serve exactly one browser and would silently feed every
+# other one packets it throws away.
+SOURCE = "rtspsrc location={url} latency=200 protocols=tcp ! rtph264depay ! h264parse config-interval=-1 ! tee name=t allow-not-linked=true"
 
 
 # One camera's subscription on the gateway: the pipeline every viewer of that camera branches from. Built once
@@ -49,14 +55,27 @@ class GstPeer:
         if getattr(upstream, "pipeline", None) is None:
             upstream.pipeline = _Source(upstream.url)
         self.src: _Source = upstream.pipeline
-        self.queue = Gst.ElementFactory.make("queue"); self.queue.set_property("leaky", 2)   # downstream: a slow viewer drops
-        self.webrtc = Gst.ElementFactory.make("webrtcbin")
-        self.webrtc.set_property("bundle-policy", GstWebRTC.WebRTCBundlePolicy.MAX_BUNDLE)
-        for e in (self.queue, self.webrtc):
-            self.src.pipeline.add(e); e.sync_state_with_parent()
-        self.src.tee.link(self.queue); self.queue.link(self.webrtc)
+        # The branch is NOT built here: it cannot be. It needs the payload type out of the viewer's
+        # offer, and the offer arrives with `answer`.
+        self.queue = self.pay = self.caps = self.webrtc = None
         self.src.viewers += 1
         self._gathered = threading.Event()
+
+    # `queue ! rtph264pay ! capsfilter ! webrtcbin` on the camera's tee, with THIS viewer's number.
+    def _build(self, pt: int) -> None:
+        self.queue = Gst.ElementFactory.make("queue"); self.queue.set_property("leaky", 2)   # downstream: a slow viewer drops
+        self.pay = Gst.ElementFactory.make("rtph264pay")
+        self.pay.set_property("config-interval", 1)   # parameter sets ride with every key frame: a late viewer decodes from the next one
+        self.pay.set_property("pt", pt)
+        self.caps = Gst.ElementFactory.make("capsfilter")
+        self.caps.set_property("caps", Gst.Caps.from_string(
+            f"application/x-rtp,media=(string)video,encoding-name=(string)H264,clock-rate=(int)90000,payload=(int){pt}"))
+        self.webrtc = Gst.ElementFactory.make("webrtcbin")
+        self.webrtc.set_property("bundle-policy", GstWebRTC.WebRTCBundlePolicy.MAX_BUNDLE)
+        for e in (self.queue, self.pay, self.caps, self.webrtc):
+            self.src.pipeline.add(e); e.sync_state_with_parent()
+        self.src.tee.link(self.queue); self.queue.link(self.pay); self.pay.link(self.caps)
+        self.caps.link(self.webrtc)                   # webrtcbin's sink is a request pad; the caps tell it what the stream is
         self.webrtc.connect("notify::ice-gathering-state", self._on_gathering)
 
     def _on_gathering(self, element, pspec):
@@ -68,6 +87,11 @@ class GstPeer:
         ok, msg = GstSdp.SDPMessage.new_from_text(offer)
         if ok != GstSdp.SDPResult.OK or "m=video" not in offer:
             raise ValueError("not an SDP offer with a video section")
+        pt = h264_payload_type(offer)
+        if pt is None:
+            raise ValueError("the viewer offers no H.264 this gateway can answer with")
+        if self.webrtc is None:
+            self._build(pt)
         remote = GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.OFFER, msg)
         self.webrtc.emit("set-remote-description", remote, None)
         done = threading.Event(); holder = {}
@@ -84,8 +108,9 @@ class GstPeer:
         return self.webrtc.get_property("local-description").sdp.as_text()
 
     def close(self) -> None:
-        for e in (self.queue, self.webrtc):
-            e.set_state(Gst.State.NULL); self.src.pipeline.remove(e)
+        for e in (self.queue, self.pay, self.caps, self.webrtc):
+            if e is not None:
+                e.set_state(Gst.State.NULL); self.src.pipeline.remove(e)
         self.src.viewers -= 1
         if self.src.viewers <= 0:                                      # the last viewer of this camera: the subscription itself stays
             pass                                                       # until the gateway drops the upstream (grace), not here

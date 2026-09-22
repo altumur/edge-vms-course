@@ -166,16 +166,30 @@ func (c *SpecController) Create(fields map[string]any) (Row, error) {
 			return nil, &Refused{fmt.Sprintf("%s unit %s exists", c.Spec.Name, name)}
 		}
 		if old != nil {
-			// A named unit deleted earlier comes back under its name. Delete MARKS the row, so
-			// the key is still there: this is neither "exists" (the unit does not) nor a
-			// create-only write (the key does). A fresh row, one revision on from the old one,
-			// by CAS on what we just read — the revision has to keep growing, because a reader
-			// that remembered 2 and sees 1 concludes the row rolled back.
+			// A named unit deleted earlier comes back under its name. The unit
+			// is identified by its own field — rec/recordings/7 IS the
+			// recording of camera 7 — so when the operator turns recording off
+			// and an hour later turns it on again, the name cannot be anything
+			// else. The camera is the same camera.
+			//
+			// Refusing ("it exists") would be wrong: a deleted unit does not.
+			// Writing at Absent is impossible: the key is there, marked. And
+			// ERASING it to create afresh loses the history — the revision
+			// would start at 1, and anyone who remembered revision 5 would see
+			// 1 and conclude the row had rolled BACK.
+			//
+			// So: a fresh row, one revision on from the buried one, by CAS on
+			// the index just read. The row comes back to life as revision 6,
+			// and observers comparing revisions with >= — which is how the
+			// reconcile loop compares them — notice nothing.
+			//
+			// The CAS is not optional: between reading old and writing this,
+			// somebody else may have created the same unit again.
 			r, err := c.Spec.NewRow(name, fields)
 			if err != nil {
 				return nil, err
 			}
-			r["revision"] = int(ToFloat(old["revision"])) + 1
+			r["revision"] = c.Spec.RowOf(old).Int("revision") + 1
 			if _, err := c.Vars.Put(c.rowKey(name), c.Spec.ItemsOf(r), idx); err != nil {
 				return nil, err
 			}

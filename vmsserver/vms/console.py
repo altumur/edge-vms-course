@@ -112,7 +112,19 @@ class LiveFront:
             with urllib.request.urlopen(req, timeout=10) as r:
                 data, status, loc = r.read(), r.status, r.headers.get("Location", "")
         except urllib.error.HTTPError as e:
-            return e.code, {"error": f"gateway {g} said {e.code}", "detail": e.read().decode(errors="replace")}
+            body = e.read().decode(errors="replace").strip()
+            if e.code == 404:
+                # The gateway is placed and up, and does not know this fan-out yet. That is what a row
+                # created a moment ago looks like from here: the controller placed it, and the gateway
+                # subscribes on its NEXT pass, up to a couple of seconds away. It comes back as 503 and
+                # not as the gateway's own 404 because the two mean the same thing to a browser — wait —
+                # and only one of them is a code the page retries. Forwarded verbatim it makes the
+                # operator who pressed Live once press it twice, which is the defect the retry exists to
+                # prevent. The gateway's own word is kept in `detail`: a 404 "not here" and a 404 "not
+                # yet" differ only to whoever is asking.
+                return 503, {"error": f"the fan-out is not up on {g} yet — retry",
+                             "detail": f"placed on {g}; it subscribes on its next pass", "retry_after": 2}
+            return e.code, {"error": f"gateway {g} said {e.code}", "detail": body}
         except OSError:
             return 503, {"error": f"gateway {g} is not answering — unavailable, not lost", "detail": g}
         sid = loc.rsplit("/", 1)[-1]
