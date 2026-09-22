@@ -282,3 +282,50 @@ func TestDeclaringNoFieldsIsNotDeclaringEveryField(t *testing.T) {
 	}
 	refused(t, strings.Replace(jobYAML, "snapshot: [name, cam, kind, state]", "snapshot:", 1), "says neither")
 }
+
+// -- a named unit that comes back ------------------------------------------------------------------
+
+// Create, delete, create again under the same name. Delete MARKS the row rather than removing it, so
+// the second create is neither "exists" (the unit does not) nor a create-only write (the key does):
+// it is a fresh row one revision on from the old one, by CAS on what it read. The revision has to keep
+// growing — a reader that remembered 2 and sees 1 concludes the row rolled back — and no tombstone may
+// survive the comeback. The Python port has had this branch since Lesson 10; this one had not.
+func TestANamedUnitDeletedComesBackUnderItsName(t *testing.T) {
+	box := testbox.NewBox()
+	ctl := jobCtl(t, box)
+	worker(box, ctl.Sub, "w-1", "srv-a", 4)
+
+	job(t, ctl, "7-lpr-1")
+	if r := ctl.Unit("7-lpr-1"); r == nil || r.Int("revision") != 1 {
+		t.Fatal("the unit was not created:", r)
+	}
+	if pl, err := ctl.EnsurePlaced(nil); err != nil || len(pl) != 1 || pl[0].Worker != "w-1" {
+		t.Fatal("not placed:", pl, err)
+	}
+
+	if err := ctl.Delete("7-lpr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ctl.Unit("7-lpr-1") != nil {
+		t.Fatal("a deleted unit is still visible to readers")
+	}
+	ctl.UnplaceDeleted()
+	if w := ctl.Where("7-lpr-1"); w != "" {
+		t.Fatal("the placement outlived the unit:", w)
+	}
+
+	job(t, ctl, "7-lpr-1") // the same range is asked for again
+	back := ctl.Unit("7-lpr-1")
+	if back == nil {
+		t.Fatal("a named unit deleted earlier cannot come back under its name")
+	}
+	if back.Int("revision") != 2 {
+		t.Fatalf("the revision restarted at %v: a reader that saw 2 reads this as a rollback", back["revision"])
+	}
+	if it, _, _ := ctl.Vars.Get(ctl.Sub.Config("jobs", "7-lpr-1")); it["deleted"] == "true" {
+		t.Fatal("the tombstone survived the comeback")
+	}
+	if pl, err := ctl.EnsurePlaced(nil); err != nil || len(pl) != 1 || pl[0].Worker != "w-1" {
+		t.Fatal("the returning unit was not placed again:", pl, err)
+	}
+}

@@ -3,6 +3,7 @@ import os
 import threading
 from w2cplatform.contract import Assignment, Controller, Heartbeat, Subsystem, Worker
 from w2cplatform.epoch import Lease, current_epoch, next_epoch
+from w2cplatform.spec import SpecController, SubsystemSpec
 from w2cplatform.variables import Conflict, FileVariables, Forbidden
 from tests.conftest import Box, Clock
 
@@ -130,6 +131,34 @@ def test_identity_by_claim_is_a_platform_piece():
     assert d.claim_slot(prefer="w-7") == "w-7"                         # the scheduler's index wins, and creates
     assert sorted(ctl.slots()) == ["w-1", "w-2", "w-7"] and sub.slot_key("w-1") == "thing/slots/w-1"
     assert sub.acl_worker() == ["thing/epoch/*", "thing/slots/*"]
+
+
+def test_a_named_unit_deleted_comes_back_under_its_name():
+    """Create, delete, create again under the same name. The row is marked, not
+    removed, so the second create is neither "exists" nor a create-only write:
+    it is a fresh row one revision on from the old one, by CAS on what it read.
+    The revision has to keep growing — a reader that remembered 2 and sees 1
+    concludes the row rolled back — and no tombstone may survive the comeback."""
+    box = Box()
+    spec = SubsystemSpec.from_dict({
+        "name": "thing",
+        "unit": {"rows": "u", "id": "name", "fields": {"name": {"type": "string"}}},
+    })
+    ctl = SpecController(spec, box.vars, box.objects, wall=box.wall)
+
+    r = ctl.create({"name": "gate"})
+    assert r["revision"] == 1 and ctl.unit("gate")["name"] == "gate"
+    assert ctl.ensure_placed(workers=["w-1"])[0].worker == "w-1"
+
+    ctl.delete("gate")
+    assert ctl.unit("gate") is None                       # gone for every reader
+    assert ctl.unplace_deleted() == ["gate"] and ctl.where("gate") is None
+
+    back = ctl.create({"name": "gate"})                   # the operator switches it on again
+    assert back["revision"] == 2, "the revision restarted: a reader that saw 2 will read this as a rollback"
+    assert ctl.unit("gate") is not None                   # no tombstone survived the comeback
+    assert ctl.vars.get("thing/u/gate")[0].get("deleted") != "true"
+    assert ctl.ensure_placed(workers=["w-1"])[0].worker == "w-1"   # and it is placed again
 
 
 def test_the_resource_is_a_platform_job_that_mirrors_any_subsystems_buckets():

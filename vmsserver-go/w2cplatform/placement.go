@@ -161,8 +161,25 @@ func (c *SpecController) Create(fields map[string]any) (Row, error) {
 		if strings.Contains(name, "/") || name == "." || name == ".." {
 			return nil, &Refused{fmt.Sprintf("a %s %s is a name, not a path: %q", c.Spec.Name, c.Spec.ID, name)}
 		}
-		if it, _, _ := c.Vars.Get(c.rowKey(name)); it != nil {
+		old, idx, _ := c.Vars.Get(c.rowKey(name))
+		if old != nil && old["deleted"] != "true" {
 			return nil, &Refused{fmt.Sprintf("%s unit %s exists", c.Spec.Name, name)}
+		}
+		if old != nil {
+			// A named unit deleted earlier comes back under its name. Delete MARKS the row, so
+			// the key is still there: this is neither "exists" (the unit does not) nor a
+			// create-only write (the key does). A fresh row, one revision on from the old one,
+			// by CAS on what we just read — the revision has to keep growing, because a reader
+			// that remembered 2 and sees 1 concludes the row rolled back.
+			r, err := c.Spec.NewRow(name, fields)
+			if err != nil {
+				return nil, err
+			}
+			r["revision"] = int(ToFloat(old["revision"])) + 1
+			if _, err := c.Vars.Put(c.rowKey(name), c.Spec.ItemsOf(r), idx); err != nil {
+				return nil, err
+			}
+			return r, c.derived(r, name, false)
 		}
 		uid = name
 	}
