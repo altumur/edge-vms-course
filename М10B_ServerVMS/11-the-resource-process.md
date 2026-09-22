@@ -34,10 +34,10 @@ the names say so: platform/resources/<server>/heartbeat, platform/mirror.
 
 ## Что нужно знать заранее
 
-- **М10A, урок 13** — `Resource`: heartbeat, `register`, `pass_`, `restore`, `serve`, `extra`.
-- **М10A, урок 12** — `EventDatabase`: кэш над деревом, `rebuild`, `tail`, `forget`.
+- **М10A, урок 14** — `Resource`: heartbeat, `register`, `pass_`, `restore`, `serve`, `extra`.
+- **М10A, урок 13** — `EventDatabase`: кэш над деревом, `rebuild`, `tail`, `forget`.
 - **Уроки 7–8** — `Manifest`, `ArchivePolicy`, два дерева.
-- **М10A, урок 14** — протокол `extra`: четыре формы ответа, включая байты с заголовками.
+- **М10A, урок 15** — протокол `extra`: четыре формы ответа, включая байты с заголовками.
 
 ## Чему вы научитесь
 
