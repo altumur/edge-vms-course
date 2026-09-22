@@ -1,235 +1,222 @@
-# Course Plan — the whole picture
+# План курса — вся картина
 
-A shipped edge VMS is seven layers deep. The course builds them in dependency order, one module per layer, each ending with something that runs.
+Поставляемая VMS на устройстве — это семь слоёв в глубину. Курс строит их в порядке зависимостей, по модулю на слой, и каждый заканчивается чем-то работающим.
 
 ---
 
-## The seven layers
+## Семь слоёв
 
-| # | Layer | The question it answers | Module | State |
+| # | Слой | На какой вопрос отвечает | Модуль | Состояние |
 |---|---|---|---|---|
-| 1 | **RAUC** | What OS is this box running, and can I change it safely? | М9 | Designed |
-| 2 | **Nomad + Podman** | What workload is running, and where? | М9 (one box) · М11 (a cluster) | Written |
-| 3 | **Postgres** | What does this system know about itself? | М9 | Written |
-| 4 | **The directory** | Which worker, which cluster — and is that answer complete? | М11 (a cluster's) · М12 (across clusters) | Written (М11) · Written (М12) |
-| 5 | **The domain signer** | Who is allowed to know what, and how do they prove it? | М12 — the domain is its own root; *OpenBao only for a multi-tenant vendor, М13* | Written |
-| 6 | **Prometheus + logs** | Is it working, and how would I know? | М13 — domain-level; the remote observer is a domain service | Designed |
-| 7 | **The vendor boundary** | What may the vendor do, and what must it never be able to? | М14 | Designed |
+| 1 | **RAUC** | Какая ОС работает на этой коробке и можно ли её сменить безопасно? | М9 | Спроектирован |
+| 2 | **Nomad + Podman** | Какая нагрузка работает и где? | М9 (одна коробка) · М11 (кластер) | Написан |
+| 3 | **Postgres** | Что эта система знает о себе самой? | М9 | Написан |
+| 4 | **Справочник** | Какой воркер, какой кластер — и полон ли этот ответ? | М11 (кластерный) · М12 (по кластерам) | Написан (М11) · Написан (М12) |
+| 5 | **Подписывающий домена** | Кому что позволено знать и как он это доказывает? | М12 — домен сам себе корень; *OpenBao только для многоарендного вендора, М13* | Написан |
+| 6 | **Prometheus + логи** | Работает ли оно, и откуда я узнаю? | М13 — на уровне домена; удалённый наблюдатель — сервис домена | Спроектирован |
+| 7 | **Граница вендора** | Что вендору позволено и чего он никогда не должен быть способен сделать? | М14 | Спроектирован |
 
-Layers 1–2 are the two update planes М9 is built around: the OS underneath, the workload on top — both visible on a single box, which is all М9 needs. М9 also owns the **third** thing on that box, which is neither: the data. A spool of recorded-but-not-yet-uploaded segments outlives both planes, and the segments it writes are what М9 turns into the archive. Layers 3–5 are the product, and **the domain is its top** — one customer is one domain. Layer 7 is not a layer of the product at all: it is the far side of a boundary the product must work across in one direction only.
+Слои 1–2 — две плоскости обновления, вокруг которых построен М9: ОС снизу, нагрузка сверху — обе видны на одной коробке, а больше М9 ничего и не нужно. М9 владеет и **третьим** на этой коробке, которое ни то ни другое: данными. spool из записанных, но ещё не выгруженных сегментов переживает обе плоскости, и сегменты, которые он пишет, — это то, что М9 превращает в архив. Слои 3–5 — это продукт, и **домен — его верх**: один заказчик — один домен. Слой 7 вообще не слой продукта: это дальняя сторона границы, через которую продукт обязан работать только в одну сторону.
 
-**Layers 5 and 7 turned out to be one layer.** They are both in М12. The plan had identity in layer 5 and device management in layer 7, three modules apart, and each asked the same question — *how does a machine prove who it is in order to get its first secret?* Enrollment is where identity and device management meet, and separating them meant neither owned it.
+**Слои 5 и 7 оказались одним слоем.** Оба они в М12. В плане личность была в слое 5, а управление устройствами — в слое 7, на три модуля дальше, и каждый задавал один и тот же вопрос — *как машина доказывает, кто она, чтобы получить свой первый секрет?* Регистрация — место, где личность и управление устройствами встречаются, и разделение означало, что ею не владел никто.
 
-**Layer 4 is split across two modules,** which is a change from this plan's first version. М9 builds the reconciliation loop on a single recorder, where both ends of it are visible at once; М11 handles what happens when ownership is contested. A database with nothing acting on it is not a working system, so М9 could not stop at Postgres.
+**Слой 4 разделён между двумя модулями** — это изменение относительно первой версии плана. М9 строит цикл сверки на одном рекордере, где оба его конца видны сразу; М11 разбирает, что происходит, когда владение оспаривается. База, над которой ничто ничего не делает, — не работающая система, поэтому М9 не мог остановиться на Postgres.
 
-**Layer 2 moved out of М9 and into М11.** М9's own progression promises one box — *a box is whatever was flashed onto it* — and it cannot promise that while building a three-server cluster in its second half. It spent one revision in М9, on the grounds that scheduling is desired-state work; that is true, but it put the two-level idea in two modules and taught it twice. A cluster and the controller above it are one arc. Nomad's cross-site federation went further still, to М13, where many networks actually begin.
+**Слой 2 ушёл из М9 в М11.** Собственное развитие М9 обещает одну коробку — *коробка есть то, что на неё прошили* — и обещать это, строя во второй половине кластер из трёх серверов, невозможно. Одну ревизию он провёл в М9 на том основании, что планирование — работа с желаемым состоянием; это верно, но двухуровневая идея оказалась в двух модулях и преподавалась дважды. Кластер и контроллер над ним — одна дуга. Междусайтовая федерация Nomad ушла ещё дальше, в М13, где много сетей действительно начинается.
 
 ---
 
-## Two structural warnings
+## Два структурных предупреждения
 
-### 1. The licensing concentration is worse than it looks
+### 1. Концентрация лицензий хуже, чем выглядит
 
-The stack this course *would* have reached for — Nomad, Consul, Vault — is **three components under one vendor's source-available licence.** Read from the licence files, not marketing, and kept here because the design's shape is partly a response to it. **Only the first row survived.**
+Стек, за которым курс *потянулся бы* — Nomad, Consul, Vault, — это **три компонента под source-available лицензией одного вендора.** Прочитано по файлам лицензий, а не по маркетингу, и оставлено здесь потому, что форма проекта отчасти является ответом на это. **Выжила только первая строка.**
 
-| Component | Licensor | Licence | Change Date |
+| Компонент | Лицензиар | Лицензия | Change Date |
 |---|---|---|---|
-| Nomad 1.7.0+ | International Business Machines Corporation | BUSL | 4 years per version → MPL 2.0 |
-| Consul 1.17.0+ | International Business Machines Corporation | BUSL | 4 years per version → MPL 2.0 |
+| Nomad 1.7.0+ | International Business Machines Corporation | BUSL | 4 года на версию → MPL 2.0 |
+| Consul 1.17.0+ | International Business Machines Corporation | BUSL | 4 года на версию → MPL 2.0 |
 | Vault | HashiCorp / IBM | BUSL | → MPL 2.0 |
 
-Three of seven layers under IBM's BUSL, in a product that is *shipped to customers on hardware* — which is exactly the "embedded" word the Additional Use Grant uses. Two mitigations, both real:
+Три слоя из семи под BUSL от IBM, в продукте, который *поставляется заказчикам на железе* — а это ровно то слово «embedded», которое использует Additional Use Grant. Две меры, обе настоящие:
 
-- **Vault → nothing.** The product has no vault. Most of the secrets a vault would have held were removed by giving machines identities (the domain signer, М12), and the one that remains — camera credentials — must work with everything above the cluster unreachable, so a central vault is the wrong answer by construction. **OpenBao**, the MPL-2.0 Linux Foundation fork, appears only in М14, and only if the vendor is a multi-tenant host holding many customers' secrets.
-- **Consul → drop it.** Nomad has **native service discovery** that needs no Consul, and HashiCorp's own documentation says it "suits edge computing… and minimal single-cluster setups prioritizing simplicity." It gives templated service addresses but *not* dynamic DNS, *not* HTTP/TCP/gRPC health checks with healthy-instance filtering, and *not* service mesh. For a handful of services per site, that is likely enough.
+- **Vault → ничего.** В продукте нет сейфа. Большинство секретов, которые держал бы сейф, устранены тем, что машинам дали личности (подписывающий домена, М12), а единственный оставшийся — учётные данные камер — обязан работать, когда всё выше кластера недостижимо, так что центральный сейф неверен по построению. **OpenBao**, форк Linux Foundation под MPL-2.0, появляется только в М14 и только если вендор — многоарендный хостер, держащий секреты многих заказчиков.
+- **Consul → выбросить.** У Nomad есть **собственный service discovery**, которому Consul не нужен, и документация самой HashiCorp говорит, что он «подходит для вычислений на устройстве… и минимальных однокластерных установок, где приоритет — простота». Он даёт шаблонные адреса сервисов, но *не* динамический DNS, *не* HTTP/TCP/gRPC-проверки здоровья с фильтрацией по здоровым экземплярам и *не* service mesh. Для горстки сервисов на сайт этого, скорее всего, достаточно.
 
-That leaves **Nomad as the only unavoidable BUSL dependency**, and no fork of it exists — unlike Terraform (OpenTofu) and Vault (OpenBao). If that single dependency is unacceptable, the decision is to teach Kubernetes instead, and it should be taken now rather than at М13.
+Остаётся **Nomad как единственная неизбежная BUSL-зависимость**, и форка у него нет — в отличие от Terraform (OpenTofu) и Vault (OpenBao). Если эта одна зависимость неприемлема, решение — учить вместо него Kubernetes, и принять его нужно сейчас, а не на М13.
 
-#### Resolved: BUSL does not prohibit shipping this product
+#### Решено: BUSL не запрещает поставлять этот продукт
 
-Checked against the licence itself rather than against the general alarm around it. **The Additional Use Grant permits commercial use, including embedding**, and prohibits something much narrower:
+Проверено по самой лицензии, а не по общей тревоге вокруг неё. **Additional Use Grant разрешает коммерческое использование, включая встраивание**, и запрещает нечто куда более узкое:
 
-> "You may make production use of the Licensed Work, provided Your use does not include offering the Licensed Work to third parties on a hosted or embedded basis" in competition with the licensor's paid offerings.
+> «Вы можете использовать Licensed Work в продакшене при условии, что Ваше использование не включает предложение Licensed Work третьим лицам на хостинговой или встроенной основе» в конкуренции с платными предложениями лицензиара.
 
-Two conditions must hold **together**. HashiCorp's own FAQ defines both, and the second is what decides it:
+Два условия должны выполняться **вместе**. FAQ самой HashiCorp определяет оба, и решает второе:
 
-> A "competitive offering" is a product sold to third parties "that significantly overlaps the capabilities of a HashiCorp commercial product."
+> «Конкурирующее предложение» — это продаваемый третьим лицам продукт, «который значительно перекрывает возможности коммерческого продукта HashiCorp».
 >
-> "Embedded" means including code from a HashiCorp product **"in a competitive product."**
+> «Встроенный» означает включение кода продукта HashiCorp **«в конкурирующий продукт».**
 
-*Embedded* is defined relative to a competitive product — embedding alone is not the trigger. Their worked example: a company building a Terraform competitor may still use Vault to secure it. **A VMS does not significantly overlap Nomad Enterprise**, so shipping Nomad inside a VMS appliance is permitted as written. The licensor is now **IBM**, not HashiCorp.
+*Встроенность* определена относительно конкурирующего продукта — само встраивание триггером не является. Их разобранный пример: компания, строящая конкурента Terraform, всё равно может использовать Vault для его защиты. **VMS не перекрывает значительно Nomad Enterprise**, поэтому поставка Nomad внутри прибора VMS разрешена как написано. Лицензиар теперь **IBM**, а не HashiCorp.
 
-**The risk to watch is not the appliance — it is the plugin roadmap.** The moment the product lets a customer run *their own* containers on it (a third-party analytics platform, a detector marketplace, bring-your-own-model), it starts offering orchestration as a customer-facing capability, and "significantly overlaps" becomes arguable. For a VMS that is not a hypothetical drift: third-party analytics is where every VMS eventually goes. **М13 is the second exposure**, because renting cloud capacity and running customers' recorders makes *hosted* and *embedded* both true, leaving only the competitive test.
+**Следить надо не за прибором — за роадмапом плагинов.** В момент, когда продукт позволяет заказчику запускать на себе *свои* контейнеры (сторонняя платформа аналитики, магазин детекторов, приноси-свою-модель), он начинает предлагать оркестрацию как обращённую к заказчику возможность, и «значительно перекрывает» становится спорным. Для VMS это не гипотетический дрейф: сторонняя аналитика — то, куда в итоге приходит любая VMS. **М13 — вторая экспозиция**, потому что аренда облачной ёмкости и запуск рекордеров заказчиков делает истинными и *hosted*, и *embedded*, оставляя только тест на конкуренцию.
 
-Not legal advice. The specific question for counsel is narrower than "can we use Nomad": *does our analytics-plugin roadmap turn the appliance into something that significantly overlaps Nomad Enterprise?*
+Не юридическая консультация. Конкретный вопрос юристу уже, чем «можно ли нам использовать Nomad»: *превращает ли наш роадмап плагинов аналитики прибор в нечто, значительно перекрывающее Nomad Enterprise?*
 
-#### The Change Date is not an escape route
+#### Change Date — не путь к спасению
 
-Each BUSL release converts to **MPL 2.0 four years after it is published** — 1.8.0 (28 May 2024) becomes MPL on **28 May 2028**; 2.0.0 (21 Apr 2026) in **April 2030**. Two things make this useless as a plan:
+Каждый релиз под BUSL переходит в **MPL 2.0 через четыре года после публикации**: 1.8.0 (28 мая 2024) становится MPL **28 мая 2028**; 2.0.0 (21 апреля 2026) — в **апреле 2030**. Две вещи делают это бесполезным как план:
 
-- **The Change Date and the support window move in opposite directions.** By the time a version is MPL it has been out of support for roughly two years. 1.7.x is the worked example: EOL since April 2024, with an allocation-directory-escape CVE (CVE-2024-7625, affecting `>= 1.7.0, < 1.7.11`) fixed **only in Enterprise**. Shipping that to an appliance nobody visits is not a licence saving, it is a defect.
-- **The only genuinely MPL Nomad is ≤ 1.6.5** (13 Dec 2023), and the 1.6 branch is a trap: 1.6.6 onward ship BUSL, whose text retroactively claims coverage from 1.6.4 even though the shipped 1.6.4 and 1.6.5 artifacts carry MPL. Anyone relying on "1.6.x is MPL" must pin **≤ 1.6.5** exactly — and then has no Variable Locks, no `disconnect` block, and three years of unpatched CVEs.
+- **Change Date и окно поддержки движутся в противоположные стороны.** К моменту, когда версия становится MPL, она уже около двух лет вне поддержки. 1.7.x — разобранный пример: EOL с апреля 2024, с CVE о выходе из каталога аллокейшена (CVE-2024-7625, затрагивает `>= 1.7.0, < 1.7.11`), исправленной **только в Enterprise**. Поставить это в прибор, к которому никто не приходит, — не экономия на лицензии, а дефект.
+- **Подлинно MPL-ный Nomad — только ≤ 1.6.5** (13 декабря 2023), и ветка 1.6 — ловушка: с 1.6.6 поставляется BUSL, чей текст ретроактивно заявляет покрытие с 1.6.4, хотя выпущенные артефакты 1.6.4 и 1.6.5 несут MPL. Кто опирается на «1.6.x — это MPL», обязан приколотить ровно **≤ 1.6.5** — и тогда у него нет Variable Locks, нет блока `disconnect` и три года неисправленных CVE.
 
-**So the version decision is an engineering decision, not a licensing one:** ship a supported release, and treat BUSL as settled by the competitive test above.
+**Значит, решение о версии — инженерное, а не лицензионное:** поставляйте поддерживаемый релиз, а BUSL считайте закрытым тестом на конкуренцию выше.
 
-**Both are out, and the comparison record between them was retired** once neither survived. The reasoning worth keeping: Consul and a vault overlapped on exactly one thing — mTLS between services — and the product runs a PKI regardless, because no service mesh issues an identity to a device that has never been on the network. Once the domain became its own CA (М12 Lesson 7), a second certificate hierarchy bought nothing. **The accepted cost is health-check-filtered service discovery**, which Nomad's native discovery does not provide and a handful of services per cluster does not need.
+**Оба выбыли, а запись их сравнения упразднена**, как только не выжил ни один. Рассуждение, которое стоит сохранить: Consul и сейф перекрывались ровно в одном — mTLS между сервисами, — а продукт всё равно держит PKI, потому что ни один service mesh не выдаёт личность устройству, которое никогда не было в сети. Как только домен стал сам себе CA (М12, урок 7), вторая иерархия сертификатов перестала что-либо давать. **Принятая цена — service discovery с фильтрацией по проверкам здоровья**, которого собственный discovery Nomad не даёт и который горстке сервисов на кластер не нужен.
 
-#### A vault is not what removes most of these secrets
+#### Большинство этих секретов убирает не сейф
 
-Worth recording because it inverts the layer table above. Auditing the course's five stand-in secrets against what actually resolves each one: object-store access becomes **workload identity**; the local database password becomes **certificate auth**; the operator account is an **IdP** question; the per-recorder credential and the self-signed CA are already replaced by **mTLS and a delegated intermediate** in М12 Lesson 7.
+Стоит записать, потому что это выворачивает таблицу слоёв выше. Пять подставных секретов курса сверены с тем, что каждый из них на самом деле снимает: доступ к хранилищу объектов становится **личностью нагрузки**; пароль локальной базы — **аутентификацией по сертификату**; учётная запись оператора — вопросом **IdP**; учётные данные на рекордер и самоподписанный CA уже заменены на **mTLS и делегированный промежуточный** в М12, урок 7.
 
-> **Most secrets exist because something was not given an identity.** Give the machine an identity and the secret it stood in for disappears.
+> **Большинство секретов существует потому, что чему-то не дали личность.** Дайте машине личность — и секрет, который её подменял, исчезнет.
 
-That leaves a genuinely narrow scope for OpenBao — **dynamic credentials, and the secrets a multi-tenant operator holds for many customers** — and makes layer 5 a smaller layer than the table implies. What a vault does that Postgres cannot is *issue and revoke*: the encryption key must not sit beside the data, and a stored `valid_until` cannot revoke anything by itself. If the orchestration layer stays single-tenant, the honest answer may be that the product does not need one, and М14 Lesson 4 is written to reach that conclusion rather than avoid it.
+Это оставляет OpenBao по-настоящему узкие рамки — **динамические учётные данные и секреты, которые многоарендный оператор держит за многих заказчиков**, — и делает слой 5 меньшим, чем следует из таблицы. Чего сейф умеет, а Postgres нет, — это *выдавать и отзывать*: ключ шифрования не должен лежать рядом с данными, а сохранённый `valid_until` сам по себе ничего не отзывает. Если слой оркестрации остаётся одноарендным, честный ответ может быть в том, что продукту сейф не нужен, и М14, урок 4 написан так, чтобы прийти к этому выводу, а не обойти его.
 
-**The exception, and it is the course's only real secrets problem:** camera credentials. An RTSP URL carries `user:pass@` inline, so М9's `rtsp_url` column silently held every customer's camera password in plaintext until М9 Lesson 5 was corrected. Those must work with everything above the cluster unreachable, so a central vault is the wrong answer by construction — they stay at the site under a key the database backup does not contain.
+**Исключение, и это единственная настоящая проблема секретов в курсе:** учётные данные камер. RTSP-URL несёт `user:pass@` внутри себя, так что колонка `rtsp_url` в М9 молча хранила пароль камеры каждого заказчика открытым текстом, пока М9, урок 5 не был исправлен. Они обязаны работать, когда всё выше кластера недостижимо, так что центральный сейф неверен по построению — они остаются на сайте под ключом, которого нет в резервной копии базы.
 
-### 2. Secrets arrive three modules before the module that resolves them
+### 2. Секреты появляются на три модуля раньше модуля, который их снимает
 
-М9 Lesson 4 provisions AWS credentials by hand at commissioning. М9 Lessons 5–9 add a database password, an operator account and the camera credentials. М12 adds a per-server credential and a self-signed CA — and then **resolves all five itself**, four by giving things identities and one by promotion: the self-signed CA turns out to be the customer's permanent root. OpenBao appears only in М13, and only for a multi-tenant vendor.
+М9, урок 4 выдаёт учётные данные AWS вручную при вводе в эксплуатацию. Уроки 5–9 М9 добавляют пароль базы, учётную запись оператора и учётные данные камер. М12 добавляет учётные данные на сервер и самоподписанный CA — и затем **снимает все пять сам**: четыре тем, что вещам дали личности, и один повышением — самоподписанный CA оказывается постоянным корнем заказчика. OpenBao появляется только в М13 и только для многоарендного вендора.
 
-This is deliberate and follows the course's existing discipline — `camera_sim.py` before the real pipeline, `filesink` before `kvssink`, fixtures before real fragments. Hand-provisioned secrets are the stand-in; М12 replaces them, and the replacement is the lesson. What must not happen is the resolution arriving as a surprise: every earlier module should mark its secret handling as temporary at the point it introduces it.
+Это сделано намеренно и следует уже принятой дисциплине курса: `camera_sim.py` до настоящего конвейера, `filesink` до `kvssink`, фикстуры до настоящих фрагментов. Выданные вручную секреты — подстановка; М12 их заменяет, и замена и есть урок. Чего быть не должно — чтобы развязка оказалась неожиданностью: каждый более ранний модуль обязан помечать своё обращение с секретами как временное там, где его вводит.
 
 ---
 
-## The modules
+## Модули
 
-### М9 — EdgeVMS, Lessons 5–9: Postgres and the worker · [written](./М9_EdgeVMS/README.md)
+### М10A и М10B — ServerVMS: платформа и подсистемы на одном сервере · 19 + 23 урока · [М10A](./М10A_Platform/README.md) · [проект](./М10A_Platform/module-design.md) · [М10B](./М10B_ServerVMS/README.md) · [проект](./М10B_ServerVMS/module-design.md) · [код](./vmsserver/README.md)
 
-*Folded into М9 on 12 September 2026: the recorder's five lessons follow the appliance's four, so one module carries the box from an A/B root to a database that owns what the box should be. The design brief is Part 2 of [`module-design.md`](./М9_EdgeVMS/module-design.md).*
+Модуль, который перестраивает рекордер М9 на решении, к которому М11 пришёл в итоге — и упраздняет само слово, потому что тому, что стоит на сервере, оно не нужно — — **воркеры, ресурсы, один контроллер** — и делает это сначала на одной коробке, чтобы форму можно было прототипировать без планировщика, без KVS и без базы. Три вещи построены со стороны GStreamer: `driverpacksrc`, элемент-источник, который играет файлы, чьи имена подменяют RTSP-адреса; `archivesink`, локальный архив на дисциплине spool; и два процесса, которые каждая подсистема даст платформе, — **контроллер**, единственный писатель конфигурации в кластере, и **воркер**, который гоняет конвейеры и больше ничего.
 
-The cloud VMS spec forbade a database outright. The appliance needs one, and understanding *why the answer flipped* is half the module: in the cloud, KVS held the configuration; on-prem, the box holds it. The other half is that a row saying a camera should be recording is a wish until something makes it true.
+- **`vmscontroller`** — единственный писатель списка камер и назначения камер на воркеров; не хранит состояния, корректен через CAS к хранилищу конфигурации платформы; никогда не на пути восстановления
+- **`vmsworker`** — DriverPack как воркер: один процесс, N конвейеров, собственный цикл сверки по своему назначению; Nomad (М11) запускает столько, сколько требует нагрузка
+- **Контракт подсистемы** — контроллер + воркер + префикс конфигурации + объект heartbeat, одинаково для VMS, для детекторов и для шлюза; платформа знает форму и ничего не знает о видео
+- **Никакого шардирования на одном сервере**, и открытый вопрос о том, где живёт конфигурация, закрыт: контроллер её пишет, платформа хранит, воркер читает свою долю
+- **KVS упразднён; архив наш**: сегменты на spool, закрытые сегменты повышаются в ресурс архива, эпоха в пути, манифест вместо индекса
 
-- Schema for cameras, sites and retention; migrations as a shipped artifact that runs at boot on a box nobody visits
-- **Operator-owned columns versus controller-owned columns** — the distinction that keeps recorder placement out of the operator's hands
-- **The critical one:** `PGDATA` lives on the data partition, so it survives A/B OS updates untouched. This is М9's three-way boundary with real consequences
-- The reconcile loop, built against a fake actuator first: desired persisted, actual derived, `observed_revision >= revision` as the only test of applied
-- Fifty GStreamer pipelines in one Python process — the GIL boundary demonstrated, `watchdog` for stall detection, and where Python stops being the right answer
+### М11 — ClusterVMS: воркеры, которые переживают свой сервер · 5 уроков · [написан](./М11_ClusterVMS/README.md) · [проект](./М11_ClusterVMS/module-design.md) · [код](./М11_ClusterVMS/clustervms/README.md)
 
-### М10 — ServerVMS: the platform's shape on one server · 5 lessons · [written](./М10_ServerVMS/README.md) · [design](./М10_ServerVMS/module-design.md) · [code](./vmsserver/README.md)
+Единственный модуль, где ошибка портит данные заказчика, а не просто останавливает сервис. Форма М10 работает на одной коробке; здесь — один кластер, серверы в одной сети, на которую вы поставили бы запись, — и воркер, который переживает смерть любого из них.
 
-The module that rebuilds М9's recorder on the decision М11 arrived at last — and retires the word, because what is on a server needs none — — **workers, resources, one controller** — and does it on a single box first, so the shape can be prototyped without a scheduler, without KVS and without a database. Three things are built from the GStreamer end: `driverpacksrc`, a source element that plays files whose names stand in for RTSP addresses; `archivesink`, a local archive on the spool's discipline; and the two processes every subsystem will give the platform — a **controller** that is the only writer of configuration in the cluster and a **worker** that runs pipelines and nothing else.
+- **Воркеры переезжают, ресурсы остаются, контроллера не спрашивают.** Воркер — это аллокейшен, который захватывает своё имя через CAS из `NOMAD_ALLOC_INDEX`; его камеры назначены на это имя в raft кластера, поэтому переезд при отказе ничего не переписывает. Архив — работа типа `system`, прибитая к дискам своего сервера, недоступная, пока сервер лежит, и никогда не теряемая. Конфигурация из raft не уходила, так что правка, сделанная во время переезда, просто там есть
+- **Nomad решает, сколько воркеров и где.** Работа воркера несёт политику `scaling` по собственной нагрузке воркеров; Nomad Autoscaler (MPL-2.0) двигает `count`; у контроллера нет клиента Nomad. Сжатие освобождает слот, и контроллер перераспределяет; падение не освобождает ничего, и контроллер ждёт
+- **Аренды, эпохи и писатель-зомби.** Мёртвый, отрезанный и приостановленный неразличимы, и проект обязан быть корректным, этого не разрешая. Отсечение происходит **на ресурсе, а не на контроллере** — эпоха каждой камеры есть в каждом пути — и на слой раньше, на слоте, что и делает баг Nomad с дублирующимся индексом безвредным
+- **Справочник кластера — это назначение.** Одно сканирование `vms/workers/*` отвечает на *где камера 7*, в одном raft, строго согласованно. Размещение под ограничениями по меткам по собственной ёмкости воркеров, правило устойчивости, сервер в причине и почему согласованное хеширование — рефлекторно неверный ответ
+- **`clustervms/` построен на `vmsserver/`**, импортируя контракт, контроллер, воркер и архив без изменений; `vmsserver-go/` — тот же пакет на Go целиком, с тем же отношением к контракту; а `vmsserver/tests/test_cross_go_worker.py` гоняет Go-бинарник против Python-контроллера, потому что два зелёных набора — это ещё не согласие
 
-- **`vmscontroller`** — the sole writer of the camera list and of camera-to-worker assignment; stateless, correct by CAS against the platform's config store; never on the recovery path
-- **`vmsworker`** — DriverPack as the worker: one process, N pipelines, its own reconcile loop over its assignment; Nomad (М11) runs as many as the workload needs
-- **The subsystem contract** — controller + worker + a config prefix + a heartbeat object, the same for the VMS, for detectors, and for the gateway; the platform knows the shape and nothing about video
-- **No sharding on one server**, and the open question of where configuration lives answered: the controller writes it, the platform stores it, the worker reads its share
-- **KVS retired; the archive is ours**: segments on the spool, closed segments promoted to the archive resource, the epoch in the path, a manifest instead of an index
+### М12 — DomainVMS: несколько кластеров и верх продукта · 8 уроков · [написан](./М12_DomainVMS/README.md) · [проект](./М12_DomainVMS/module-design.md) · [код](./М12_DomainVMS/domainvms/README.md)
 
-### М11 — ClusterVMS: workers that outlive their server · 5 lessons · [written](./М11_ClusterVMS/README.md) · [design](./М11_ClusterVMS/module-design.md) · [code](./М11_ClusterVMS/clustervms/README.md)
+Что остаётся, когда кластер работает сам: **всё, что перестаёт быть познаваемым при более чем одном кластере**, — и, поскольку выше домена продукту ничего не принадлежит, всё, что домен обязан делать для себя сам.
 
-The only module where getting it wrong corrupts customer data rather than merely stopping a service. М10's shape works on one box; this is one cluster — servers on one network you would bet recording on — and a worker that survives any of them dying.
+- **Справочник справочников, и согласованным он быть не может.** Внутри кластера есть один raft; между кластерами — ни одного, поэтому домен агрегирует: частично, с ограниченной устарелостью и честно о неполноте. Граница CAP, проведённая сетью, которой вы перестали доверять
+- **Трёхуровневое размещение, разделённое по тому, что знает каждый уровень:** Nomad выбирает сервер, кластер выбирает воркера по ёмкости, домен выбирает кластер по **достижимости**
+- **Никакого контроллера домена.** Одна работа подписывающего, не хранящее состояния размещение, представление для чтения, сервер обновлений — их держит один назначенный кластер, **кластер домена**, а сервер выбирает Nomad. Ключ подписывающего — единственное состояние, программный ключ в raft намеренно, с резервной копией за пределами кластера и ротацией на учениях
+- **Домен сам себе корень.** Корень, который держит вендор и который подписывает CA заказчика, может выдать себя за весь его домен доверия; поэтому корень самоподписанный, постоянный и принадлежит заказчику. Регистрация (registrar, LDevID, одобрение, TPM) — дело домена; вендору принадлежит только ваучер MASA
+- **Сроки жизни против терпимости к офлайну:** *терпимый простой = срок жизни сертификата − запас на обновление*. Отзыв на устройстве — задача про срок жизни, а не про список
+- **Личность человека:** кластеры держат публичный ключ подписывающего, никогда не хеш пароля; подписывающий федерируется с собственным IdP заказчика. Один домен — одна Алиса
+- **Кластер, который домен арендует для себя**, в облачном аккаунте заказчика — и доказательство, что воркер не может понять, где он работает. Арифметика полосы (пятьдесят камер по 4 Мбит/с — это 200 Мбит/с наверх) делает *смешанную* форму формой по умолчанию и замыкает дугу с арендованным облаком М8
+- **Свой сервер обновлений и кэш прав**, и именно это позволяет ему работать, когда вендора нет
+- **Кто обслуживает браузеры: никогда не воркер.** Консоль и шлюз живого видео как две работы уровня кластера — единственные клиенты воркера — с арифметикой отказов, которая держит веб-проблему подальше от воркера. Урок 3 обрастёт разделом об этом, когда уроки будут написаны
 
-- **Workers move, resources stay, the controller is not consulted.** A worker is an allocation that claims its name by CAS from `NOMAD_ALLOC_INDEX`; its cameras are assigned to that name in the cluster's raft, so failover rewrites nothing. The archive is a `system` job pinned to its server's disks, unavailable while the server is down and never lost. Configuration never left raft, so an edit made during the failover is simply there
-- **Nomad decides how many workers and where.** The worker job carries a `scaling` policy on the workers' own load; the Nomad Autoscaler (MPL-2.0) moves `count`; the controller has no Nomad client. Scale-in releases a slot and the controller redistributes; a crash releases nothing and the controller waits
-- **Leases, epochs and the zombie writer.** Dead, partitioned and paused are indistinguishable, and the design must be correct without resolving that. Fencing happens **at the resource, not the controller** — the epoch per camera is in every path — and one layer earlier at the slot, which is what makes Nomad's duplicate-index bug harmless
-- **The cluster directory is the assignment.** One scan of `vms/workers/*` answers *where is camera 7*, in one raft, strongly consistent. Placement under label constraints by the workers' own capacity, the stability rule, the server in the reason, and why consistent hashing is the reflexive wrong answer
-- **`clustervms/` is built on `vmsserver/`**, importing the contract, the controller, the worker and the archive unchanged; `vmsserver-go/` is the same package in Go, whole, with the same relationship to the contract — and `vmsserver/tests/test_cross_go_worker.py` runs the Go binary against the Python controller, because two green suites are not an agreement
+### М13 — Наблюдаемость: Prometheus и логи · 4 урока · [спроектирован](./М13_Observability/module-design.md)
 
-### М12 — DomainVMS: several clusters, and the top of the product · 8 lessons · [written](./М12_DomainVMS/README.md) · [design](./М12_DomainVMS/module-design.md) · [code](./М12_DomainVMS/domainvms/README.md)
+**Этот модуль не вводит наблюдаемость — он её собирает.** Каждый модуль ниже уже испускает сигналы, определённые там, где был введён отказ, которому они нужны, потому что у метрики, выбранной в момент, когда вы смотрите, как что-то ломается, есть причина, а у выбранной в главе о наблюдаемости есть только имя:
 
-What is left once a cluster works alone: **everything that stops being knowable with more than one cluster** — and, since nothing above the domain belongs to the product, everything a domain must do for itself.
-
-- **A directory of directories, and it cannot be consistent.** Inside a cluster there is one raft; across clusters there is none, so the domain aggregates — partial, bounded-stale, and honest about incompleteness. The CAP boundary drawn by a network you stopped trusting
-- **Three-level placement, split by what each level knows:** Nomad picks the server, the cluster picks the worker on capacity, the domain picks the cluster on **reachability**
-- **No domain controller.** One signer job, a stateless placement, a read view, an update server — hosted by one designated cluster — the **domain cluster**, Nomad choosing the server. The signer's key is the only state, a software key in raft on purpose, backed up beyond the cluster and rotated on a drill
-- **The domain is its own root.** A vendor-held root that signs the customer's CA can impersonate their whole trust domain; so the root is self-signed, permanent, and the customer's. Enrollment (registrar, LDevID, approval, TPM) is the domain's; only the MASA voucher is the vendor's
-- **Lifetimes against offline tolerance:** *tolerable outage = certificate lifetime − renewal margin*. Revocation at the edge is a lifetime problem, not a list problem
-- **Human identity:** clusters hold the signer's public key, never a password hash; the signer federates to the customer's own IdP. One domain, one Alice
-- **A cluster the domain rents for itself**, from the customer's cloud account — and proof the worker cannot tell where it runs. The bandwidth arithmetic (fifty cameras at 4 Mbps is 200 Mbps up) makes *mixed* the default shape, and closes the arc with М8's rented cloud
-- **Its own update server and entitlement cache**, which is what lets it run with the vendor gone
-- **Who serves browsers: never a worker.** A console and a live gateway as two cluster-level jobs — the worker's only clients — with the failure arithmetic that keeps a web problem away from a worker. Lesson 3 grows a section for it when the lessons are written
-
-### М13 — Observability: Prometheus and logs · 4 lessons · [designed](./М13_Observability/module-design.md)
-
-**This module does not introduce observability — it collects it.** Every module below already emits signals, defined where the failure that needs them was introduced, because a metric chosen at the moment you watch something break has a reason, and one chosen in an observability chapter has only a name:
-
-| Emitted in | Signal | The point |
+| Испускается в | Сигнал | В чём смысл |
 |---|---|---|
-| М9 L3 | the health check's four-row ladder | it decides **rollback**, on the box, offline |
-| М9 L4 | `spool_oldest_seconds`, `spool_bytes_used` | alarm on age, not count — one threshold works at any camera count |
-| М9 L9 | `camera_lag` (a distribution), `camera_silent_seconds` | the second: the only one describing the product |
-| М11 L4 | `vms_failover_seconds{kind="worst"}` (RTO, from the workers' heartbeats), `vms_epoch_conflicts` | a counter that should be zero forever |
-| М12 L1 | `domain_snapshot_age_seconds` | the worst cluster, never the mean |
+| М9, урок 3 | четырёхстрочная лестница проверки здоровья | она решает **откат**, на коробке, офлайн |
+| М9, урок 4 | `spool_oldest_seconds`, `spool_bytes_used` | тревога по возрасту, а не по числу — один порог работает при любом количестве камер |
+| М9, урок 9 | `camera_lag` (распределение), `camera_silent_seconds` | вторая: единственная, которая описывает продукт |
+| М11, урок 4 | `vms_failover_seconds{kind="worst"}` (RTO, из heartbeat воркеров), `vms_epoch_conflicts` | счётчик, который должен быть нулём навсегда |
+| М12, урок 1 | `domain_snapshot_age_seconds` | худший кластер, никогда не среднее |
 
-What is left for this module is what is genuinely *cross-cutting*:
+Этому модулю остаётся то, что действительно *сквозное*:
 
-- **Scrape topology, bounded by the domain.** Prometheus pulls, and you cannot pull across the link you stopped trusting — so the scrape boundary **is** the domain boundary, for exactly the reason certificate issuance is
-- **The placement rule, which is the module's spine:** *monitoring must not share a failure domain with the thing monitored.* A Prometheus running as a Nomad job inside the domain it watches dies with that domain and cannot tell you it died. And its mirror image from М9 L3: **a health check must not depend on monitoring**, or an unreachable metrics server rolls back a good update across the fleet at once
-- **Metrics are the fourth data type**, and [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) predicted it — *"the fourth one will arrive eventually."* Detail is local, summary is domain: full resolution at the site with pull-on-demand, alarms and aggregates to the centre. The same rule as footage, index and events
-- **Cardinality, which is how monitoring becomes more expensive than the product it watches.** Per-camera series at a thousand cameras is a thousand time series per metric. Export distributions; leave the per-object number in the database the console already queries. **A metric is not a database**
-- **Alarm on the product, not the process** — М9 L3's rule, stated once for everything above it. Fragment write rate and camera-offline, not CPU graphs
-- **The thin uplink:** remote-write with downsampling, or local retention with pull-on-demand — and what an operator is shown for a site whose uplink is down, which is *not* "healthy"
-- **Logs:** journald, retention, and never letting a secret reach them — sharpened by М9 L5's finding that an RTSP URL carries the password inline, so the leak is a **log-formatting** bug rather than a storage one
-- **A second licensing finding, sharper than the Nomad one.** Grafana, Loki, Tempo and **Mimir** are all **AGPLv3**; Prometheus, VictoriaMetrics, Thanos, Cortex, the OTel Collector and Grafana Alloy are Apache 2.0. BUSL *permitted* this product; AGPL §6 triggers on **conveying at all**, modified or not, and Grafana's free Enterprise binary is explicitly not redistributable. The course's position: teach Prometheus and **ship no dashboard** — the customer installs Grafana and points it at an Apache-2.0 endpoint. Full reasoning in [`М13_Observability/module-design.md`](./М13_Observability/module-design.md)
+- **Топология сбора, ограниченная доменом.** Prometheus тянет, а тянуть через канал, которому вы перестали доверять, нельзя — поэтому граница сбора **и есть** граница домена, ровно по той причине, по которой ею является выдача сертификатов
+- **Правило размещения, и оно — хребет модуля:** *мониторинг не должен делить домен отказа с тем, что он наблюдает.* Prometheus, запущенный работой Nomad внутри домена, за которым следит, умирает вместе с этим доменом и не может сообщить, что умер. И его зеркало из М9, урок 3: **проверка здоровья не должна зависеть от мониторинга**, иначе недостижимый сервер метрик откатит хорошее обновление по всему парку сразу
+- **Метрики — четвёртый тип данных**, и [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) это предсказал: *«четвёртый когда-нибудь появится».* Детали локальны, сводка — доменная: полное разрешение на сайте с вытягиванием по запросу, тревоги и агрегаты — в центр. То же правило, что для видеозаписей, индекса и событий
+- **Кардинальность — то, как мониторинг становится дороже продукта, за которым следит.** Ряд на камеру при тысяче камер — это тысяча временных рядов на метрику. Экспортируйте распределения; число на объект оставьте в базе, которую консоль и так опрашивает. **Метрика — не база данных**
+- **Тревога по продукту, а не по процессу** — правило из М9, урок 3, сказанное один раз для всего, что выше. Темп записи фрагментов и «камера офлайн», а не графики CPU
+- **Тонкий канал наверх:** remote-write с прореживанием или локальное хранение с вытягиванием по запросу — и что показывают оператору по сайту, чей канал наверх лежит, а это *не* «здоров»
+- **Логи:** journald, хранение и никогда не давать секрету до них добраться — заострено находкой М9, урок 5, что RTSP-URL несёт пароль внутри себя, так что утечка — баг **форматирования логов**, а не хранения
+- **Вторая находка про лицензии, острее, чем про Nomad.** Grafana, Loki, Tempo и **Mimir** — все под **AGPLv3**; Prometheus, VictoriaMetrics, Thanos, Cortex, OTel Collector и Grafana Alloy — под Apache 2.0. BUSL этот продукт *разрешил*; AGPL §6 срабатывает **на любую передачу**, изменён код или нет, а бесплатный бинарник Grafana Enterprise прямо запрещено распространять. Позиция курса: учить Prometheus и **не поставлять дашборд** — заказчик ставит Grafana и направляет её на endpoint под Apache 2.0. Полное рассуждение в [`М13_Observability/module-design.md`](./М13_Observability/module-design.md)
 
-### М14 — VendorVMS: the far side of the boundary · 5 lessons · [designed](./М14_VendorVMS/module-design.md)
+### М14 — VendorVMS: дальняя сторона границы · 5 уроков · [спроектирован](./М14_VendorVMS/module-design.md)
 
-**Not a scope of the product.** Formerly FederatedVMS, then OrchestratedVMS — a layer above domains holding a root CA, an identity provider, a vault, a fleet inventory and rented capacity. Item by item, each turned out to be something the domain does for itself or something the vendor does across customers. What remained is the vendor, and the thesis is the property enterprise buyers ask for by name: **the product must work with the vendor unreachable, or gone.**
+**Не рамки продукта.** Раньше FederatedVMS, затем OrchestratedVMS — слой над доменами, держащий корневой CA, провайдера личности, сейф, инвентарь парка и арендованную ёмкость. Пункт за пунктом каждый оказался либо тем, что домен делает для себя сам, либо тем, что вендор делает поверх заказчиков. Осталось вендорское, и тезис — то свойство, которое корпоративные покупатели просят по имени: **продукт обязан работать, когда вендор недостижим или исчез.**
 
-- **What the vendor may do, and must never be able to:** vouch for its hardware but never join a box to a domain alone; issue an entitlement but never stop recording by withholding one; publish a bundle but never push it to an appliance; rent a cluster but never hold the customer's root
-- **The MASA**, and the ten-year commitment running one implies; device → domain routing as the only reason enrollment touches the vendor
-- **The licence system** — the vendor's system of record and one signing key; a licence as a signed document bound to the domain id, pulled like a bundle, verified offline by the domain, counted at admission and never at runtime; lifetimes instead of revocation, and the perpetual licence as the honest answer to *what if you are gone*
-- **Publishing and rollout across customers** — a canary that halts itself, and version skew across the fleet as the normal state
-- **The hosting business** as a commercial option framed and not taken; **OpenBao's real scope** finally appearing — a multi-tenant vendor's secrets — after everything else once assigned to a vault was removed by giving machines identities
+- **Что вендору позволено и чего он никогда не должен быть способен сделать:** поручиться за своё железо, но никогда в одиночку не присоединить коробку к домену; выдать право, но никогда не остановить запись, его не выдав; опубликовать бандл, но никогда не затолкать его в прибор; сдать кластер в аренду, но никогда не держать корень заказчика
+- **MASA** и десятилетнее обязательство, которое влечёт её содержание; маршрутизация устройство → домен как единственная причина, по которой регистрация касается вендора
+- **Система лицензий** — учётная система вендора и один подписывающий ключ; лицензия как подписанный документ, привязанный к id домена, вытягиваемый как бандл, проверяемый доменом офлайн, считаемый при допуске и никогда во время работы; сроки жизни вместо отзыва и бессрочная лицензия как честный ответ на *а если вас не станет*
+- **Публикация и раскатка по заказчикам** — канарейка, которая сама себя останавливает, и разброс версий по парку как нормальное состояние
+- **Хостинговый бизнес** как коммерческая опция, обрисованная и не выбранная; **настоящие рамки OpenBao**, наконец появляющиеся — секреты многоарендного вендора — после того как всё остальное, когда-то отданное сейфу, устранено тем, что машинам дали личности
 ---
 
-## Sequencing
+## Порядок прохождения
 
-The order is dependency-driven, not layer-numbered:
+Порядок задан зависимостями, а не номерами слоёв:
 
-- **М9 before М9** — an appliance has to exist before it can be scheduled onto
-- **М9 before М11** — the loop has to work on one box before a scheduler above it, or contested ownership, means anything
-- **М11 before М12** — a worker has to survive its server, inside one cluster, before a layer across several clusters means anything
-- **М12 before М13** — observability collects what М9–М12 emit, and its remote observer is a domain service; there has to be a domain to host it
-- **М13 before М14** — the vendor module's demo is *the vendor disappears for thirty days*, which can only be demonstrated with instrumentation in place, and its canary halt condition is an alert rule
+- **М9 до М9** — прибор должен существовать, прежде чем на него можно планировать
+- **М9 до М11** — цикл должен работать на одной коробке, прежде чем планировщик над ним или оспариваемое владение начнут что-то значить
+- **М11 до М12** — воркер должен пережить свой сервер внутри одного кластера, прежде чем слой поверх нескольких кластеров начнёт что-то значить
+- **М12 до М13** — наблюдаемость собирает то, что испускают М9–М12, а её удалённый наблюдатель — сервис домена; должен быть домен, который его держит
+- **М13 до М14** — демо вендорского модуля — *вендор исчезает на тридцать дней*, а показать это можно только с готовой инструментацией, и условие остановки его канарейки — правило оповещения
 
-**Resolved.** Observability sat after the vendor module for three restructures, each time with a note that the vendor module leaned on instrumentation it had not taught. Recognising the remote observer as a *domain service* settled it: observability is domain-level, so it follows the domain directly, and the vendor module inherits alerting rather than presupposing it.
+**Решено.** Наблюдаемость стояла после вендорского модуля через три перестройки, каждый раз с пометкой, что вендорский модуль опирается на инструментацию, которой не учил. Признание удалённого наблюдателя *сервисом домена* закрыло вопрос: наблюдаемость — доменного уровня, поэтому идёт сразу за доменом, а вендорский модуль наследует оповещения, а не предполагает их.
 ---
 
-## Scale
+## Масштаб
 
-| Module | Lessons | Numbered |
+| Модуль | Уроков | Нумерация |
 |---|---|---|
-| М8 — Cloud VMS | 8 | 1–8 |
-| М9 — EdgeVMS | 9 | 1–9 |
-| М10 — ServerVMS | 5 | 1–5 |
+| М10A — Платформа | 19 | 1–19 |
+| М10B — ServerVMS | 23 | 1–23 |
 | М11 — ClusterVMS | 5 | 1–5 |
 | М12 — DomainVMS | 8 | 1–8 |
-| М13 — Observability | 4 | 1–4 |
+| М13 — Наблюдаемость | 4 | 1–4 |
 | М14 — VendorVMS | 5 | 1–5 |
 
-**39 lessons**, or a full semester. The count moved three times: down from 49 when collapsing the layer above the domain removed four lessons of redundancy; up one when the licence system, which had been a bullet, turned out to be a lesson; and down by seven when М8's fifteen short lessons were merged into eight — its first twelve became five multi-part lessons, one per original sub-module, and its last three stayed as they were. **Each module numbers its lessons from 1**; a reference into another module always carries the module: *М9 Lesson 6*, never a bare number. М9–М14 are each a genuine module rather than an appendix.
+**64 урока** — и это уже не один семестр. Число выросло не от добавления материала, а от разрезания: прежний М10 на девять уроков разошёлся на М10A (19) и М10B (23), потому что платформа и подсистемы на ней — разные предметы, и тест, запрещающий платформе знать про видео, проводит между ними границу. **Каждый модуль нумерует свои уроки с 1**; ссылка в другой модуль всегда несёт модуль: *М10B, урок 6*, никогда просто номер. М10A–М14 — каждый настоящий модуль, а не приложение. Два первых модуля курса, М8 и М9, вынесены в отдельный курс — edge-vms-course.
 
-**М12 is now the largest at eight lessons**, with a visible seam between the domain's *structure* (1–5) and the domain *looking after itself* (6–8). If it needs splitting, that is where.
-
----
-
-## Deliberately out of scope
-
-- **Analytics and inference at depth.** М11 attaches detectors; it does not teach computer vision
-- **High availability of a single-box site.** One box, replaced not clustered — a second server is sold for capacity or for failover, never bolted on to make one box redundant. Failover *between* servers in a cluster is very much in scope: М11 Lesson 4 reschedules a worker off a dead server, its cameras go with it because they are assigned to its name, and the module says plainly what does not fail over — the resource, and the footage on that server's disks
-- **Multi-tenancy.** One operator organisation per deployment
-- **The cloud side.** М8 covers KVS; nothing here builds a SaaS control plane
+**М12 теперь самый большой — восемь уроков**, с видимым швом между *структурой* домена (1–5) и доменом, который *заботится о себе* (6–8). Если его придётся делить, то вот здесь.
 
 ---
 
-## Open questions
+## Намеренно вне рамок курса
 
-1. ~~**The BUSL decision, taken once.**~~ **Resolved** — the Additional Use Grant permits this product; the risk is the analytics-plugin roadmap, not the appliance. See the licensing section above. What remains open is a counsel review of that one question
-2. **Does the vendor run a MASA?** BRSKI is unimplementable without one, and it is a permanent operational commitment — a signing service that must outlive every appliance shipped
-3. ~~**Observability's position**~~ — resolved: domain-level, directly after М12. See the sequencing section
-4. **Does the product ship a database HA option?** [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) settles the architecture — each cluster owns its configuration in its raft, the domain keeps a directory — but whether HA is offered for the directory, and priced, is commercial
-
-**Resolved since the first version of this plan:**
-
-- ~~Where inference runs~~ — a deployment question, not a schema one. Opaque worker config means the controller is unchanged whether inference runs on the appliance, at the camera or in the cloud (М11)
-- ~~Where the write API belongs~~ — built on every cluster's console in М12 Lesson 3, unauthenticated and marked as such; authentication arrives one lesson later from the domain signer, and enrollment replaces the hand-provisioned credential in М12 Lesson 6
-- ~~Lesson numbering~~ — **superseded four times by restructuring, and settled.** Each module numbers from 1: М8 is 1–8 (its first twelve original lessons merged into five multi-part ones), М9 1–4, М9 1–5, М11 1–5, М12 1–8, М13 1–4, М14 1–5. **39 in total.** Cross-module references carry the module name; a bare *Lesson N* always means this module's
-- ~~Consul in or out~~ — out, and for a better reason than licensing alone: the product runs a PKI regardless, so a mesh CA is a second hierarchy that buys nothing. The comparison record was retired when OpenBao left the product too
-- ~~Identity split across М12 and М14~~ — they were one layer; merged into М12
-- ~~Where the domain database lives, and whether hosts replicate it~~ — **there is no domain database.** Each **cluster** owns its configuration in its own raft (written by one controller) and publishes a snapshot one way upward; the domain's directory is that snapshot plus every worker's heartbeat, read and never written; a **cluster** is the largest set of servers on a reliable network and a **domain** is the clusters under one directory ([`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md))
+- **Аналитика и инференс в глубину.** М11 подключает детекторы; компьютерному зрению он не учит
+- **Высокая доступность сайта из одной коробки.** Одна коробка, которую заменяют, а не кластеризуют: второй сервер продают под ёмкость или под переезд при отказе, но никогда не прикручивают, чтобы сделать одну коробку избыточной. Переезд при отказе *между* серверами в кластере — вполне в рамках: М11, урок 4 переназначает воркера с мёртвого сервера, его камеры идут с ним, потому что назначены на его имя, и модуль прямо говорит, что не переключается: ресурс и видеозаписи на дисках этого сервера
+- **Многоарендность.** Одна организация-оператор на развёртывание
+- **Облачная сторона.** М8 закрывает KVS; здесь ничто не строит SaaS-плоскость управления
 
 ---
 
-*Layer model from the architecture discussion; licence terms read from the projects' own LICENSE files, 4 September 2026.*
+## Открытые вопросы
+
+1. ~~**Решение по BUSL, принятое один раз.**~~ **Решено** — Additional Use Grant разрешает этот продукт; риск — в роадмапе плагинов аналитики, а не в приборе. См. раздел о лицензиях выше. Открытой остаётся юридическая проверка этого одного вопроса
+2. **Держит ли вендор MASA?** BRSKI без неё нереализуем, и это постоянное операционное обязательство — служба подписи, которая обязана пережить каждый поставленный прибор
+3. ~~**Место наблюдаемости**~~ — решено: доменный уровень, сразу после М12. См. раздел о порядке прохождения
+4. **Поставляет ли продукт опцию HA для базы?** [`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md) закрывает архитектуру — каждый кластер владеет своей конфигурацией в своём raft, домен держит справочник, — но предлагается ли HA для справочника и по какой цене, вопрос коммерческий
+
+**Решено с первой версии этого плана:**
+
+- ~~Где выполняется инференс~~ — вопрос развёртывания, а не схемы. Непрозрачная конфигурация воркера означает, что контроллер не меняется, работает ли инференс на приборе, на камере или в облаке (М11)
+- ~~Где место записывающего API~~ — построен на консоли каждого кластера в М12, урок 3, без аутентификации и с пометкой об этом; аутентификация приходит уроком позже от подписывающего домена, а регистрация заменяет выданные вручную учётные данные в М12, урок 6
+- ~~Нумерация уроков~~ — **четыре раза перекрыта перестройками и закрыта.** Каждый модуль нумерует с 1: М8 — это 1–8 (его первые двенадцать исходных уроков слиты в пять многочастных), М9 1–4, М9 1–5, М11 1–5, М12 1–8, М13 1–4, М14 1–5. **Всего 39.** Ссылки между модулями несут имя модуля; просто *урок N* всегда означает урок этого модуля
+- ~~Consul внутри или снаружи~~ — снаружи, и по причине лучшей, чем одни лицензии: продукт всё равно держит PKI, так что CA для меша — вторая иерархия, которая ничего не даёт. Запись сравнения упразднена, когда продукт покинул и OpenBao
+- ~~Личность, разделённая между М12 и М14~~ — это был один слой; слито в М12
+- ~~Где живёт база домена и репликуют ли её хосты~~ — **базы домена нет.** Каждый **кластер** владеет своей конфигурацией в своём raft (её пишет один контроллер) и публикует снимок в одну сторону наверх; справочник домена — это тот снимок плюс heartbeat каждого воркера, читаемый и никогда не записываемый; **кластер** — это наибольшее множество серверов в надёжной сети, а **домен** — кластеры под одним справочником ([`where-the-database-lives.md`](./М12_DomainVMS/where-the-database-lives.md))
+
+---
+
+*Модель слоёв — из обсуждения архитектуры; условия лицензий прочитаны по собственным файлам LICENSE проектов, 4 сентября 2026.*

@@ -1,383 +1,383 @@
-# The Architecture, and How It Got This Shape
+# Архитектура и как она приняла такую форму
 
-**A single account of the system the course ends with, and of every decision that produced it — in the order they were taken, with the reversals left in.**
+**Единый отчёт о системе, к которой курс приходит, и о каждом решении, её породившем, — в том порядке, в каком они принимались, с оставленными отменами.**
 
-This is the record to read when a module design says *"as decided earlier"* and you want to know where, and why, and what it replaced. Part 1 describes the system as it stands. Part 2 walks the decisions in sequence, because the sequence is most of the lesson: almost every component in Part 1 exists in its current form because an earlier version of it was built, found wanting, and taken out.
+Эту записку читают, когда проектная записка модуля говорит *«как решено ранее»*, а хочется знать где, почему и что было заменено. Часть 1 описывает систему в её нынешнем виде. Часть 2 проходит решения по порядку, потому что порядок — и есть большая часть урока: почти каждый компонент части 1 существует в нынешней форме потому, что более ранняя его версия была построена, признана негодной и вынута.
 
-The short version, for orientation:
+Коротко, для ориентировки:
 
-> **A box records on its own. A cluster owns its own truth. A cluster survives any server in it. A domain is the top of the product and works with everything above it gone. The vendor is a counterparty across a one-way boundary, not a layer.**
+> **Коробка пишет сама. Кластер владеет собственной истиной. Кластер переживает любой свой сервер. Домен — верх продукта и работает, когда всего, что над ним, нет. Вендор — контрагент за односторонней границей, а не слой.**
 
-Everything below is the long version of that sentence.
+Всё ниже — длинная версия этой фразы.
 
 ---
 
-## Part 1 — The system as it stands
+## Часть 1 — Система в её нынешнем виде
 
-### 1.1 Four words, kept apart — and one retired
+### 1.1 Четыре слова, которые держат порознь, — и одно упразднённое
 
-The design uses four nouns precisely, and most of its early mistakes were the result of two of them being confused. A fifth, *Node*, was retired on 12 September 2026 when М10 dissolved the process it named.
+Проект пользуется четырьмя существительными точно, и большинство его ранних ошибок были следствием путаницы двух из них. Пятое, *Узел*, упразднено 12 сентября 2026 года, когда М10 растворил процесс, который оно называло.
 
-| Word         | What it is                                                                                                                                                                                                                                                                                                                                                    | Its boundary is set by | Who names it                                          |
+| Слово        | Что это                                                                                                                                                                                                                                                                                                                                                       | Чем задана его граница | Кто даёт ему имя                                      |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------- |
-| **Server**   | a box with CPUs and disks — and everything on it: a replica of the cluster's stores, the platform's *resource* job on its disks, the *workers* the scheduler placed there (М10 ServerVMS)                                                                                                                                                                     | purchase               | nobody — the scheduler uses it                        |
-| ~~**Node**~~ | *retired.* М9's recorder — a process with its own Postgres, cameras and archive index, distinct from the box. Its work is a *worker* (moves) and a *resource* (stays); their sum on a box is the *server*. Kept in М9 as history; М12 was rewritten to 2c on 12 September 2026 and its decision record keeps the word only in its preserved earlier revisions | —                      | —                                                     |
-| **Cluster**  | servers close enough to share a network you would bet recording on — one LAN, usually one server room                                                                                                                                                                                                                                                         | **physics**            | an installer                                          |
-| **Domain**   | the clusters under one directory, one signer and one set of operators — one customer installation                                                                                                                                                                                                                                                             | **administration**     | the customer                                          |
-| **Site**     | where cameras physically are                                                                                                                                                                                                                                                                                                                                  | the building           | **the operator — the only one of the five they name** |
+| **Сервер**   | коробка с процессорами и дисками — и всё, что на ней: реплика хранилищ кластера, работа *ресурса* платформы на её дисках, *воркеры*, которых туда поставил планировщик (М10 ServerVMS)                                                                                                                                                                        | покупкой               | никто — планировщик им пользуется              |
+| ~~**Узел**~~ | *упразднено.* Рекордер М9 — процесс со своим Postgres, камерами и индексом архива, отличный от коробки. Его работа — это *воркер* (перемещается) и *ресурс* (остаётся); их сумма на коробке — *сервер*. Оставлен в М9 как история; М12 переписан на 2c 12 сентября 2026 года, и в его записке решения слово сохранилось только в оставленных ранних ревизиях | —                      | —                                                     |
+| **Кластер**  | серверы, стоящие достаточно близко, чтобы делить сеть, на которую вы поставите запись, — один LAN, обычно одна серверная                                                                                                                                                                                                                                       | **физикой**            | монтажник                                             |
+| **Домен**    | кластеры под одним каталогом, одним подписывающим и одним набором операторов — одна установка у заказчика                                                                                                                                                                                                                                                      | **администрированием** | заказчик                                              |
+| **Площадка** | место, где камеры физически находятся                                                                                                                                                                                                                                                                                                                         | зданием                | **оператор — единственное из пяти, чему имя даёт он** |
 
-Two relationships carry most of the weight:
+Два отношения несут почти весь вес:
 
-- **A worker is not a server.** A server dies; the worker moves to another server *in the same cluster*, reads its assignment from the cluster's raft and takes a new epoch for each camera. Nothing is reassigned, because nothing was ever assigned to a server; the footage stays on the dead server's resource, unavailable rather than lost.
-- **A cluster is not a domain, and a domain is bigger.** A campus is one domain, three clusters, three sites. A cloud deployment is one domain, one cluster, fifty sites. Sites and clusters are many-to-many on purpose.
+- **Воркер — не сервер.** Сервер умирает; воркер переезжает на другой сервер *того же кластера*, читает своё назначение из raft кластера и берёт новую эпоху на каждую камеру. Ничего не переназначается, потому что ничего и не было назначено на сервер; записанное остаётся на ресурсе мёртвого сервера — недоступным, а не потерянным.
+- **Кластер — не домен, и домен больше.** Кампус — это один домен, три кластера, три площадки. Облачное развёртывание — один домен, один кластер, пятьдесят площадок. Площадки и кластеры связаны «многие к многим» намеренно.
 
-And one rule that both of those rest on:
+И одно правило, на котором стоят оба:
 
-> **A worker fails over within its cluster and never across one.** Its footage is on that cluster's disks, and its fencing epoch comes from that cluster's raft. A whole cluster dying is not a failover; it is a larger event the domain reports honestly and does not try to heal.
+> **Воркер переезжает при отказе внутри своего кластера и никогда — через его границу.** Записанное им лежит на дисках этого кластера, а его эпоха отсечения выдана raft этого кластера. Смерть кластера целиком — это не переезд при отказе; это более крупное событие, о котором домен сообщает честно и которое не пытается залечить.
 
-### 1.2 The layers, bottom up
+### 1.2 Слои, снизу вверх
 
-| Layer           | Built in          | What it knows                                     | Where truth lives                                           | What can disagree                                                                             |
-| --------------- | ----------------- | ------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| **The box**     | М9 EdgeVMS        | what it *is*                                      | the image that booted                                       | nothing — a box is whatever was flashed onto it                                               |
-| **The server**  | М10 ServerVMS     | what it *should be*                               | the platform's stores on the box: Variables and objects, one controller writing placement | desired state and actual state — a row and a worker's heartbeat                              |
-| **The cluster** | М11 ClusterVMS    | what it should be, *on whichever server survived* | the cluster's raft, unchanged when a server dies            | **two instances of the same worker**                                                          |
-| **The domain**  | М12 DomainVMS     | what it should be, *and which cluster holds it*   | each cluster's controller, with a directory across clusters | clusters, with the directory — and the directory with itself, because it cannot be consistent |
-| **Seeing it**   | М13 Observability | whether any of the above is true right now        | —                                                           | *broken* versus *unreachable*                                                                 |
-| **The vendor**  | М14 VendorVMS     | *not a layer*                                     | nowhere the product depends on                              | the customer, with the vendor                                                                 |
+| Слой            | Построен в        | Что он знает                                        | Где живёт истина                                            | Что может расходиться                                                                         |
+| --------------- | ----------------- | --------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Коробка**     | М9 EdgeVMS        | чем она *является*                                  | образ, который загрузился                                   | ничего — коробка есть то, что на неё прошили                                                  |
+| **Сервер**      | М10 ServerVMS     | чем он *должен быть*                                | хранилища платформы на коробке: переменные и объекты, один контроллер пишет размещение | желаемое состояние и фактическое — строка и heartbeat воркера                        |
+| **Кластер**     | М11 ClusterVMS    | чем он должен быть — *на том сервере, что выжил*    | raft кластера, не меняющийся от смерти сервера              | **два экземпляра одного воркера**                                                             |
+| **Домен**       | М12 DomainVMS     | чем он должен быть *и какой кластер это держит*     | контроллер каждого кластера плюс каталог поверх кластеров    | кластеры с каталогом — и каталог сам с собой, потому что согласованным он быть не может       |
+| **Видеть это**  | М13 Observability | верно ли прямо сейчас хоть что-то из перечисленного | —                                                           | *сломано* против *недостижимо*                                                                |
+| **Вендор**      | М14 VendorVMS     | *не слой*                                           | нигде, от чего продукт зависит                              | заказчик — с вендором                                                                         |
 
-Every boundary between the first four is a network you stopped trusting — except the cluster/domain one, which is set by administration and spans machines that may well share a rack. The last boundary is not a network at all; it is an organisation.
+Каждая граница между первыми четырьмя — это сеть, которой вы перестали доверять; кроме границы кластер/домен, которая задана администрированием и проходит между машинами, вполне возможно стоящими в одной стойке. Последняя граница вообще не сеть; это организация.
 
-### 1.3 The rule that runs through all of it
+### 1.3 Правило, которое проходит через всё
 
-> **Every layer is allowed to be unavailable to the layer beneath it, and the layer beneath caches what it needs to carry on.**
+> **Каждому слою позволено быть недоступным для слоя под ним, а слой под ним кэширует то, что нужно ему, чтобы продолжать.**
 
-Concretely: a camera keeps recording when its controller is down; a worker keeps recording when its cluster's directory is down, and the cluster keeps being edited when the domain is unreachable; a cluster fails over with the domain unreachable; a domain runs for thirty days — recording, renewing certificates, logging operators in, failing servers over — with the vendor gone.
+Конкретно: камера продолжает писать, когда её контроллер лежит; воркер продолжает писать, когда лежит каталог его кластера, а кластер продолжают править, когда домен недостижим; кластер переезжает при отказе, когда домен недостижим; домен работает тридцать дней — пишет, продлевает сертификаты, впускает операторов, переносит работу с отказавших серверов — при исчезнувшем вендоре.
 
-The rule has one sharp edge, and it is the thing most worth carrying away:
+У правила есть одна острая кромка, и унести с собой стоит в первую очередь именно её:
 
-> **Anything cached from above may keep recording forever, and must never delete anything.** Destructive operations expire; recording does not.
+> **Всё, что закэшировано сверху, может писать вечно и не должно удалять ничего.** Разрушительные операции истекают; запись — нет.
 
-A cluster owns its own retention policy, so it cannot go stale on that. Entitlement and placement come from above, and those can — so a cluster that cannot confirm its entitlement keeps every camera it has and refuses to add one, and a resource that cannot confirm its retention keeps footage and reports that it is doing so. Disks filling is a visible, recoverable problem. Deleted footage is neither.
+Кластер владеет собственной политикой хранения, поэтому по ней просрочиться не может. Право на использование и размещение приходят сверху, а они — могут: кластер, не сумевший подтвердить своё право на использование, сохраняет все камеры, какие у него есть, и отказывается добавить ещё одну; а ресурс, не сумевший подтвердить своё хранение, сохраняет записанное и сообщает, что так и делает. Заполняющиеся диски — проблема видимая и исправимая. Удалённая запись — ни то, ни другое.
 
-### 1.4 What runs where
+### 1.4 Что где работает
 
-**On every box** (М9): an A/B root filesystem under RAUC, signed bundles, one-attempt rollback decided by a health check that reaches all the way to *is footage being written*; Podman under Quadlet; and a data partition holding everything that must outlive both an OS update and an application update — container storage, configuration, and the archive.
+**На каждой коробке** (М9): A/B корневые файловые системы под RAUC, подписанные бандлы, откат с одной попытки, решаемый проверкой здоровья, которая дотягивается до самого *пишется ли видео*; Podman под Quadlet; и раздел данных, держащий всё, что должно пережить и обновление ОС, и обновление приложения, — хранилище контейнеров, конфигурацию и архив.
 
-**Per server** (М10): the platform's stores (Variables and objects — on one box, files on the data partition; in a cluster, the cluster's raft and object store), the archive **resource** on its disks with its manifests and event buckets, and the **workers** placed there — each running the reconcile loop and up to ~50 GStreamer pipelines in one process (in the product, DriverPack, see §1.11), each heartbeating its status into an object; a console exporting `/metrics`. No database: М9's Postgres was retired in М10.
+**На сервер** (М10): хранилища платформы (переменные и объекты — на одной коробке это файлы на разделе данных, в кластере — raft кластера и его хранилище объектов), **ресурс** архива на его дисках со своими манифестами и бакетами событий и **воркеры**, размещённые там, — каждый крутит цикл сверки и до ~50 конвейеров GStreamer в одном процессе (в продукте — DriverPack, см. §1.11), каждый heartbeat'ом складывает свой статус в объект; консоль, экспортирующая `/metrics`. Базы данных нет: Postgres из М9 упразднён в М10.
 
-**Per cluster** (М11): Nomad servers and clients — the cluster *is* a Nomad region; an object store on the cluster's own servers holding every worker's heartbeat and the controller's snapshot; the cluster directory, which is nothing more than each worker's assignment Variable, scanned; and, per subsystem, the three processes of §1.12 — workers (`count = N`), one controller, a console (`count = 2`) — plus the platform's resource job on every server.
+**На кластер** (М11): серверы и клиенты Nomad — кластер *и есть* регион Nomad; хранилище объектов на собственных серверах кластера, держащее heartbeat каждого воркера и снимок контроллера; каталог кластера, который есть не более чем просмотренные переменные назначения каждого воркера; и, на каждую подсистему, три процесса из §1.12 — воркеры (`count = N`), один контроллер, консоль (`count = 2`) — плюс работа *ресурса* платформы на каждом сервере.
 
-**Per domain** (М12) — five services, hosted by one designated cluster — the **domain cluster**, Nomad choosing the server, no controller and no state that is not backed up beyond that cluster:
+**На домен** (М12) — пять сервисов, которые хостит один назначенный кластер — **кластер домена**, сервер внутри него выбирает Nomad; ни контроллера, ни состояния, у которого нет резервной копии за пределами этого кластера:
 
-| Service | Kind | When it is down |
+| Сервис | Род | Когда он лежит |
 |---|---|---|
-| **The signer** — CA and token issuer, one job, two keys | holds keys, signs | certificate renewal stops, bounded by lifetime; nobody *new* logs in; break-glass |
-| **Placement** (which cluster) | stateless computation | new cameras get no cluster |
-| **The read view** | stateless, federated reads | the console sees only its own cluster |
-| **The update server** (hawkBit) | pull-based delivery | no new OS bundle arrives |
-| **The remote observer** | stateless, scrapes the other clusters | nobody is told a cluster went silent |
+| **Подписывающий** — CA и выпускающий токены, одна работа, два ключа | держит ключи, подписывает | продление сертификатов останавливается, ограничено сроком жизни; *новые* никто не входит; аварийный вход |
+| **Размещение** (в какой кластер) | вычисление, не хранящее состояния | новые камеры не получают кластера |
+| **Читающее представление** | не хранит состояния, федеративные чтения | консоль видит только собственный кластер |
+| **Сервер обновлений** (hawkBit) | доставка по запросу | новый бандл ОС не приходит |
+| **Удалённый наблюдатель** | не хранит состояния, опрашивает остальные кластеры | никто не узнаёт, что кластер замолчал |
 
-plus the **registrar**, the door a box knocks on to join the domain. Every outage in that column is bounded, and none of it is recording or recovery.
+плюс **регистратор** — дверь, в которую стучится коробка, чтобы войти в домен. Каждый простой в этом столбце ограничен, и ни один из них — не запись и не восстановление.
 
-**At the vendor** (М14): the MASA that vouches for its own hardware; the licence system — a customer database, one signing key, and a signed document naming a domain id that the domain verifies offline, pulled through the domain's own update server and counted only at admission; the bundle signing key and the publishing pipeline; a support view of whatever inventory customers chose to report; and, optionally, a hosting business that rents clusters — the one place OpenBao appears, for a multi-tenant vendor holding many customers' secrets.
+**У вендора** (М14): MASA, который ручается за собственное железо; система лицензирования — база заказчиков, один подписывающий ключ и подписанный документ с именем домена, который домен проверяет офлайн, забирая его через собственный сервер обновлений домена, и учитывает только при допуске; ключ подписи бандлов и конвейер публикации; представление поддержки того инвентаря, который заказчики решили сообщать; и, по желанию, хостинговый бизнес, сдающий кластеры в аренду, — единственное место, где появляется OpenBao, для многоарендного вендора, держащего секреты многих заказчиков.
 
-### 1.5 The stores, chosen by shape
+### 1.5 Хранилища, выбранные по форме
 
-There is no database in the design — М9's per-box Postgres was the last one, and М10 retired it. Everything is the scheduler's store, an object store, or files on a resource, and the rule for which is which turned out to be simple once found:
+Базы данных в проекте нет — Postgres на коробку из М9 был последней такой базой, и М10 её упразднил. Всё есть либо хранилище планировщика, либо хранилище объектов, либо файлы на ресурсе, и правило, что где, оказалось простым, как только его нашли:
 
-> **Small and consistent goes in the scheduler's store. Large and opaque goes in an object store. Bulk stays on the server's disks as a resource, and a question over it is a manifest, not a table.**
+> **Мелкое и согласованное идёт в хранилище планировщика. Крупное и непрозрачное — в хранилище объектов. Масса остаётся на дисках сервера ресурсом, и вопрос к ней — это манифест, а не таблица.**
 
-| Store               | Scope              | Holds                                                                             | Why not one of the others                                                                                                              |
+| Хранилище           | Область            | Что держит                                                                        | Почему не одно из других                                                                                                               |
 | ------------------- | ------------------ | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Nomad Variables** | per cluster (raft) | the operator's rows (`vms/cameras/*`), each worker's assignment and placement, slots, epochs, the signer's keys | raft is memory-resident and replicated to every server, so it must stay small; it is also the only store that offers **check-and-set** |
-| **Object store**    | per cluster        | every worker's heartbeat; the controller's snapshot — the only thing that leaves the cluster | a blob nobody but its author parses; durability and a timestamp are the whole requirement                                   |
-| **The resource**    | per server (disks) | segments, the manifest beside them, event buckets — mirrored to a peer resource   | bulk; *what footage covers this window* is the manifest, rebuilt from the files alone; it never moves because it cannot               |
+| **Nomad Variables** | на кластер (raft)  | строки оператора (`vms/cameras/*`), назначение и размещение каждого воркера, слоты, эпохи, ключи подписывающего | raft живёт в памяти и реплицируется на каждый сервер, поэтому должен оставаться маленьким; он же — единственное хранилище с **check-and-set** |
+| **Хранилище объектов** | на кластер      | heartbeat каждого воркера; снимок контроллера — единственное, что покидает кластер | блоб, который никто, кроме автора, не разбирает; долговечность и метка времени — всё требование                            |
+| **Ресурс**          | на сервер (диски)  | сегменты, манифест рядом с ними, бакеты событий — зеркалируются на соседний ресурс | масса; *какая запись покрывает это окно* — это манифест, восстанавливаемый из одних файлов; он никогда не переезжает, потому что не может |
 
-And one thing deliberately in no store: the domain root's backup, kept somewhere the domain cluster's death cannot reach.
+И одна вещь намеренно вне всех хранилищ: резервная копия корня домена, лежащая там, куда смерть кластера домена не дотянется.
 
-**The domain has no database.** Its directory is a federated read across each cluster's Variables. This was the sixth revision of that decision, and every revision moved in the same direction.
+**У домена нет базы данных.** Его каталог — федеративное чтение по переменным каждого кластера. Это была шестая ревизия того решения, и каждая ревизия двигалась в одну и ту же сторону.
 
-### 1.6 The flows: one shape, three data types
+### 1.6 Потоки: одна форма, три типа данных
 
-Everything that crosses a boundary in this design does so the same way:
+Всё, что в этом проекте пересекает границу, делает это одинаково:
 
-> **A one-way publication, with a stated recovery point.**
+> **Односторонняя публикация с объявленной точкой восстановления.**
 
-| What              | From               | To                               | The RPO                                                             |
+| Что               | Откуда             | Куда                             | RPO                                                                 |
 | ----------------- | ------------------ | -------------------------------- | ------------------------------------------------------------------- |
-| **Footage**       | a worker's spool   | the resource on its server, or a cloud archive (М8) | one segment — the open one, on a kill                            |
-| **Configuration** | a cluster's controller | its snapshot in the object store, read by the domain | the publication interval — the age the domain shows on every row |
-| **Status**        | every worker       | its heartbeat object; the console's read model | the heartbeat interval                                               |
+| **Видеозапись**   | spool воркера      | ресурс на его сервере или облачный архив (М8) | один сегмент — открытый, при убийстве процесса         |
+| **Конфигурация**  | контроллер кластера | его снимок в хранилище объектов, читаемый доменом | интервал публикации — возраст, который домен показывает на каждой строке |
+| **Статус**        | каждый воркер      | его объект heartbeat; читающая модель консоли | интервал heartbeat                                      |
 
-The acknowledgement rule is the same everywhere: **acknowledge only what is committed where it is safe, delete or promote only on acknowledgement from the far side, and show the age of every copy.** Inside a cluster that means after the CAS commit into raft — there is no *saved · not yet replicated*, the write is in raft or it was refused; across the uplink it means the snapshot's `ts`, printed on every row the domain shows. Never acknowledge what you cannot vouch for; never block the write on it either.
+Правило подтверждения везде одно: **подтверждай только то, что зафиксировано там, где это безопасно, удаляй или продвигай только по подтверждению с дальней стороны и показывай возраст каждой копии.** Внутри кластера это означает «после фиксации по CAS в raft» — никакого *сохранено · ещё не реплицировано* не бывает, запись либо в raft, либо отклонена; через uplink это означает `ts` снимка, напечатанный на каждой строке, которую показывает домен. Никогда не подтверждай того, за что не можешь поручиться; и никогда не блокируй на этом саму запись.
 
-Two things that look like flows and are not: **rights** — a cluster holds its own grants and enforces them at its console and gateway, with an expiry that bounds the revocation window, carried in by the domain agent; and **identity** — a cluster holds the signer's public key and verifies a token offline, holding nobody's password. A worker never learns a user exists.
+Две вещи, похожие на потоки и потоками не являющиеся: **права** — кластер держит собственные гранты и применяет их на своей консоли и своём шлюзе, со сроком истечения, который ограничивает окно отзыва, а приносит их агент домена; и **личность** — кластер держит открытый ключ подписывающего и проверяет токен офлайн, не держа ничьего пароля. Воркер вообще никогда не узнаёт, что пользователь существует.
 
-### 1.7 Correctness: fencing, epochs, and CAS
+### 1.7 Корректность: отсечение, эпохи и CAS
 
-The one place a mistake corrupts customer footage rather than stopping a service is a server death: the old instance of a worker may not be dead, only paused, and when it wakes it will try to keep writing to the same archive the replacement is now writing to. Two writers to one video stream cannot be merged, and nothing above can arbitrate after the fact.
+Единственное место, где ошибка портит запись заказчика, а не останавливает сервис, — это смерть сервера: старый экземпляр воркера может быть не мёртв, а лишь приостановлен, и, проснувшись, попытается продолжить писать в тот же архив, в который теперь пишет замена. Двух писателей в один видеопоток свести нельзя, и ничто сверху не может рассудить их задним числом.
 
-The design's answer, from Kleppmann: a lock cannot stop a paused client writing, so **the resource must reject the stale token**. Every worker instance carries an **epoch** per camera — a monotonic integer issued by check-and-set against a Nomad Variable, whose `ModifyIndex` is raft-assigned and cannot go backwards — and the epoch is **part of the archive path**. The stale instance cannot name the files it would otherwise corrupt; its writes land where nobody reads.
+Ответ проекта, по Клеппману: блокировка не может остановить запись приостановленного клиента, поэтому **ресурс обязан отвергать просроченный токен**. Каждый экземпляр воркера несёт **эпоху** на камеру — монотонное целое, выдаваемое через check-and-set по переменной Nomad, чей `ModifyIndex` назначает raft и который не может пойти назад, — и эпоха **входит в путь архива**. Просроченный экземпляр не может назвать те файлы, которые иначе испортил бы; его записи ложатся туда, где их никто не читает.
 
-The same principle, one level up, in a cheaper form: **at the domain, correctness comes from how a write is made, never from how many instances Nomad promises.** `count = 1` is not exactly-one during a reschedule; placement is safe against two instances because it writes with CAS and the second gets a 409, not because there is one of it.
+Тот же принцип уровнем выше, в более дешёвой форме: **на домене корректность берётся из того, как сделана запись, и никогда — из того, сколько экземпляров обещает Nomad.** `count = 1` — это не «ровно один» во время перепланирования; размещение безопасно при двух экземплярах потому, что пишет по CAS и второй получает 409, а не потому, что он один.
 
-What is **not** used for fencing, deliberately: Nomad's variable locks (an opaque UUID, not a monotonic token); a Postgres sequence (reissues numbers after a restore); shared block storage (Nomad cannot detach a CSI volume from a dead client, so 2a needs a human before it fails over).
+Что для отсечения **не** используется, и намеренно: блокировки переменных Nomad (непрозрачный UUID, а не монотонный токен); последовательность Postgres (после восстановления выдаёт номера заново); разделяемое блочное хранилище (Nomad не умеет отцепить CSI-том от мёртвого клиента, поэтому 2a требует человека прежде, чем переедет при отказе).
 
-### 1.8 Trust: who is what, and who says so
+### 1.8 Доверие: кто есть кто и кто это говорит
 
-| Subject                       | Proves itself with                                   | Issued by                                          | Verified by                                   | Lifetime                                         |
+| Субъект                       | Чем себя доказывает                                  | Кем выдано                                         | Кем проверяется                               | Срок жизни                                       |
 | ----------------------------- | ---------------------------------------------------- | -------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
-| **A box joining**             | a factory IDevID, or an administrator's approval     | the manufacturer / the domain's console            | the domain's registrar                        | once                                             |
-| **A worker, on every stream** | an LDevID — mTLS, naming the *worker* not the server | the domain signer                                  | every peer, offline                           | hours to days                                    |
-| **A person**                  | a signed token naming a subject                      | the domain signer, federated to the customer's IdP | every cluster's console, offline, against a public key | short; the grant it points at has its own expiry |
-| **The domain itself**         | its self-signed root                                 | itself — **there is nothing above**                | —                                             | years; rotated on a drill                        |
-| **The vendor's hardware**     | a MASA voucher                                       | the vendor                                         | the registrar                                 | once, at enrollment                              |
+| **Коробка при входе**         | заводским IDevID или одобрением администратора       | производителем / консолью домена                   | регистратором домена                          | однажды                                          |
+| **Воркер, на каждом потоке**  | LDevID — mTLS, называющий *воркера*, а не сервер     | подписывающим домена                               | каждым партнёром, офлайн                      | часы или дни                                     |
+| **Человек**                   | подписанным токеном с именем субъекта                | подписывающим домена, федеративно к IdP заказчика  | консолью каждого кластера, офлайн, по открытому ключу | короткий; у гранта, на который он указывает, срок свой |
+| **Сам домен**                 | своим самоподписанным корнем                         | самим собой — **выше ничего нет**                  | —                                             | годы; ротация на учении                          |
+| **Железо вендора**            | ваучером MASA                                        | вендором                                           | регистратором                                 | однажды, при зачислении                          |
 
-Two properties of that table are load-bearing.
+Два свойства этой таблицы несущие.
 
-**The domain's root is the customer's, and nothing sits above it.** A vendor-held root that signs the customer's CA is a vendor who can impersonate the customer's whole trust domain. So recoverability comes from backup and rotation, not delegation, and losing the root means every box re-enrolls — the honest cost of the customer owning their own trust.
+**Корень домена принадлежит заказчику, и над ним не стоит ничего.** Корень в руках вендора, подписывающий CA заказчика, — это вендор, способный выдать себя за весь доверительный домен заказчика. Поэтому восстановимость берётся из резервной копии и ротации, а не из делегирования, и потеря корня означает повторное зачисление каждой коробки — честная цена того, что заказчик владеет собственным доверием.
 
-**Delegate an authority; never distribute a secret.** N clusters holding password hashes is N places to steal from; N clusters holding a public key is zero. Most of the secrets earlier drafts of the course wanted a vault for turned out to exist because something had not been given an identity.
+**Делегируй полномочие; никогда не раздавай секрет.** N кластеров, держащих хеши паролей, — это N мест, откуда можно украсть; N кластеров, держащих открытый ключ, — ноль. Большинство секретов, под которые ранние черновики курса хотели хранилище, существовали потому, что чему-то не выдали личность.
 
-### 1.9 The failure matrix
+### 1.9 Матрица отказов
 
-| What dies | Recording | Editing at a cluster | Failover | Creating a camera | Logging in | What the console says |
+| Что умирает | Запись | Правка на кластере | Перехват при отказе | Создание камеры | Вход | Что говорит консоль |
 |---|---|---|---|---|---|---|
-| A **camera** | that camera stops | — | — | — | — | `camera_silent_seconds` rises; the phase says why |
-| A **server** | ~one segment per worker on it | continues | **yes, within the cluster** | continues | continues | one alert, naming the server |
-| The **cluster's directory** (Nomad servers) | continues | continues | **no** — no epoch, no Variable | not in that cluster | continues | *unreachable*, not broken |
-| A **whole cluster** | those cameras stop | — | no — nothing to fail over to | not there | continues elsewhere | *unreachable*; footage *unavailable*, not lost; **never rebalanced elsewhere** |
-| The **domain services** | continues | continues | **yes** — both dependencies are in the cluster | no | existing tokens to expiry; break-glass | the local cluster only |
-| The **vendor** | continues | continues | continues | within the entitlement's grace period | continues | no new bundle; day 31 the entitlement floor |
+| **Камера** | эта камера останавливается | — | — | — | — | `camera_silent_seconds` растёт; фаза говорит почему |
+| **Сервер** | ~один сегмент на каждый воркер на нём | продолжается | **да, внутри кластера** | продолжается | продолжается | один алерт с именем сервера |
+| **Каталог кластера** (серверы Nomad) | продолжается | продолжается | **нет** — нет эпохи, нет переменной | не в этом кластере | продолжается | *недостижим*, а не сломан |
+| **Кластер целиком** | эти камеры останавливаются | — | нет — принимать некому | не там | продолжается в других местах | *недостижим*; запись *недоступна*, а не потеряна; **никогда не перебалансируется куда-либо ещё** |
+| **Сервисы домена** | продолжается | продолжается | **да** — обе зависимости внутри кластера | нет | существующие токены — до истечения; аварийный вход | только локальный кластер |
+| **Вендор** | продолжается | продолжается | продолжается | в пределах льготного периода права на использование | продолжается | новых бандлов нет; на 31-й день — нижняя граница права на использование |
 
-The column to read is *Recording*. Only a camera or a whole cluster stops it, and both are physical.
+Читать нужно столбец *Запись*. Останавливают её только камера или кластер целиком, и оба случая физические.
 
-### 1.10 Deployment shapes
+### 1.10 Формы развёртывания
 
-The same software, three placements, and the difference is a number:
+То же самое ПО, три размещения, и разница — это число:
 
 ```
 50 cameras × 4 Mbit/s  =  200 Mbit/s sustained upstream, 24/7  ≈  2 TB/day
 ```
 
-| | workers run | What crosses the uplink | Right for |
+| | воркеры работают | Что идёт через uplink | Подходит для |
 |---|---|---|---|
-| **Edge** | on hardware at the site | kilobytes of status and configuration | any site with more than a handful of cameras |
-| **Cloud** | on a cluster the domain rented from the customer's cloud account | **every camera's full bitrate**, continuously — and there is no spool, so the camera's own SD card is the buffer | a shop with six cameras and nobody to install hardware |
-| **Mixed** | at the site, with the domain services in the cloud | the same kilobytes | **the default shape** |
+| **Устройство** | на железе на площадке | килобайты статуса и конфигурации | любая площадка, где камер больше горстки |
+| **Облако** | на кластере, который домен арендовал в облачном аккаунте заказчика | **полный битрейт каждой камеры**, непрерывно — и spool'а нет, так что буфером служит SD-карта самой камеры | магазин с шестью камерами и без кого-либо, кто поставил бы железо |
+| **Смешанная** | на площадке, а сервисы домена в облаке | те же килобайты | **форма по умолчанию** |
 
-A rented cluster is a cluster. A worker cannot tell where it is running, and М12 Lesson 8 proves it by diffing the artifacts.
+Арендованный кластер — это кластер. Воркер не может понять, где он работает, и М12, урок 8, доказывает это, сравнивая артефакты.
 
 ---
 
-### 1.11 Platform and VMS: the boundary
+### 1.11 Платформа и VMS: граница
 
-Most of what Part 1 describes knows nothing about a camera. A scheduler that places processes by constraint, an object store, a small consistent config store, a signer and an agent that carry trust, a web gateway, an observer — that is a **platform**, and it would host any fleet of stateless shards writing bulk data. The **VMS** is what is specific to video: the worker that holds the pipeline (DriverPack), the detectors, the schema of cameras, sites and grants, and the UI. The boundary decides which team owns what and which invariants travel across it.
+Большая часть того, что описывает часть 1, ничего не знает о камере. Планировщик, размещающий процессы по ограничениям, хранилище объектов, маленькое согласованное хранилище конфигурации, подписывающий и агент, переносящие доверие, веб-шлюз, наблюдатель — это **платформа**, и она хостила бы любой парк не хранящих состояния шардов, которые пишут массу данных. **VMS** — это то, что специфично для видео: воркер, держащий конвейер (DriverPack), детекторы, схема камер, площадок и грантов, и UI. Граница решает, какая команда чем владеет и какие инварианты через неё переезжают.
 
-М9's **worker process was a stand-in for the worker's own controller.** It exists because the course had no DriverPack and needed something to supervise pipelines, reconcile them against desired state and report positions — in Python, so the design could be built and tested. It is not the platform's job (Nomad supervises processes, not the threads inside one; nobody but the VMS turns *camera 7, revision 12* into a running pipeline) and it is not a separate process in the product: the thing that holds the source owns everything that happens to the stream, including where its branches go. Row by row:
+**Процесс-воркер М9 был заместителем собственного контроллера воркера.** Он существует потому, что у курса не было DriverPack и требовалось что-то, что надзирает за конвейерами, сверяет их с желаемым состоянием и сообщает позиции, — на Python, чтобы проект можно было построить и проверить. Это не работа платформы (Nomad надзирает за процессами, а не за потоками внутри одного; никто, кроме VMS, не превращает *камеру 7, ревизию 12* в работающий конвейер), и это не отдельный процесс в продукте: тот, кто держит источник, владеет всем, что происходит с потоком, включая то, куда идут его ветки. Строка за строкой:
 
-| М9's worker | Product | Why |
+| Воркер М9 | Продукт | Почему |
 |---|---|---|
-| start/stop/restart pipelines; backoff with jitter; bus pumping; watchdog | **DriverPack** | only the holder of the source knows a pipeline died |
-| reconcile desired cameras against running pipelines; `>=` on the revision | **DriverPack** | *make the running set equal the assigned set* is the worker's loop |
-| routing — record to storage, tee to live, tee to detectors | **DriverPack** | it directs the stream where needed |
-| positions and conditions per camera; the heartbeat snapshot | **DriverPack** | the only thing that knows the phase; it publishes an object, the platform stores it |
-| retention, disk-full policy, the segment index | **platform** (storage) | lifecycle, quota, listing — nothing about video in it |
-| identity of a shard; config restore; publish-then-point | **platform** (Variables + objects) | generic config distribution for any stateless shard |
-| epoch and lease | **platform** issues; **DriverPack** consumes | fencing is generic to any writer that can have two instances; the worker puts the epoch in the key and refuses a start without a live lease |
-| the console; playback file serving | **platform** (web tier) | browsers were moved off the worker in М12 Lesson 3; playback reads the resource |
-| the data model — cameras, sites, grants | **VMS**, as a schema in platform stores | the platform stores blobs and Variables; what is in them is ours |
+| запуск/остановка/перезапуск конвейеров; backoff с дрожанием; прокачка шины; watchdog | **DriverPack** | только держатель источника знает, что конвейер умер |
+| сверка желаемых камер с работающими конвейерами; `>=` по ревизии | **DriverPack** | *сделать работающий набор равным назначенному* — это цикл воркера |
+| маршрутизация — писать в хранилище, tee в живое видео, tee в детекторы | **DriverPack** | он направляет поток туда, куда нужно |
+| позиции и состояния по каждой камере; снимок heartbeat | **DriverPack** | единственный, кто знает фазу; он публикует объект, платформа его хранит |
+| хранение, политика на заполнение диска, индекс сегментов | **платформа** (хранилище) | жизненный цикл, квота, перечисление — про видео тут ничего |
+| личность шарда; восстановление конфигурации; опубликовать-потом-указать | **платформа** (переменные + объекты) | общая раздача конфигурации для любого не хранящего состояния шарда |
+| эпоха и аренда | **платформа** выдаёт; **DriverPack** потребляет | отсечение общо для любого писателя, у которого может быть два экземпляра; воркер ставит эпоху в ключ и отказывается стартовать без живой аренды |
+| консоль; выдача файлов для воспроизведения | **платформа** (веб-ярус) | браузеры убрали с воркера в М12, урок 3; воспроизведение читает ресурс |
+| модель данных — камеры, площадки, гранты | **VMS**, как схема в хранилищах платформы | платформа хранит блобы и переменные; что в них — наше |
 
-What remains of the "controller" is a few dozen lines inside DriverPack that turn *the platform's assignment for this shard* — a Variable naming a config object — into DriverPack's desired set. Not a process, not a layer.
+От «контроллера» остаётся несколько десятков строк внутри DriverPack, которые превращают *назначение платформы для этого шарда* — переменную с именем объекта конфигурации — в желаемый набор DriverPack. Не процесс и не слой.
 
-**What crosses the boundary unchanged is the contract, and it is the point of М9 and М11.** DriverPack's controller must satisfy what the course's tests define, because those tests were written against a design rather than a language: desired is persisted and actual is derived (a fresh process rediscovers everything and persists nothing about what it runs); a report can never move desired (`>=`); exponential backoff with jitter, so cameras that failed together do not retry together; positions kept apart from reasons in what it reports; the epoch in every key it writes and a lease gate on every start; local commit first, publish second; the heartbeat carrying its status so nobody has to call it. `recorder/`, `vmsserver/`, `clustervms/` and their Go ports are the **reference implementation of that contract** — the thing DriverPack's tests are ported from, the way the Go port's were — and no longer a claim about what the product's process tree looks like.
+**Через границу неизменным переезжает контракт, и в нём смысл М9 и М11.** Контроллер DriverPack обязан удовлетворять тому, что задают тесты курса, потому что те тесты писались против проекта, а не против языка: желаемое персистится, фактическое выводится (свежий процесс всё переоткрывает и не персистит ничего о том, что запустил); отчёт никогда не может сдвинуть желаемое (`>=`); экспоненциальный backoff с дрожанием, чтобы камеры, отказавшие вместе, не повторяли попытку вместе; позиции держатся отдельно от причин в том, что он сообщает; эпоха — в каждом ключе, который он пишет, и проверка аренды — на каждом старте; сначала локальная фиксация, потом публикация; heartbeat, несущий его статус, чтобы никому не приходилось его звать. `recorder/`, `vmsserver/`, `clustervms/` и их порты на Go — это **эталонная реализация того контракта**, то, откуда портируются тесты DriverPack, как портировались тесты Go-порта, — и больше не утверждение о том, как выглядит дерево процессов продукта.
 
-Two things the boundary must keep explicit. **Crash isolation:** М9 separated controller from worker partly so that a vendor SDK's segfault would not take the control loop with it; with both in DriverPack it does, and that is acceptable *only because* the state is outside — Nomad restarts the shard, it reloads its assignment, and the lease and epoch make the restart harmless. **The per-frame rule:** DriverPack is C++, so М9 Lesson 7's rule holds by construction; a Python plugin API "for analytics" inside it would bring the argument back. The detector tier exists so that inference never runs in the writer's process.
+Две вещи граница обязана держать явными. **Изоляция падений:** М9 отделял контроллер от воркера отчасти для того, чтобы segfault в SDK вендора не уносил с собой цикл управления; когда оба внутри DriverPack — уносит, и это допустимо *только потому*, что состояние находится снаружи: Nomad перезапускает шард, тот перечитывает своё назначение, а аренда и эпоха делают перезапуск безвредным. **Правило «на кадр»:** DriverPack написан на C++, поэтому правило из М9, урок 7, держится по построению; Python-API плагинов «для аналитики» внутри него вернул бы спор назад. Ярус детекторов существует ровно для того, чтобы инференс никогда не шёл в процессе писателя.
 
-**Decided beside it (М11, *2c*):** the cluster is **workers** (1+, by workload — DriverPack shards with stable identity, movable), **resources** (N — the archive on a server's disks, GPU compute, a camera-VLAN NIC; server-bound `system` jobs) and **one controller** (placement and rebalance; stateless, correct by CAS, safe at two, never on the recovery path). Footage stays on the dead *resource* and recording continues on another; the per-recorder Postgres goes; the epoch stays in the key. The storage resource is per-server by default, an erasure-coded pool by choice, with the failure arithmetic of each in [М11's design record](./М11_ClusterVMS/module-design.md).
+**Решено рядом с этим (М11, *2c*):** кластер — это **воркеры** (1+, по нагрузке — шарды DriverPack с устойчивой личностью, перемещаемые), **ресурсы** (N — архив на дисках сервера, вычисления на GPU, NIC в камерном VLAN; привязанные к серверу работы `system`) и **один контроллер** (размещение и перебалансировка; не хранит состояния, корректен по CAS, безопасен при двух, никогда не на пути восстановления). Записанное остаётся на мёртвом *ресурсе*, а запись продолжается на другом; Postgres на каждый рекордер уходит; эпоха остаётся в ключе. Ресурс-хранилище по умолчанию делается на сервер, по выбору — пулом с избыточным кодированием, а арифметика отказа каждого варианта — в [проектной записке М11](./М11_ClusterVMS/module-design.md).
 
-### 1.12 Controller, worker, console — and two of them as data
+### 1.12 Контроллер, воркер, консоль — и двое из них как данные
 
-Every subsystem on the platform is the same three processes, split by *what each may write* and *what stops when it stops* — never by what it computes:
+Каждая подсистема на платформе — это одни и те же три процесса, разделённые по тому, *что каждому позволено писать* и *что останавливается, когда он останавливается*, — и никогда по тому, что он вычисляет:
 
-| Process        | Count                                                                  | May write                                                                                | Holds                                                                                                                        | When it is down                                                                                                         |
+| Процесс        | Сколько                                                                | Что может писать                                                                         | Что держит                                                                                                                   | Когда он лежит                                                                                                          |
 | -------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **worker**     | N, by workload (the autoscaler's number, from `<sub>_worker_headroom`) | its heartbeat; `<sub>/epoch/<unit>` when it starts a unit; its slot                      | the pipelines, and nothing that outlives it                                                                                  | its units fail over to another worker; the rest keep recording                                                          |
-| **controller** | 1 — safe at 2, never needed at 2                                       | `<sub>/workers/*` (assignment), `<sub>/placement/*` (why), `<sub>/slots/*`, the snapshot | nothing: every pass starts from the store                                                                                    | a new unit waits for placement; a dead worker's units wait for redistribution; recording, edits and the screen continue |
-| **console**    | one per server (a `system` job), nothing in front                      | `<sub>/<rows>/*`, `<sub>/next_id`, the derived rows (`vms/retention/*`), `<sub>/idem/*`  | nothing: the read model is rebuilt from heartbeats on every request; a retry's key is a Variable, so any instance answers it | that server's address stops working; every other server's console is the same console; recording and placement continue |
-| resource       | N, by servers with capacity                                            | media and events                                                                         | disks                                                                                                                        | unavailable                                                                                                             |
+| **воркер**     | N, по нагрузке (число автоскейлера, из `<sub>_worker_headroom`)        | свой heartbeat; `<sub>/epoch/<unit>`, когда начинает единицу; свой слот                  | конвейеры — и ничего, что его переживёт                                                                                      | его единицы переезжают к другому воркеру; остальные продолжают писать                                                |
+| **контроллер** | 1 — безопасен при 2, но при 2 не нужен никогда                         | `<sub>/workers/*` (назначение), `<sub>/placement/*` (почему), `<sub>/slots/*`, снимок    | ничего: каждый проход начинается с хранилища                                                                                 | новая единица ждёт размещения; единицы мёртвого воркера ждут перераспределения; запись, правки и экран продолжаются      |
+| **консоль**    | по одной на сервер (работа `system`), впереди ничего                   | `<sub>/<rows>/*`, `<sub>/next_id`, производные строки (`vms/retention/*`), `<sub>/idem/*` | ничего: читающая модель пересобирается из heartbeat'ов на каждый запрос; ключ повтора — переменная, поэтому отвечает любой экземпляр | адрес этого сервера перестаёт работать; консоль любого другого сервера — та же консоль; запись и размещение продолжаются |
+| ресурс         | N, по серверам с ёмкостью                                              | медиа и события                                                                          | диски                                                                                                                        | недоступен                                                                                                              |
 
-The two writers never share a key. The console writes the operator's rows; the controller reads them and writes placement; a console that tried to place gets a 403 from the store's ACL, not from a rule in its code — `test_the_console_over_http` makes it try. `POST /cameras` therefore answers `worker: null`, and the row is placed on the controller's next pass; `DELETE` marks the row, and the pass takes the assignment back. The two counts follow from the two jobs: the controller is `count = 1` because its correctness is CAS and a second copy would merely repeat the pass — economy, not safety; the console runs on every server because a person is waiting on it and must be able to type any server's name — no load balancer, no ingress, no gateway in front; stateless copies share nothing and coordinate through the store alone (a retried `POST` is claimed under `<sub>/idem/<key>` by create-only CAS, so whichever instance gets the retry serves the first reply and never repeats the write). Neither number is a correctness claim. A web *gateway* appears only when live video does — and it is a worker of its own subsystem, not a tier: `live` (М10 Lesson 8), whose unit is a camera's fan-out and whose capacity is viewers; it subscribes to a worker's tee once per camera and fans out to browsers over WebRTC, scaled by viewer headroom, placed by label. Per-frame, per-viewer work never sits in the process an operator edits rows with, and never reaches a worker from a browser. Without live view, the console on every server is the whole web tier; with it, the console is still only the door (`/whep`) — the media goes gateway → browser.
+Два писателя никогда не делят ключ. Консоль пишет строки оператора; контроллер их читает и пишет размещение; консоль, попытавшаяся разместить, получает 403 от ACL хранилища, а не от правила в своём коде — `test_the_console_over_http` заставляет её попытаться. Поэтому `POST /cameras` отвечает `worker: null`, а строка размещается на следующем проходе контроллера; `DELETE` помечает строку, и проход забирает назначение обратно. Два числа следуют из двух работ: у контроллера `count = 1` потому, что его корректность — это CAS, а вторая копия лишь повторила бы проход, — экономия, а не безопасность; консоль работает на каждом сервере потому, что её ждёт человек и он должен иметь возможность набрать имя любого сервера, — ни балансировщика, ни ingress, ни шлюза впереди; не хранящие состояния копии не делят ничего и координируются только через хранилище (повторный `POST` захватывается под `<sub>/idem/<key>` создающим-только CAS, так что тот экземпляр, которому достался повтор, выдаёт первый ответ и никогда не повторяет запись). Ни одно из двух чисел не является утверждением о корректности. Веб-*шлюз* появляется только тогда, когда появляется живое видео, — и он воркер собственной подсистемы, а не ярус: `live` (М10, урок 8), чья единица — раздача одной камеры, а ёмкость — зрители; он подписывается на tee воркера один раз на камеру и раздаёт браузерам по WebRTC, масштабируется по запасу зрителей, размещается по метке. Работа на кадр и на зрителя никогда не сидит в том процессе, которым оператор правит строки, и никогда не доходит до воркера из браузера. Без живого просмотра консоль на каждом сервере — это весь веб-ярус; с ним консоль всё равно только дверь (`/whep`) — медиа идёт шлюз → браузер.
 
-**Both are data.** A subsystem's `<sub>.subsystem.yaml` says what a unit is (the rows' name, the id rule, the operator's fields with types and defaults, the derived rows and what happens to them on delete), how it is placed (capacity and headroom read from the heartbeat, a constraint and a tie-break by name, the rebalance dead band), what leaves the cluster (the snapshot's fields), and what the console counts as running. `SpecController` runs from that file; `SpecConsole` runs from the *same* file — `/spec` for the page, `/<rows>` for the read model, `/where`, `/metrics` under the subsystem's prefix, `/marks`, and the three writes with the spec's refusals — and the page builds its list and its forms from `/spec`, so it names no camera either. The two ACLs are derived from the same file too. What a subsystem writes, then, is the YAML, the worker — the only thing that knows what a unit *does* — and optionally a few routes registered as extras (the VMS: `/timeline` and `/segment`, where the bytes are) and a constraint registered under a name. М10's live subsystem (Lesson 7) has a controller and a console with no code for either, with a unit that is *demanded* rather than configured — a camera's fan-out, created by the first viewer, deleted by the gateway after the last — and a capacity counted in viewers, its workers being the live gateways; М10's detector subsystem (`det`, Lesson 8) is a YAML with `labels: [gpu]` and a worker whose events are its own buckets on the resource under its own epoch — and the console that fronts them all is one process: the VMS's `SpecConsole` at `/`, every other subsystem's mounted under its name (`/live/…`, `/det/…`), the operator's actions on them from the camera's page. `w2cplatform/spec.py`, `w2cplatform/console.py`, `vms/vms.subsystem.yaml`; the Go port the same.
+**Оба — данные.** `<sub>.subsystem.yaml` подсистемы говорит, что такое единица (имя строк, правило идентификатора, поля оператора с типами и умолчаниями, производные строки и что с ними происходит при удалении), как она размещается (ёмкость и запас, читаемые из heartbeat, ограничение и разрешение равенства по имени, мёртвая зона перебалансировки), что покидает кластер (поля снимка) и что консоль считает работающим. `SpecController` работает из этого файла; `SpecConsole` работает из *того же* файла — `/spec` для страницы, `/<rows>` для читающей модели, `/where`, `/metrics` под префиксом подсистемы, `/marks` и три записи с отказами из спецификации, — а страница строит свой список и свои формы из `/spec`, так что и она не называет ни одной камеры. Два ACL выводятся из того же файла тоже. Значит, подсистема пишет YAML, воркер — единственное, что знает, что единица *делает*, — и, по желанию, несколько маршрутов, зарегистрированных как дополнительные (у VMS: `/timeline` и `/segment`, там, где байты), и ограничение, зарегистрированное под именем. У подсистемы живого видео из М10 (урок 7) есть контроллер и консоль, и кода нет ни для того, ни для другого, а единица *востребована*, а не сконфигурирована — раздача камеры, созданная первым зрителем и удаляемая шлюзом после последнего, — и ёмкость считается в зрителях, воркерами же ей служат шлюзы живого видео; подсистема детекторов из М10 (`det`, урок 8) — это YAML с `labels: [gpu]` и воркер, чьи события — его собственные бакеты на ресурсе под его собственной эпохой; а консоль, которая фронтит их всех, — один процесс: `SpecConsole` от VMS на `/`, каждая другая подсистема примонтирована под своим именем (`/live/…`, `/det/…`), действия оператора над ними — со страницы камеры. `w2cplatform/spec.py`, `w2cplatform/console.py`, `vms/vms.subsystem.yaml`; в Go-порте то же самое.
 
-What is *not* a subsystem is decided by the same three questions — a process that moves, a unit that is placed, a capacity the worker measures. The archive answers no to all three: it is a **resource**, pinned to its server by physics, registered on rather than placed, and giving it a placement row would let the controller try to move a disk (the CSI-volume failure М11 rejects). Events answer no to the first: they are a **data shape on a resource**, written by whoever holds the unit's epoch, so an "events subsystem" would be a second writer on the same unit. The console answers no to the second: a **stateless job with no units**, needing no controller. The event database is not a job at all: it lives inside the resource process, one per resource, over what lies there; a console with a question merges the resources' answers and holds none — on the box (`python3 -m vms resource`) exactly as on the cluster. Four rows, and every process on a server sits in exactly one of them.
+Что подсистемой *не* является, решают те же три вопроса — процесс, который перемещается, единица, которая размещается, ёмкость, которую измеряет воркер. Архив отвечает «нет» на все три: это **ресурс**, приколотый к своему серверу физикой, на котором регистрируются, а не который размещают, и строка размещения позволила бы контроллеру попытаться переместить диск (отказ с CSI-томом, который М11 отвергает). События отвечают «нет» на первый: это **форма данных на ресурсе**, которую пишет тот, кто держит эпоху единицы, так что «подсистема событий» была бы вторым писателем той же единицы. Консоль отвечает «нет» на второй: это **работа без состояния и без единиц**, которой не нужен контроллер. База событий вообще не работа: она живёт внутри процесса ресурса, по одной на ресурс, над тем, что там лежит; консоль с вопросом сливает ответы ресурсов и не держит ни одного — на коробке (`python3 -m vms resource`) точно так же, как в кластере. Четыре строки, и каждый процесс на сервере сидит ровно в одной из них.
 
 ---
 
-## Part 2 — How it got this shape
+## Часть 2 — Как она приняла эту форму
 
-The decisions, in the order they were taken. Each has the question, the first answer, what broke it, and what replaced it. Where an earlier version is still visible in a decision record, that is deliberate: the course leaves revisions in because the sequence is the lesson.
+Решения в том порядке, в каком они принимались. У каждого есть вопрос, первый ответ, то, что его сломало, и то, что его заменило. Там, где в записке решения всё ещё видна более ранняя версия, это сделано намеренно: курс оставляет ревизии, потому что порядок и есть урок.
 
-### Step 0 — The starting point: a VMS with no local truth (М8)
+### Шаг 0 — Точка отсчёта: VMS без локальной истины (М8)
 
-The course opens by renting a cloud VMS. Kinesis holds the configuration *and* the archive; the student's software is a client of somebody else's service. This is not a mistake — it is the cheapest way to build the product surface — but it means the box holds nothing. Everything after М8 is the consequence of the box having to hold its own.
+Курс открывается арендой облачной VMS. Kinesis держит и конфигурацию, *и* архив; софт студента — клиент чужого сервиса. Это не ошибка — это самый дешёвый способ построить поверхность продукта, — но это значит, что коробка не держит ничего. Всё после М8 — следствие того, что коробке пришлось держать своё.
 
-### Step 1 — One process per camera, or fifty in one?
+### Шаг 1 — Один процесс на камеру или пятьдесят в одном?
 
-**The question:** a server can handle a thousand cameras; should that be a thousand containers?
+**Вопрос:** сервер справляется с тысячей камер; должна ли это быть тысяча контейнеров?
 
-**The first instinct:** yes — isolation, and the orchestrator handles lifecycle.
+**Первое побуждение:** да — изоляция, а жизненным циклом занимается оркестратор.
 
-**What broke it:** not overhead, *lifecycle*. Container-per-camera makes camera CRUD a deployment operation, and camera lifecycle must survive the control plane being down. And a camera's RTSP session must be owned exactly once — cameras cap concurrent sessions at two to four — so recording is a `tee` branch inside the process that owns the session, not a second consumer.
+**Что его сломало:** не накладные расходы, а *жизненный цикл*. Контейнер-на-камеру превращает CRUD камеры в операцию развёртывания, а жизненный цикл камеры обязан переживать лежащий план управления. И RTSP-сессией камеры обязан владеть ровно один — камеры ограничивают число одновременных сессий двумя-четырьмя, — поэтому запись есть ветка `tee` внутри процесса, который владеет сессией, а не второй потребитель.
 
-**The answer:** sharded workers, 20–50 pipelines per process, measured in PSS rather than RSS because summing RSS double-counts shared library pages. **The orchestrator manages shards; the reconcile loop manages cameras.** Two supervisors, never merged.
+**Ответ:** шардированные воркеры, 20–50 конвейеров на процесс, измеряемые в PSS, а не в RSS, потому что сумма RSS дважды считает страницы разделяемых библиотек. **Оркестратор управляет шардами; цикл сверки управляет камерами.** Два надзирателя, которых никогда не сливают.
 
-And the rule that made Python viable for the course: **Python touches control, never data.** Buffers move on GStreamer's native threads in C; PyGObject releases the GIL; a per-buffer callback across fifty cameras at 25 fps is 1,250 GIL acquisitions a second and kills the worker. The rule generalises past Python — it is about crossing a language boundary once per frame — which is the real argument for C++ in the media worker, and a better one than "faster".
+И правило, сделавшее Python пригодным для курса: **Python касается управления и никогда — данных.** Буферы ходят по нативным потокам GStreamer на C; PyGObject отпускает GIL; колбэк на каждый буфер по пятидесяти камерам при 25 fps — это 1250 взятий GIL в секунду, и он убивает воркер. Правило обобщается за пределы Python — оно про пересечение языковой границы раз на кадр, — и это настоящий аргумент за C++ в медиа-воркере, лучший, чем «быстрее».
 
-### Step 2 — The box owns its OS (М9)
+### Шаг 2 — Коробка владеет своей ОС (М9)
 
-**The question:** how does an appliance nobody visits update itself?
+**Вопрос:** как обновляет себя прибор, к которому никто не приходит?
 
-**The answer:** A/B root filesystems under RAUC; signed bundles with a two-level CA and a keyring holding trust anchors only; a one-attempt rollback where **the absence of a success signal is the failure signal**; and a health check that decides rollback *on the box, offline* — never by asking a monitoring server, or a network fault rolls back a good update across the fleet.
+**Ответ:** A/B корневые файловые системы под RAUC; подписанные бандлы с двухуровневым CA и связкой ключей, держащей только якоря доверия; откат с одной попытки, где **отсутствие сигнала успеха и есть сигнал отказа**; и проверка здоровья, которая решает про откат *на коробке, офлайн*, — никогда не спрашивая сервер мониторинга, иначе сетевая неисправность откатит хорошее обновление по всему парку.
 
-**What was found later:** the health-check ladder is an alert-quality ladder, and its bottom row — *is footage being written* — is the highest-stakes alert in the course, written three modules before alerting is taught. And the module had been shipping a defect since its first lesson: `kvssink` publishing straight to AWS with nothing behind it, so an uplink blink was data loss. The **spool** was added — segments to the data partition, a separate uploader, delete on acknowledgement, a bound with a stated policy, a rate-limited drain — and those segments became the first artifact a later module *upgrades* rather than replaces.
+**Что обнаружилось позже:** лестница проверок здоровья — это лестница качества алертов, и её нижняя ступень — *пишется ли видео* — алерт с наивысшими ставками в курсе, написанный за три модуля до того, как курс доходит до алертинга. И модуль с самого первого урока вёз дефект: `kvssink` публиковал прямо в AWS, и позади него не было ничего, так что мигание uplink'а означало потерю данных. Добавили **spool** — сегменты на раздел данных, отдельный загрузчик, удаление по подтверждению, ограничение с объявленной политикой, слив с ограничением скорости, — и эти сегменты стали первым артефактом, который поздний модуль *улучшает*, а не заменяет.
 
-### Step 3 — The box owns its truth (М9)
+### Шаг 3 — Коробка владеет своей истиной (М9)
 
-**The question:** where does a camera's configuration live now that Kinesis does not hold it?
+**Вопрос:** где живёт конфигурация камеры теперь, когда Kinesis её не держит?
 
-**The first answer:** two databases — a domain database of what the operator asked for, and a node database of what the box observed — sharing one instance.
+**Первый ответ:** две базы — база домена с тем, что запросил оператор, и база узла с тем, что наблюдала коробка, — делящие один экземпляр.
 
-**What broke it:** that was the pre-inversion design, with the word *cached* still in it. Once the recorder owned its configuration (Step 5), the "domain database on the box" was a component with no referent.
+**Что его сломало:** это был проект до инверсии, и в нём ещё стояло слово *закэшировано*. Как только рекордер стал владеть своей конфигурацией (шаг 5), «база домена на коробке» оказалась компонентом без референта.
 
-**The answer:** one Postgres, the recorder's, holding three kinds of data that share an engine and nothing else: configuration (the only thing that cannot be re-derived), the archive index (rebuildable by scanning), and events (observations). SQLite was considered and rejected — not on seriousness but because the index and events need a real database regardless, and partitioning is the deciding feature: `DELETE` of 276,768 rows took 231 ms and freed zero disk; detach-and-drop took 5 ms and freed 38 MB.
+**Ответ:** один Postgres, рекордерский, держащий три вида данных, у которых общий движок и больше ничего общего: конфигурацию (единственное, что нельзя вывести заново), индекс архива (восстанавливается сканированием) и события (наблюдения). SQLite рассматривали и отвергли — не по несерьёзности, а потому что индексу и событиям настоящая база нужна всё равно, а решающая возможность — партиционирование: `DELETE` 276 768 строк занял 231 мс и освободил ноль диска; отцепить-и-выбросить занял 5 мс и освободил 38 МБ.
 
-Three rules were set here that everything above inherits:
+Здесь заданы три правила, которые наследует всё, что выше:
 
-- **Desired state is persisted; actual state is derived.** Persist the second and you have built a cache that lies — a green console over a box recording nothing, and the student builds that bug on purpose in М9 Lesson 6.
-- **`observed_revision >= revision` is the only definition of applied**, at every layer. An integer, because ordering expresses *distance*; a hash expresses only difference and a timestamp needs clocks to agree.
-- **Operator-owned versus controller-owned columns is a security boundary.** `phase` and `observed_revision` are never settable by a client. And the `cameras` table has no recorder column a client may write, because **which recorder owns a camera is decided for the operator, never by them.**
+- **Желаемое состояние персистится; фактическое выводится.** Персистируйте второе — и вы построили кэш, который врёт: зелёная консоль над коробкой, не пишущей ничего, и студент строит этот баг нарочно в М9, урок 6.
+- **`observed_revision >= revision` — единственное определение слова «применено»**, на каждом слое. Целое, потому что порядок выражает *расстояние*; хеш выражает только различие, а метке времени нужно согласие часов.
+- **Столбцы, принадлежащие оператору, против принадлежащих контроллеру — это граница безопасности.** `phase` и `observed_revision` клиент не может выставить никогда. А в таблице `cameras` нет столбца рекордера, в который клиенту позволено писать, потому что **какой рекордер владеет камерой, решают за оператора, а не он сам.**
 
-**Found on audit, much later:** `rtsp_url text` stores the customer's camera passwords in plaintext, because an RTSP URL carries `user:pass@` inline — and every code path that formats that URL into a log leaks it. Split out, encrypted, with the honest note that key placement is the hard part.
+**Найдено на аудите, гораздо позже:** `rtsp_url text` хранит пароли камер заказчика открытым текстом, потому что RTSP-URL несёт `user:pass@` внутри себя, — и каждый путь кода, который форматирует этот URL в лог, его утекает. Вынесено отдельно, зашифровано, с честной оговоркой, что трудная часть — куда положить ключ.
 
-### Step 4 — A recorder is not a server (М11)
+### Шаг 4 — Рекордер — не сервер (М11)
 
-**The question:** when a server dies, who owns its cameras?
+**Вопрос:** когда сервер умирает, кто владеет его камерами?
 
-**The first answer:** a controller reassigns them to a surviving server.
+**Первый ответ:** контроллер переназначает их на выживший сервер.
 
-**What broke it:** the objection was aimed at camera→server. But a recorder is a Nomad allocation with stable identity — its configuration does not change when Nomad moves it. Camera 7 belongs to *recorder 3*, permanently, and recorder 3 has simply moved. **Failover rewrites nothing, because ownership never changed.**
+**Что его сломало:** возражение было направлено против связи камера→сервер. Но рекордер — это аллокейшен Nomad с устойчивой личностью: его конфигурация не меняется, когда Nomad его перемещает. Камера 7 принадлежит *рекордеру 3* навсегда, а рекордер 3 просто переехал. **Перехват при отказе не перезаписывает ничего, потому что владение не менялось.**
 
-This was conceded cleanly and the design was rebuilt around it. The consequence the rest of the course rests on: **the recorder owns its own configuration and replicates it one way upward.** It does not cache anyone else's. What sits above is a *directory*, not a configuration store.
+Это признали без оговорок и перестроили проект вокруг этого. Следствие, на котором стоит весь остальной курс: **рекордер владеет собственной конфигурацией и односторонне реплицирует её вверх.** Чужую он не кэширует. То, что стоит выше, — это *каталог*, а не хранилище конфигурации.
 
-Three candidate designs were built and compared for this; the chapter was later removed and the choice simply stated, because a course should state its organising decision rather than arrive at it.
+Для этого построили и сравнили три проекта-кандидата; главу позже убрали, а выбор просто объявили, потому что курс должен объявлять своё организующее решение, а не добираться до него.
 
-### Step 5 — What must outlive a server, and the zombie
+### Шаг 5 — Что должно пережить сервер, и зомби
 
-**The question:** recorder 3 lands on Server B with an empty disk. Where does its state come from?
+**Вопрос:** рекордер 3 садится на сервер B с пустым диском. Откуда берётся его состояние?
 
-**The table:** footage stays (a replacement records the future); the index is rebuilt by scanning; events are expendable; **configuration is the one thing that must travel.** Two ways to make it travel:
+**Таблица:** записанное остаётся (замена пишет будущее); индекс восстанавливается сканированием; события расходуемы; **конфигурация — единственное, что обязано переехать.** Два способа заставить её переехать:
 
-- **2a — shared storage**, a CSI volume: exclusive attachment even fences for you. **Rejected**, and for a reason worth checking rather than assuming: Nomad issue #12118, still open, says the volume stays attached to a dead client and needs manual detach. Shared storage buys fencing and *loses* unattended failover — the wrong option precisely for an appliance nobody visits.
-- **2b — local storage, replicated one way** to an off-box restore point. **Built.**
+- **2a — разделяемое хранилище**, CSI-том: исключительное подключение ещё и отсекает за вас. **Отвергнуто**, и по причине, которую стоит проверить, а не предполагать: тикет Nomad #12118, до сих пор открытый, говорит, что том остаётся подключённым к мёртвому клиенту и требует отцепления руками. Разделяемое хранилище покупает отсечение и *теряет* переезд при отказе без присмотра — ровно неверный вариант для прибора, к которому никто не приходит.
+- **2b — локальное хранилище, реплицируемое односторонне** в точку восстановления вне коробки. **Построено.**
 
-**The zombie:** the old instance is not dead, only paused, and wakes up writing. Kleppmann: a lock service cannot stop a paused client; the resource must reject the stale token. So the **epoch** goes in the archive path, issued by check-and-set against a Nomad Variable. Nomad's variable *locks* were the trap — an opaque UUID, not a monotonic token. A Postgres sequence was the other trap — a restored database reissues numbers already written into paths.
+**Зомби:** старый экземпляр не мёртв, а только приостановлен, и просыпается уже пишущим. Клеппман: сервис блокировок не может остановить приостановленного клиента; ресурс обязан отвергнуть просроченный токен. Поэтому **эпоха** идёт в путь архива и выдаётся через check-and-set по переменной Nomad. Ловушкой были *блокировки* переменных Nomad — непрозрачный UUID, а не монотонный токен. Второй ловушкой была последовательность Postgres — восстановленная база выдаёт заново номера, уже записанные в пути.
 
-**And the RPO became visible:** the configuration that comes back may be behind what the operator last saw acknowledged. Hence the acknowledgement rule — ack on local commit, show *not yet replicated*.
+**И RPO стал виден:** конфигурация, которая вернётся, может отставать от того, что оператор последним видел подтверждённым. Отсюда правило подтверждения — подтверждай по локальной фиксации, показывай *ещё не реплицировано*.
 
-### Step 6 — Where the domain's database lives (six revisions)
+### Шаг 6 — Где живёт база данных домена (шесть ревизий)
 
-This decision record was revised six times, each revision left visible, and every one moved in the same direction.
+Эту записку решения правили шесть раз, каждую ревизию оставили видимой, и все они двигались в одну сторону.
 
-1. *"A domain exists when its Postgres exists"* — Postgres on every host, synchronised. **Wrong:** multi-master for desired state is exactly what must not happen.
-2. *"Hosts cache a slice of the domain database"* — with SQLite for the cache. **Wrong on the engine:** the index and events need Postgres anyway. Two databases, one engine.
-3. *"The recorder owns; the domain observes"* — inverted by Step 4. The domain becomes a directory.
-4. Found wrong in five places about the epoch: it said the domain database issues it. It does not; the epoch is a Nomad Variable, so a restored directory cannot reset the fencing tokens.
-5. **The domain database removed entirely.** The directory was doing two jobs with nothing in common — a *list* (kilobytes, read constantly, needs consistency) and a *restore point* (megabytes, read once on failover, needs durability). A database is a defensible answer to either alone and a poor one to both. The list went to a Nomad Variable per recorder; the restore point to an object per recorder. One-writer-per-key became a platform property (a Nomad ACL) rather than a convention. The repmgr-versus-Patroni HA argument the record had been heading for simply did not happen.
-6. **The restore point reclassified as the cluster's** (Step 8), so the domain is not needed to recover either.
+1. *«Домен существует, когда существует его Postgres»* — Postgres на каждом хосте, синхронизированные. **Неверно:** мульти-мастер для желаемого состояния — ровно то, чего быть не должно.
+2. *«Хосты кэшируют срез базы домена»* — с SQLite под кэш. **Неверно в движке:** индексу и событиям Postgres нужен всё равно. Две базы, один движок.
+3. *«Рекордер владеет; домен наблюдает»* — инвертировано шагом 4. Домен становится каталогом.
+4. Найдено неверным в пяти местах про эпоху: там говорилось, что её выдаёт база домена. Не выдаёт; эпоха — это переменная Nomad, поэтому восстановленный каталог не может сбросить токены отсечения.
+5. **База домена убрана целиком.** Каталог делал две работы, у которых нет ничего общего: *список* (килобайты, читается постоянно, нужна согласованность) и *точку восстановления* (мегабайты, читается один раз при переезде, нужна долговечность). База — защитимый ответ на каждую из них по отдельности и плохой ответ на обе. Список ушёл в переменную Nomad на каждый рекордер; точка восстановления — в объект на каждый рекордер. «Один писатель на ключ» стало свойством платформы (ACL Nomad), а не соглашением. Спор repmgr против Patroni про HA, к которому записка шла, просто не состоялся.
+6. **Точка восстановления переклассифицирована как принадлежащая кластеру** (шаг 8), так что домен не нужен и для восстановления.
 
-The rule that came out of it — *small and consistent in the scheduler's store; large and queryable in a database; large and opaque in an object store* — is the one Part 1 §1.5 states.
+Правило, которое из этого вышло, — *мелкое и согласованное в хранилище планировщика; крупное и запрашиваемое в базе; крупное и непрозрачное в хранилище объектов* — то самое, которое формулирует §1.5 части 1.
 
-### Step 7 — Trust and rights, split by where they must work
+### Шаг 7 — Доверие и права, разделённые по тому, где они обязаны работать
 
-**mTLS on every stream**, from a domain CA, certificates naming the *recorder* rather than the server. Issued inside the domain so renewal never reaches outside it. First introduced as a stand-in marked temporary, to be replaced by a delegated intermediate — and later *promoted* instead (Step 10).
+**mTLS на каждом потоке**, от CA домена, и сертификаты называют *рекордер*, а не сервер. Выдаются внутри домена, чтобы продление никогда не выходило за его пределы. Сперва введены как заместитель с пометкой «временно», который заменят делегированным промежуточным, — а позже вместо этого *повышены* (шаг 10).
 
-**Rights are recorder-local**, because enforcement must survive the domain being down. The asymmetry that decided it: a stale camera edit is benign and self-announcing; a stale *revoke* is silent, adversarial, and unbounded — the removed administrator keeps the site until someone reaches that recorder. So grants carry `valid_until`, renewed on the stream that already carries configuration, converting an unbounded window into a number the product states.
+**Права локальны для рекордера**, потому что их применение обязано переживать лежащий домен. Асимметрия, которая это решила: просроченная правка камеры безвредна и заявляет о себе сама; просроченный *отзыв* тих, враждебен и неограничен — снятый администратор держит площадку, пока кто-нибудь не дотянется до того рекордера. Поэтому гранты несут `valid_until` и продлеваются по тому же потоку, который уже несёт конфигурацию, обращая неограниченное окно в число, которое продукт объявляет.
 
-**Human credentials removed from the recorders.** М9's per-recorder `operators` table became N Alices and N stealable hashes, with a grant that expires attached to a credential that does not. The recorder now holds the signer's public key and verifies a short-lived token offline. Two lifetimes — token and grant — and the revocation window is the shorter, which most people get wrong. Break-glass named as the honest residue.
+**Учётные данные людей убраны из рекордеров.** Таблица `operators` на каждый рекордер из М9 оказалась N Алисами и N хешами, которые можно украсть, где истекающий грант привязан к удостоверению, которое не истекает. Теперь рекордер держит открытый ключ подписывающего и проверяет короткоживущий токен офлайн. Два срока жизни — токена и гранта, — и окно отзыва равно меньшему из них, в чём большинство ошибается. Аварийный вход назван честным остатком.
 
-### Step 8 — Cluster and domain become different sizes
+### Шаг 8 — Кластер и домен становятся разного размера
 
-**The question:** the modules had been split into ClusterVMS and DomainVMS, but the two spanned the same machines, and the split felt like a framing rather than a fact.
+**Вопрос:** модули были разделены на ClusterVMS и DomainVMS, но оба покрывали одни и те же машины, и разделение ощущалось как способ подачи, а не как факт.
 
-**The answer:** make them different scales. A **cluster** is servers on one network you would bet recording on — physics. A **domain** is the clusters under one directory — administration. A campus is one domain and three clusters.
+**Ответ:** сделать их разными масштабами. **Кластер** — это серверы в одной сети, на которую вы поставите запись, — физика. **Домен** — это кластеры под одним каталогом — администрирование. Кампус — это один домен и три кластера.
 
-**And the rule that fell out:** a recorder never crosses a cluster during failover — its footage is on that cluster's disks. Chosen for archive locality, it happened to put the epoch at exactly the scope Nomad's per-cluster raft provides; regions share no state, so there is no domain-wide raft, and none is needed. Two unrelated arguments landing on one line is usually a sign the line is real.
+**И правило, которое из этого выпало:** рекордер никогда не пересекает границу кластера при переезде — его записи лежат на дисках этого кластера. Выбранное ради локальности архива, оно заодно поставило эпоху ровно в ту область, которую даёт raft Nomad на кластер; регионы не делят состояния, поэтому raft на весь домен не существует, и он не нужен. Два несвязанных аргумента, попавших в одну линию, обычно признак того, что линия настоящая.
 
-**Consequences:** the restore point is cluster-scoped, so the domain drops out of the recovery path entirely. Nomad federation moved down from the top of the course to М12, because a domain of several clusters *is* federated regions. And the "three things a recorder cannot know" — lookup, placement, rebalance — turned out to be cluster questions, already answered by the Variables М11 had built and called something else. **М12 became a directory *of directories*, which cannot be strongly consistent** — the CAP boundary, drawn by a network you stopped trusting — and that difference in kind is what makes it a module rather than the same one with bigger nouns.
+**Следствия:** точка восстановления имеет областью кластер, поэтому домен полностью выпадает из пути восстановления. Федерация Nomad съехала с верха курса в М12, потому что домен из нескольких кластеров *и есть* федеративные регионы. А «три вещи, которых рекордер знать не может» — поиск, размещение, перебалансировка — оказались вопросами кластера, на которые уже отвечали переменные, построенные М11 и названные иначе. **М12 стал каталогом *каталогов*, а он не может быть строго согласованным** — граница CAP, проведённая сетью, которой вы перестали доверять, — и именно эта разница в роде делает его отдельным модулем, а не тем же самым с существительными побольше.
 
-### Step 9 — No domain controller
+### Шаг 9 — Никакого контроллера домена
 
-**The question:** where does the domain controller live?
+**Вопрос:** где живёт контроллер домена?
 
-**The answer:** there isn't one. What runs at the domain is five small services — a signer, placement, a read view, an update server, a remote observer — hosted by one designated cluster — the **domain cluster**, Nomad choosing the server, failing over within that cluster like any allocation, and dying with it. **The signer's key is the only state that cannot be regenerated — and, where the customer has no identity provider, the local user records beside it** (М12, *Where users live*; both published as objects for restore): a software key in the cluster's raft, on purpose, because a TPM-sealed key pins the signer to one server and defeats the failover it just gained; acceptable because everything it signs is short-lived. The word *domain controller* was retired, because it named a component the design had dissolved and implied an authority the layer does not have.
+**Ответ:** его нет. На домене работают пять небольших сервисов — подписывающий, размещение, читающее представление, сервер обновлений, удалённый наблюдатель, — которые хостит один назначенный кластер, **кластер домена**: сервер внутри него выбирает Nomad, переезд при отказе идёт внутри этого кластера, как у любого аллокейшена, и вместе с ним они умирают. **Ключ подписывающего — единственное состояние, которое нельзя сгенерировать заново, — и, там, где у заказчика нет провайдера личности, рядом с ним записи локальных пользователей** (М12, *Где живут пользователи*; и то и другое публикуется объектами для восстановления): программный ключ в raft кластера, и это сделано намеренно, потому что ключ, запечатанный в TPM, прикалывает подписывающего к одному серверу и уничтожает тот самый переезд при отказе, который он только что получил; допустимо потому, что всё, что он подписывает, живёт недолго. Слово *контроллер домена* упразднено: оно называло компонент, который проект растворил, и подразумевало полномочие, которого у слоя нет.
 
-### Step 10 — The layer above the domain does not exist
+### Шаг 10 — Слоя над доменом не существует
 
-**The question:** why is there a level above the domain?
+**Вопрос:** зачем над доменом есть уровень?
 
-**The first answer**, over three renames — FederatedVMS, then OrchestratedVMS: a layer holding a root CA, a federated identity, a vault, a fleet inventory, and rented capacity.
+**Первый ответ**, через три переименования — FederatedVMS, затем OrchestratedVMS: слой, держащий корневой CA, федеративную личность, хранилище секретов, инвентарь парка и арендованную ёмкость.
 
-**What broke it:** a domain can be as large as a customer's whole estate, so **one customer is one domain**, and "above the domain" means "across customers" — which is not the product. It is the vendor. Item by item, every function of the layer turned out to be either something the domain does for itself (provision a cluster from the customer's cloud account; be its own root; federate to the customer's IdP; run its own update server; cache its entitlement) or something the vendor does across customers (vouch for hardware; issue entitlement; publish bundles; rent capacity).
+**Что его сломало:** домен может быть размером со всё хозяйство заказчика, поэтому **один заказчик — это один домен**, а «над доменом» означает «поперёк заказчиков», что продуктом не является. Это вендор. Пункт за пунктом каждая функция слоя оказалась либо тем, что домен делает сам для себя (поднять кластер в облачном аккаунте заказчика; быть себе корнем; федерироваться к IdP заказчика; держать собственный сервер обновлений; кэшировать своё право на использование), либо тем, что вендор делает поперёк заказчиков (ручаться за железо; выдавать право на использование; публиковать бандлы; сдавать ёмкость в аренду).
 
-**And the security improvement hiding in it:** a vendor-held root that signs the customer's CA is a vendor who can impersonate the customer's domain. The self-signed CA that every earlier module had marked *temporary* was the right design all along, and was promoted to the customer's permanent root. Five hand-provisioned stand-ins were collected inside М12: four replaced by giving things identities, one promoted.
+**И улучшение безопасности, которое в этом скрывалось:** корень в руках вендора, подписывающий CA заказчика, — это вендор, способный выдать себя за домен заказчика. Самоподписанный CA, который каждый более ранний модуль помечал как *временный*, всё это время был верным проектом, и его повысили до постоянного корня заказчика. Внутри М12 собрали пять заместителей, поднятых руками: четыре заменили, выдав вещам личности, один повысили.
 
-**What М14 became:** VendorVMS — not a scope, a counterparty. Its thesis is the property enterprise buyers ask for by name: **the product must work with the vendor unreachable, or gone.** Its centrepiece is a table of what the vendor *may* do against what it *must never be able to* — and the right-hand column is a list of things earlier drafts of the course would have let the vendor do.
+**Чем стал М14:** VendorVMS — не область, а контрагент. Его тезис — то свойство, которое корпоративные покупатели спрашивают по имени: **продукт обязан работать при недостижимом или исчезнувшем вендоре.** Его центральный элемент — таблица того, что вендору *позволено*, против того, чего он *никогда не должен быть способен* сделать, — и правый столбец — это перечень того, что ранние черновики курса вендору позволили бы.
 
-**The one thing that grew on that side:** the licence system, which had been a bullet, became a lesson once the thesis was applied to it. A licence is a signed document the domain verifies offline, bound to the domain id (a recorder is not a server, and the root has a rotation drill, so neither may anchor it), pulled through the domain's own update server like a bundle, and enforced only at admission — because no consistent domain-wide counter exists and the rule that *cached from above may keep recording forever* admits no exception for money. Revocation does not exist; lifetimes do, and a perpetual licence is the honest offer to a customer asking what happens if the vendor is gone.
+**Единственное, что выросло на той стороне:** система лицензирования, бывшая пунктом списка, стала уроком, как только к ней применили тезис. Лицензия — это подписанный документ, который домен проверяет офлайн, привязанный к идентификатору домена (рекордер — не сервер, а у корня есть учение по ротации, поэтому анкером не может служить ни то, ни другое), забираемый через собственный сервер обновлений домена, как бандл, и применяемый только при допуске — потому что согласованного счётчика на весь домен не существует, а правило *закэшированное сверху может писать вечно* не допускает исключения ради денег. Отзыва не существует; существуют сроки жизни, и бессрочная лицензия — честное предложение заказчику, который спрашивает, что будет, если вендор исчезнет.
 
-### Step 11 — Observability is domain-level
+### Шаг 11 — Наблюдаемость — уровня домена
 
-**The question:** does monitoring belong at the lower levels?
+**Вопрос:** принадлежит ли мониторинг нижним уровням?
 
-**The finding:** it was already there, unnamed — the health-check ladder, spool age, `camera_silent_seconds`, failover time, replica lag — each defined where its failure was introduced. The observability module collects rather than introduces. And its remote observer is *one more domain service*, so the module is domain-level and belongs directly after the domain, before the vendor — which resolved a sequencing hedge that had survived three restructures, since the vendor module's demo (*the vendor disappears for thirty days*) can only be demonstrated with instrumentation in place.
+**Находка:** он уже был там, без имени, — лестница проверок здоровья, возраст spool'а, `camera_silent_seconds`, время переезда при отказе, отставание реплики, — и каждое определено там, где вводился его отказ. Модуль наблюдаемости собирает, а не вводит. А его удалённый наблюдатель — *ещё один сервис домена*, поэтому модуль относится к уровню домена и стоит прямо после домена, перед вендором, — чем и разрешилась оговорка про порядок, пережившая три перестройки, поскольку демонстрацию модуля вендора (*вендор исчезает на тридцать дней*) можно показать только при установленных измерениях.
 
-The module's own thesis is the one datacentre monitoring gets for free and this product cannot: **in a datacentre, no news is bad news; at the edge, no news is no news.** Two observers — local, seeing everything and dying with the cluster; remote, in the domain cluster, whose only job is to tell silence from health. Detail is local, summary is domain, for the fourth data type — which the database record had predicted would arrive.
+Собственный тезис модуля — тот, который мониторинг в датацентре получает бесплатно, а этот продукт не может: **в датацентре отсутствие новостей — плохая новость; на устройстве отсутствие новостей — это отсутствие новостей.** Два наблюдателя: локальный, видящий всё и умирающий вместе с кластером, и удалённый, в кластере домена, у которого одна работа — отличать молчание от здоровья. Подробность локальна, сводка доменная, для четвёртого типа данных, приход которого записка про базу данных и предсказывала.
 
-### Step 12 — What was designed out, and why
+### Шаг 12 — Что вывели из проекта и почему
 
-| Removed | Reason |
+| Убрано | Причина |
 |---|---|
-| **Consul** | The product runs a PKI regardless (no mesh issues an identity to a device never on the network), so a mesh CA is a second hierarchy that buys nothing. Accepted cost: no health-check-filtered discovery. |
-| **A vault, from the product** | Most secrets existed because something had not been given an identity. The one that remains — camera credentials — must work with everything above the cluster unreachable. OpenBao survives only for a multi-tenant vendor. |
-| **The domain database** | Two jobs with nothing in common; a Variable and an object each did one better. |
-| **The domain controller** | Dissolved into five stateless-or-one-key services. |
-| **The root above the domain** | A vendor who can sign your CA can impersonate you. |
-| **A shipped dashboard** | Grafana, Loki, Tempo and Mimir are AGPLv3, and §6 triggers on conveying at all. Teach Prometheus; let the customer install Grafana against an Apache-2.0 endpoint. |
-| **The words** *domain controller*, *orchestration layer*, *federation* (product sense) | Each named a component that no longer existed. |
+| **Consul** | PKI продукт держит всё равно (ни одна mesh не выдаст личность устройству, которого в сети никогда не было), поэтому CA от mesh — вторая иерархия, которая ничего не покупает. Принятая цена: нет обнаружения с фильтром по проверке здоровья. |
+| **Хранилище секретов — из продукта** | Большинство секретов существовали потому, что чему-то не выдали личность. Тот, что остаётся, — учётные данные камер — обязан работать при недостижимости всего, что выше кластера. OpenBao выживает только для многоарендного вендора. |
+| **База данных домена** | Две работы, у которых нет ничего общего; переменная и объект — каждый делал свою лучше. |
+| **Контроллер домена** | Растворён в пять сервисов, не хранящих состояния или хранящих один ключ. |
+| **Корень над доменом** | Вендор, который может подписать ваш CA, может выдать себя за вас. |
+| **Дашборд в поставке** | Grafana, Loki, Tempo и Mimir — под AGPLv3, а §6 срабатывает уже на самой передаче. Учите Prometheus; пусть заказчик поставит Grafana против эндпоинта под Apache-2.0. |
+| **Слова** *контроллер домена*, *слой оркестрации*, *федерация* (в продуктовом смысле) | Каждое называло компонент, которого больше не существовало. |
 
-### Step 13 — Licensing, settled by reading the licences
+### Шаг 13 — Лицензирование, решённое чтением лицензий
 
-**Nomad** is the only BUSL component left. The Additional Use Grant forbids offering the software hosted or embedded *in competition with the licensor's paid products*, and "embedded" is itself defined relative to a competitive product. A VMS does not significantly overlap Nomad Enterprise, so shipping an appliance with Nomad inside is permitted as written. The risk to watch is the analytics-plugin roadmap. The version floor is **1.8.0** (the `disconnect` block), and the Change Date is not an escape route: a version reaches MPL two years after its support ends.
+**Nomad** — единственный оставшийся компонент под BUSL. Additional Use Grant запрещает предлагать ПО в хостинге или встроенным *в конкуренции с платными продуктами лицензиара*, а само «встроенным» определено относительно конкурирующего продукта. VMS существенно не перекрывается с Nomad Enterprise, поэтому поставка прибора с Nomad внутри разрешена так, как написано. Риск, за которым надо следить, — дорожная карта плагинов аналитики. Нижняя граница версии — **1.8.0** (блок `disconnect`), а Change Date путём отхода не является: версия доходит до MPL через два года после окончания её поддержки.
 
-**Grafana** is the sharper case, and it is why the product ships no dashboard.
+**Grafana** — случай острее, и именно поэтому продукт не поставляет дашборда.
 
 ---
 
-### Step 14 — М9's worker was a stand-in, and the boundary it stood on
+### Шаг 14 — Воркер М9 был заместителем, и граница, на которой он стоял
 
-The last question asked of the design was the one an engineer asks first: *why is there a controller process at all, when Nomad supervises processes and DriverPack holds the pipeline?* The answer split. Half of the worker — supervision inside a process, the reconcile against desired state, the routing, the reporting — is the worker's and always was; the course built it in Python because it had no worker, and it moves into DriverPack as a contract carried by the tests. The other half — config distribution, fencing tokens, retention, serving people — was never VMS-specific and is the platform's. §1.11 is the row-by-row assignment; the modules keep their invariants and lose a process. The archive's location is the decision that follows from it and is not yet taken.
+Последний вопрос, заданный проекту, был тем, который инженер задаёт первым: *зачем вообще существует процесс-контроллер, если за процессами надзирает Nomad, а конвейер держит DriverPack?* Ответ разделился. Половина воркера — надзор внутри процесса, сверка с желаемым состоянием, маршрутизация, отчётность — воркерская и всегда была таковой; курс построил её на Python потому, что у него не было воркера, и она переезжает в DriverPack контрактом, который несут тесты. Другая половина — раздача конфигурации, токены отсечения, хранение, обслуживание людей — никогда не была специфична для VMS и принадлежит платформе. §1.11 — это построчное распределение; модули сохраняют свои инварианты и теряют один процесс. Местоположение архива — решение, которое из этого следует и которое ещё не принято.
 
-### Step 15 — The controller and the console became data
+### Шаг 15 — Контроллер и консоль стали данными
 
-Once the controller was the only writer, the question was what it actually knew about a camera: the names of the rows, the fields an operator may set, which heartbeat field is capacity, and a rule for which workers are eligible. That is a description, not a program, so М10 moved it into `vms.subsystem.yaml` and ran one `SpecController` from it; the live and detector subsystems that followed needed no controller of their own, and М11's `ClusterController` turned out to be the one-box class with N = 1 and was deleted. The console followed for the same reason: a page that lists units, edits fields and shows a gauge needs the same description and nothing more. The split into two processes with two tokens (§1.12) came first — the console holds the operator's rows, the controller holds placement, the store refuses the crossing — and then the console became `SpecConsole` over the same YAML, with the VMS registering only where its bytes are. The rule that fell out is the one the platform boundary (§1.11) had been circling: a subsystem is a worker and a description; the platform supplies both processes that surround it.
+Как только контроллер стал единственным писателем, вопрос свёлся к тому, что он на самом деле знал о камере: имена строк, поля, которые оператор может выставить, какое поле heartbeat является ёмкостью, и правило, какие воркеры подходят. Это описание, а не программа, поэтому М10 перенёс его в `vms.subsystem.yaml` и запустил из него один `SpecController`; подсистемам живого видео и детекторов, пришедшим следом, собственный контроллер не понадобился, а `ClusterController` из М11 оказался тем же классом для одной коробки при N = 1 и был удалён. Консоль пошла тем же путём по той же причине: странице, которая перечисляет единицы, правит поля и показывает индикатор, нужно то же описание и ничего больше. Сначала пришло разделение на два процесса с двумя токенами (§1.12) — консоль держит строки оператора, контроллер держит размещение, хранилище отказывает в пересечении, — а затем консоль стала `SpecConsole` над тем же YAML, и VMS регистрирует только то, где лежат её байты. Правило, которое из этого выпало, — то самое, вокруг которого граница платформы (§1.11) ходила кругами: подсистема — это воркер и описание; оба процесса, её окружающие, поставляет платформа.
 
-## What the sequence teaches
+## Чему учит эта последовательность
 
-Read as a whole, Part 2 moves in one direction: **every step took state and authority *out* of the layers above and pushed them *down* to where the thing that needs them already lives.** The domain lost its database, its restore point, its controller, its root's superior, and finally its own superior. The recorder gained ownership of its configuration, its rights, its identity's verification, and its archive's fencing. And what was left in the middle — the controller and the console — stopped being code at all and became a description the platform runs.
+Прочитанная целиком, часть 2 движется в одну сторону: **каждый шаг вынимал состояние и полномочия *из* верхних слоёв и спускал их *вниз*, туда, где то, кому они нужны, уже живёт.** Домен потерял свою базу данных, свою точку восстановления, свой контроллер, вышестоящего над своим корнем и, наконец, вышестоящего над собой. Рекордер получил во владение свою конфигурацию, свои права, проверку своей личности и отсечение своего архива. А то, что осталось посередине, — контроллер и консоль — вообще перестало быть кодом и стало описанием, которое исполняет платформа.
 
-The pattern is not minimalism for its own sake. It is what falls out of taking one rule seriously — *every layer may be unavailable to the one beneath it* — and refusing, each time, to let a component exist merely because the layer above used to be thin enough to need it.
+Этот рисунок — не минимализм ради минимализма. Это то, что выпадает, если серьёзно отнестись к одному правилу — *каждый слой может быть недоступен тому, что под ним* — и каждый раз отказываться терпеть компонент, существующий лишь потому, что слой выше когда-то был достаточно тонким, чтобы в нём нуждаться.
 
-*Written 7 September 2026, after the course reached its current shape.*
+*Написано 7 сентября 2026 года, после того как курс принял свою нынешнюю форму.*

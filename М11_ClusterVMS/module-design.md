@@ -2,7 +2,7 @@
 
 **Workers that outlive the server running them, resources that do not move, and one controller that is never needed to recover.**
 
-[М10](../М10_ServerVMS/module-design.md) built the platform's shape on one box: a **controller** that is the only writer of configuration, a **worker** — DriverPack — that runs pipelines against its assignment, an **archive resource** on the box's disks, and the platform's two stores underneath, file-backed. This module runs that shape across several servers and makes it survive any one of them dying: the worker moves and its cameras go with it, the resource stays and its footage with it, and the controller is not consulted — because failover rewrites nothing.
+[М10](../М10A_Platform/module-design.md) built the platform's shape on one box: a **controller** that is the only writer of configuration, a **worker** — DriverPack — that runs pipelines against its assignment, an **archive resource** on the box's disks, and the platform's two stores underneath, file-backed. This module runs that shape across several servers and makes it survive any one of them dying: the worker moves and its cameras go with it, the resource stays and its footage with it, and the controller is not consulted — because failover rewrites nothing.
 
 The organising decision, carried up from М10: **the controller writes, the platform stores, the worker reads its share.** Put a scheduler under that and a dead server is a relocation of a worker, not a decision anyone has to make.
 
@@ -220,7 +220,7 @@ group "vmsworker" {
 - **Why an orchestrator is the wrong answer for a single appliance** — М10's controller, worker and resource run as `systemd` units on one box; "place N workers" is a template unit; Nomad's own production guidance sizes *servers* and says nothing about single-node deployments
 - Nomad's model: servers accept jobs and place work, clients execute it; raft per region; three or five servers
 - **The platform's stores become Nomad's.** М10's file-backed Variables become Nomad Variables with the same `ModifyIndex` and CAS; the object directory becomes MinIO; nothing in `vms/` changes — that is the test
-- Build a cluster: three servers, two clients; run [`shard-memory-probe.py`](../М9_EdgeVMS/reference/shard-memory-probe.py) and derive the worker's camera budget
+- Build a cluster: three servers, two clients; run `shard-memory-probe.py` and derive the worker's camera budget
 
 **Deliverable:** a working cluster, М10's tests green against Nomad's stores instead of files, a measured per-worker budget, and a written justification for why this deployment needed a scheduler.
 
@@ -309,6 +309,6 @@ group "vmsworker" {
 - [CSI volumes do not recover from client failure without human intervention](https://github.com/hashicorp/nomad/issues/12118)
 - [Nomad Variables HTTP API](https://developer.hashicorp.com/nomad/api-docs/variables/variables) — `cas` against `ModifyIndex`, 409 on conflict, the 64 KiB item limit · [Variable Locks](https://developer.hashicorp.com/nomad/api-docs/variables/locks) — an opaque lock ID rather than a fencing token
 - [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)
-- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) · [`worker-and-process-model.md`](../М9_EdgeVMS/worker-and-process-model.md) · [М10's design](../М10_ServerVMS/module-design.md) · [ARCHITECTURE §1.11](../ARCHITECTURE.md)
+- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) · `worker-and-process-model.md` · [М10's design](../М10A_Platform/module-design.md) · [ARCHITECTURE §1.11](../ARCHITECTURE.md)
 
 *Written 5 September 2026 for the recorder model; lessons written 8 September. Rewritten 12 September 2026 to workers, resources and one controller (*2c*), after the fold of the М9's recorder design into М9 and the new М10 design. The lessons and the code still describe the recorder until they are rewritten to this record.*

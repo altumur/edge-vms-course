@@ -59,7 +59,7 @@ Which is also why this is the first layer in the course **allowed to be unavaila
 | Authorization | **Cluster-local grants carrying an expiry, enforced by the cluster's console and gateway** | Enforcement must survive the domain being down, so it cannot be a lookup. Expiry is what bounds the revocation window. Workers never see a grant, a token or a user. |
 | Status model | **Positions and reasons kept apart** | Kubernetes shipped a phase enum and then documented why it was a mistake. |
 
-The decisions about the servers underneath — camera ownership, worker identity by claim, fencing and the epoch, capacity as the worker's word, who decides how many workers there are — are [М10's](../М10_ServerVMS/module-design.md) and [М11's](../М11_ClusterVMS/module-design.md), and nothing here is allowed to contradict them.
+The decisions about the servers underneath — camera ownership, worker identity by claim, fencing and the epoch, capacity as the worker's word, who decides how many workers there are — are [М10's](../М10A_Platform/module-design.md) and [М11's](../М11_ClusterVMS/module-design.md), and nothing here is allowed to contradict them.
 
 ---
 
@@ -508,6 +508,6 @@ Two things went back down for it, both operator fields rather than mechanism: `r
 - [Nomad Pack](https://developer.hashicorp.com/nomad/tools/nomad-pack) · [Nomad LICENSE](https://raw.githubusercontent.com/hashicorp/nomad/main/LICENSE)
 - [Eliminate Phase and simplify Conditions](https://github.com/kubernetes/kubernetes/issues/7856) — why phase enums were a mistake
 - [`where-the-database-lives.md`](where-the-database-lives.md) — five revisions ending with one database in the whole design, and a sixth note on what 2c did to that one
-- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · [`apphost-and-process-model.md`](../М9_EdgeVMS/apphost-and-process-model.md)
+- [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) · `apphost-and-process-model.md`
 
 *Written 5 September 2026. Split from the combined DomainVMS module on 7 September 2026. Rewritten to the 2c shape (workers, resources, one controller per cluster; Node retired) on 12 September 2026.*
