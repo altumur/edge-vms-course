@@ -57,6 +57,7 @@ from w2cplatform.console import PAGE, Mount, SpecConsole, heartbeats, holder_of,
 from w2cplatform.eventdatabase import MergedIndex
 from w2cplatform.spec import Refused, SpecController
 
+from . import volumes
 from .archive import ArchiveResource, Manifest, subtract
 from .controller import VmsController
 
@@ -277,6 +278,47 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
 # media=archive is not None)`. With an archive: operator marks (`POST /marks`) go into the console's own
 # event log under `console/<hostname:pid>/e1/` on this server's resource, and `/spec` reports `media: true`
 # so the page draws a timeline and a player. Without one: no marks (503) and no media.
+# What the `rec` mount adds to the generic console: the archives themselves. `GET /rec/volumes` is the
+# operator's answer to "where can this footage go, and is anybody writing there"; the POST and the DELETE
+# are the declaration. Three numbers ride along, and they are the point of the screen:
+#
+#   wanted  — declared archives that are enabled: how many recorder processes this cluster needs
+#   serving — how many of them a live recorder is actually holding
+#   spare   — processes running with no volume, ready to take the next one declared
+#
+# `spare: 0` with `serving < wanted` is the one state that needs a person: an archive was declared and
+# there is no process free to serve it. The console says so; it does not start one. Starting processes is
+# the scheduler's, here as everywhere — what the platform owes is the number, not the action.
+def rec_routes(rec_ctl: SpecController):
+    def extra(handler, method, path, q):
+        if not path.startswith("/volumes"):
+            return None
+        if method == "GET" and path in ("/volumes", "/volumes/"):
+            view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall())
+            spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
+            return 200, {**view, "spare": len(spare), "spares": sorted(spare)}
+        if method == "POST" and path in ("/volumes", "/volumes/"):
+            body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))) or b"{}")
+            try:
+                vol = volumes.write(rec_ctl.vars, body)
+            except Refused as e:
+                return 400, {"detail": str(e), "error": "refused"}
+            return 201, {"volume": {k: v for k, v in {**vol.to_items(), "name": vol.name}.items()
+                                    if not k.endswith("_secret")}}
+        if method == "DELETE" and path.startswith("/volumes/"):
+            name = path[len("/volumes/"):]
+            if not any(v.name == name for v in volumes.declared(rec_ctl.vars)):
+                return 404, {"detail": f"no volume {name}", "error": "no such volume"}
+            # The row goes; the recorder holding it finds out on its next pass, stops what it was writing
+            # there and takes something else. The FOOTAGE is not touched — deleting the declaration is not
+            # deleting the archive, and the two must not be one button.
+            volumes.delete(rec_ctl.vars, name)
+            return 200, {"deleted": name, "detail": "the recorder stops writing there on its next pass; "
+                                                    "the footage already written is untouched"}
+        return None
+    return extra
+
+
 def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None, live_ctl: SpecController | None = None,
                  mounts: dict[str, SpecController] | None = None, index=None) -> Mount:
     """One console process for the box: the VMS at `/` (the page, /cameras, the media routes, the WHEP door),
@@ -292,7 +334,8 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
     if live_ctl is not None:
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))
     for name, c in (mounts or {}).items():
-        m.mount(name, SpecConsole(c, wall=wall, index=index))            # every mount answers /events from the same merge
+        m.mount(name, SpecConsole(c, wall=wall, index=index,             # every mount answers /events from the same merge
+                                  extra=rec_routes(c) if name == "rec" else None))   # …and `rec` answers for the archives too
     return m
 
 

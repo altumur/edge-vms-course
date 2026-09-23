@@ -40,6 +40,7 @@ from w2cplatform.objects import ObjectStore
 from w2cplatform.resource import disk_space, space_settings
 from w2cplatform.variables import Variables
 
+from . import volumes
 from .archive import ArchiveResource, overlaps, parse, subtract
 from .config import rec_row
 from .worker import FakeActuator, VmsWorker
@@ -71,12 +72,24 @@ class RecWorker(VmsWorker):
         self.archive = archive or ArchiveResource(env.get("SPOOL", "/data/spool"), env.get("ARCHIVE", "/data/archive"), wall=wall)
         super().__init__(name, vars_, objects, actuator or FakeActuator(), lease_ttl, lease_margin, clock, wall, server, capacity, instance,
                          slot_ttl, archive_root=self.archive.root, env=env)
-        # The operator configures how many volumes a box has and which recorder writes to which; the
-        # recorder is told its own by `$VOLUME`, the way it is told its name by `$RECORDER_NAME`.
-        # …and with one disk nobody sets it: the volume is then the SERVER's own name. A box with one disk
-        # is a box whose volume and whose server are the same place, so `home: srv-a` keeps meaning what it
-        # meant, and `place_by: volume` behaves exactly like `place_by: server` until somebody adds a disk.
-        self.volume = str(env.get("VOLUME") or self.server or os.path.basename(self.archive.root.rstrip("/")) or "default")
+        # WHICH ARCHIVE THIS RECORDER WRITES INTO — its place, in the sense `place_by: volume` means. Three
+        # ways to be told, in this order:
+        #
+        # `$VOLUME` — PINNED. A disk is bolted to one machine, so the unit file that knows which disk this
+        # instance mounts is the right place to say so, the way `$RECORDER_NAME` says which slot it is.
+        # A pinned recorder takes no hold and gives none up.
+        #
+        # Nothing pinned and volumes DECLARED (`rec/volumes/*`) — the recorder takes one, by CAS, and is
+        # that volume's recorder until it stops or lapses (`volume_pass`). This is what makes a network
+        # archive created on the console get served without anybody starting a process for it.
+        #
+        # Nothing pinned and nothing declared — the SERVER's own name, which is what every single-disk box
+        # meant before any of this existed: one place, named after the machine, `home: srv-a` still true,
+        # `place_by: volume` behaving exactly like `place_by: server`.
+        self.pinned = bool(env.get("VOLUME"))
+        self.default_volume = str(self.server or os.path.basename(self.archive.root.rstrip("/")) or "default")
+        self.volume = str(env.get("VOLUME") or self.default_volume)
+        self.full_capacity = self.capacity           # what it reports while it has a place to record in
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -165,10 +178,14 @@ class RecWorker(VmsWorker):
     # question a rolling upgrade really asks: is it safe to stop this machine now. A recorder whose units
     # have left promotes what they closed on its next pump, and then this is zero.
     def heartbeat_extra(self) -> dict:
-        # `volume`: the disk this recorder writes to, and the place the policy counts in. A box with three
-        # disks runs three recorders, and `servers: distinct` over `place_by: volume` puts one recording's
-        # worth of work on each — which is what the operator meant by three disks. A recorder that was not
-        # told a volume says the name of its archive root, so a single-disk box keeps working unchanged.
+        # `volume`: the archive this recorder writes into, and the place the policy counts in. A box with
+        # three disks runs three recorders, and `servers: distinct` over `place_by: volume` puts one
+        # recording's worth of work on each — which is what the operator meant by three disks.
+        #
+        # EMPTY means something different from absent, and both are said on purpose. Absent: a recorder
+        # that was never told about volumes, read as one place named after its server. Empty: this process
+        # is a SPARE — it is running, it has taken no volume, and it is not a place to record. It reports
+        # zero capacity with it, so the two halves of the same statement cannot drift apart.
         #
         # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
         # configuration — so it says which ones are done and the console removes them.
@@ -176,6 +193,60 @@ class RecWorker(VmsWorker):
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
                 "fetched": ",".join(self.fetched[-32:]),
                 "closed": ",".join(self.closed)}
+
+    # -- which archive this recorder writes into ------------------------------------------------------
+    # Run once a pass, after the slot and the leases. Four outcomes, and the one that matters is the last.
+    #
+    # Pinned: nothing to decide. Nothing declared: the server's own name, as before volumes were rows.
+    # Holding a volume that is still declared and still enabled: renew, keep recording.
+    # Otherwise: let go of what is no longer ours and try to take a free one — and if every volume is
+    # taken, become a SPARE. A spare is a normal, visible state: a process that is running, carrying
+    # nothing, and waiting for a place. It is what makes the next network archive somebody creates on the
+    # console get served in one pass instead of one deploy.
+    #
+    # Losing a hold is not the same as losing a slot. The slot says which process of the deployment this
+    # is; the hold says which archive it writes into. A process can lose the second and keep the first,
+    # and it then stops recording — the footage of those recordings belongs to whoever holds the volume
+    # now — without fencing the instance, which would mean it could never take another.
+    def volume_pass(self) -> str:
+        if self.pinned:
+            return self.volume
+        free = volumes.servable(volumes.declared(self.vars), self.server)
+        held = self.hold
+        if held is not None and (held not in free or not self.renew_hold()):
+            self.leave_volume(f"volume {held} is not this recorder's any more")   # withdrawn, disabled, or taken from us
+        if self.hold is not None:
+            self.volume, self.capacity = self.hold, self.full_capacity
+            return self.volume
+        if not free:
+            # Nothing declared anywhere: the box as it was before volumes were rows — one place, named
+            # after the server. Note this is reached after letting go above, so withdrawing the last
+            # volume does not leave a process quietly writing into it.
+            self.volume, self.capacity = self.default_volume, self.full_capacity
+            return self.volume
+        taken = self.claim_hold(free)                              # None: every declared volume has a live recorder
+        self.volume = taken or ""
+        self.capacity = self.full_capacity if taken else 0         # a spare is not a place to put a recording
+        return self.volume
+
+    # Stop writing into a volume that is no longer ours — the administrator withdrew it, or the hold
+    # lapsed and somebody else took it. Every recording of that archive is stopped and released, which is
+    # the reassignment path of `lease_pass` and not the zombie one: the process keeps its slot, keeps
+    # running, and may take another volume on the next pass.
+    def leave_volume(self, why: str) -> None:
+        logging.warning("%s: %s — stopping its recordings", self.name, why)
+        for uid in list(self.reconciler.actual):
+            self.actuator("stop", {"id": uid})
+            self.reconciler.actual.pop(uid, None)
+            self.release(str(uid))
+        self.release_hold()
+        self.volume, self.capacity = "", 0
+
+    def lease_pass(self) -> list[str]:
+        lost = super().lease_pass()
+        if self.recording_allowed:                   # a fenced instance decides nothing about volumes
+            self.volume_pass()
+        return lost
 
     def promote_closed(self) -> int:
         n = 0

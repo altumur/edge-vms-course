@@ -268,9 +268,24 @@ class Subsystem:
     def acl_controller(self) -> list[str]:
         return [f"{self.name}/*"]
 
-    # `[<name>/epoch/*, <name>/slots/*]` — a worker writes only epochs and its slot, never configuration.
+    # `<name>/holds/<place>` — a PLACE this worker took, as opposed to the slot above, which is WHO the
+    # worker is. Same row (`Slot`), same CAS-with-a-lease rule, same fencing; what differs is where the
+    # candidates come from. A slot's name a worker invents (`w-<max+1>`) because one process is as good as
+    # another. A hold's name it cannot: the places are a list somebody else wrote down — the administrator's
+    # volumes, in M10B — and a worker may only take one of those, one at a time, exclusively.
+    #
+    # Two rows and not one because they answer different questions and lapse for different reasons: the
+    # slot says which process of the deployment this is (the scheduler's business), the hold says which
+    # archive it writes into (the operator's). A process can lose the second and keep the first — it
+    # becomes a spare — and that is a normal state, not a failure.
+    def hold_key(self, place: str) -> str:
+        return f"{self.name}/holds/{place}"
+
+    # `[<name>/epoch/*, <name>/slots/*, <name>/holds/*]` — a worker writes only epochs, its slot and the
+    # place it took; never configuration. The place is the worker's to take precisely because taking it
+    # is a claim about this process, not a decision about the system.
     def acl_worker(self) -> list[str]:
-        return [f"{self.name}/epoch/*", f"{self.name}/slots/*"]
+        return [f"{self.name}/epoch/*", f"{self.name}/slots/*", f"{self.name}/holds/*"]
 
     # -- the object store's half of the same question ------------------------------------------------
     # Variables have had an ACL since Lesson 1; the OBJECT STORE never did. On one box that was invisible
@@ -581,6 +596,7 @@ class Worker:
         self.slot_ttl = slot_ttl
         self.slot: Slot | None = None
         self.name = name                          # None until claim_slot(); a fixed name is a slot claimed by that name
+        self.hold: str | None = None              # the PLACE this worker took, if its subsystem has places to take
 
     # -- identity by claim ----------------------------------------------------------
     # Become somebody. Lists the slot rows; with `prefer` (Nomad's `NOMAD_ALLOC_INDEX`, systemd's `%i`) the
@@ -651,6 +667,71 @@ class Worker:
     # An orderly stop (SIGTERM from the scheduler: scale-in, or a drain). Writes the row with
     # `released=True` and `until=now`, if this instance still holds it; a `Conflict` is ignored. This flag
     # is what tells scale-in from a crash: a crash says nothing and the slot merely lapses.
+    # -- the place, as opposed to the identity -------------------------------------
+    # Take one of the places the administrator wrote down — `<name>/holds/<place>`, the same row and the
+    # same rule as a slot, over candidates this worker did not invent. Returns the place taken, or None
+    # when every candidate is held by somebody live, which is not an error: the process is a SPARE, it
+    # carries nothing, and it tries again next pass. That is how a place declared in the console gets
+    # served without anybody starting a process for it, and how a place that lapses is picked up by
+    # whoever is free.
+    #
+    # Order matters and is the caller's: it passes candidates in the order it wants them taken (a
+    # recorder puts its own server's disks before a network archive any box could serve). A `Conflict`
+    # means somebody took this one between the read and the write — try the next candidate, and only
+    # repeat the sweep if contention was the reason we ran out.
+    def claim_hold(self, candidates: list[str], retries: int = 20) -> str | None:
+        """Take one place out of a list somebody else wrote. None when they are
+        all taken — a spare, not a failure."""
+        for _ in range(retries):
+            contended = False
+            for cand in candidates:
+                key, now = self.sub.hold_key(cand), self.wall()
+                items, idx = self.vars.get(key)
+                cur = Slot.from_items(cand, items)
+                if not cur.claimable(now):
+                    continue                                   # somebody live is writing there
+                try:
+                    self.vars.put(key, Slot(cand, self.instance, now + self.slot_ttl, False, cur.gen + 1).to_items(), cas=idx)
+                except Conflict:
+                    contended = True; continue
+                self.hold = cand
+                return cand
+            if not contended:
+                return None                                    # every place is held: a spare
+        return None
+
+    # Still mine? Same three lines as `renew_slot`, and the same meaning when it says no: another process
+    # holds this place now, so this one must stop writing into it. Losing a hold is NOT losing the slot —
+    # the process stays itself and becomes a spare.
+    def renew_hold(self) -> bool:
+        if self.hold is None:
+            return True
+        items, idx = self.vars.get(self.sub.hold_key(self.hold))
+        cur = Slot.from_items(self.hold, items)
+        if cur.holder != self.instance:
+            self.hold = None
+            return False
+        try:
+            self.vars.put(self.sub.hold_key(self.hold), Slot(self.hold, self.instance, self.wall() + self.slot_ttl, False, cur.gen).to_items(), cas=idx)
+        except Conflict:
+            self.hold = None
+            return False
+        return True
+
+    # Let go on purpose: an orderly stop, or the administrator deleted the volume. `released` is what
+    # tells that apart from a crash, and a released place is taken again at once instead of after a TTL.
+    def release_hold(self) -> None:
+        if self.hold is None:
+            return
+        items, idx = self.vars.get(self.sub.hold_key(self.hold))
+        cur = Slot.from_items(self.hold, items)
+        if cur.holder == self.instance:
+            try:
+                self.vars.put(self.sub.hold_key(self.hold), Slot(self.hold, self.instance, self.wall(), True, cur.gen).to_items(), cas=idx)
+            except Conflict:
+                pass
+        self.hold = None
+
     def release_slot(self) -> None:
         """An orderly stop (SIGTERM from the scheduler: scale-in, or a drain).
         Says so in the row — `released` — which is what tells scale-in from a

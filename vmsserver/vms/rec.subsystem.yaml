@@ -68,6 +68,12 @@ placement:
   # the rows, so the spec does not guess: `home` names the volume for each recording, and an installation
   # that wants copies to survive a server adds the line — `/unplaceable` then says so out loud instead of
   # quietly putting both in one place.
+# The archives themselves, as rows the administrator writes: `rec/volumes/<name>` (`vms/volumes.py`).
+# Not units — nothing is placed on a volume, it has no epoch and no worker; it is a LIST, like `policy`,
+# and the platform learns only its name so the console's token may write it. A volume becomes a PLACE when
+# a recorder takes it (`rec/holds/<name>`), which is what lets an operator create a network archive in the
+# console and have it served without anybody editing a unit file.
+tables: [volumes]
 snapshot: [name, cam, retention_days, enabled, labels, home]
 console:
   running: recordings_running          # rec_recordings_running: recordings whose pipeline is writing — what the health check reads

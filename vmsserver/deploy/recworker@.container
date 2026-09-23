@@ -32,10 +32,19 @@ After=network.target
 Image=localhost/vmsserver:latest
 Exec=python3 -m vms recorder
 Environment=RECORDER_NAME=%i
-# The disk this recorder writes to, and the place the policy counts in (`place_by: volume`): one unit per
-# volume, `systemctl start recworker@vol-a recworker@vol-b`. Unset on a box with one disk — the volume is
-# then the server's own name, and everything behaves as it did before there were volumes.
-Environment=VOLUME=%i
+# WHICH ARCHIVE this instance writes into — the place the policy counts in (`place_by: volume`).
+# Deliberately NOT set here, and that is the whole difference between a disk and a bucket:
+#
+# - A DISK is bolted to this machine, so the instance that mounts it says so, in a drop-in beside its
+#   `ARCHIVE`: `/etc/containers/systemd/recworker@vol-a.container.d/` with `Environment=VOLUME=vol-a`.
+#   Pinned, takes no hold, gives none up.
+# - A NETWORK ARCHIVE is created in the console (`rec/volumes/<name>`) and no unit file is edited for it.
+#   An instance with no `VOLUME` takes a declared volume it may serve, by CAS (`rec/holds/<name>`), and is
+#   that archive's recorder until it stops or lapses. With every volume taken it is a SPARE: running,
+#   carrying nothing, zero capacity, waiting — which is how the NEXT archive somebody declares gets served
+#   in one pass instead of one deploy. Start one per box: `systemctl start recworker@spare-1`.
+# - With nothing declared at all, an unpinned instance is the server's own name, exactly as before any of
+#   this existed.
 # `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `CAPACITY`, `SEGMENT_SECONDS`, `LOG_LEVEL`. One file for the box: on
 # a box with several disks the per-instance `ARCHIVE` (`/data/archive/vol-a`) comes from a drop-in,
 # `/etc/containers/systemd/recworker@vol-a.container.d/`, which is what drop-ins are for.

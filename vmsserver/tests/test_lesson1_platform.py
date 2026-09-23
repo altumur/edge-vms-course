@@ -130,7 +130,7 @@ def test_identity_by_claim_is_a_platform_piece():
     d = Worker(sub, None, box.vars, box.objects, clock=box.clock, wall=box.wall, instance="D")
     assert d.claim_slot(prefer="w-7") == "w-7"                         # the scheduler's index wins, and creates
     assert sorted(ctl.slots()) == ["w-1", "w-2", "w-7"] and sub.slot_key("w-1") == "thing/slots/w-1"
-    assert sub.acl_worker() == ["thing/epoch/*", "thing/slots/*"]
+    assert sub.acl_worker() == ["thing/epoch/*", "thing/slots/*", "thing/holds/*"]   # what it is, and where it writes
 
 
 def test_a_named_unit_deleted_comes_back_under_its_name():

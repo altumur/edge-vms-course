@@ -236,6 +236,14 @@ class SubsystemSpec:
     retire_values: tuple = ()
     dead_band: float = 0.10
     snapshot: list[str] = field(default_factory=list)
+    # `tables: [volumes]` — row families this subsystem's CONSOLE owns besides its units. Not units: nothing
+    # is placed on them, they have no epoch and no worker; they are the administrator's lists, like `policy`
+    # but plural and named. `rec` declares `volumes`, the archives an operator may write recordings into.
+    #
+    # The platform learns the NAME and nothing else: the ACL gains `<name>/<table>/*`, and what a row of
+    # that table means, which fields it has and which routes serve it are the subsystem's, in its own
+    # console code. That is the line: a generic grant is a platform matter, a volume is not.
+    tables: tuple[str, ...] = ()
     running_gauge: str = "units_running"     # the console's gauge for units in phase "running" (console: {running: …})
     # `events: {older_epochs: fenced | earlier-run}` — what it MEANS that a unit's events were written
     # under an epoch that is not the current one.
@@ -292,11 +300,17 @@ class SubsystemSpec:
                    dead_band=float((pl.get("rebalance", {}) or {}).get("dead_band", 0.10)),
                    snapshot=(list(declared) if declared is not None else
                              [n for n, f in fields.items() if not is_secret_field(n) and f.type != "blob"]),
+                   tables=tuple(str(t) for t in (d.get("tables") or [])),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")),
                    older_epochs=str((d.get("events", {}) or {}).get("older_epochs", "fenced")))
         # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
         # the default ("every field") is a convenience and not a decision.
+        # A table's name becomes a key family and an ACL prefix, so it is a name and not a path, and it may
+        # not be the unit rows under another spelling — two writers on one family with different rules.
+        for t in spec.tables:
+            if not t or "/" in t or t in (spec.rows, "policy", "slots", "holds", "epoch", "idem", "requests"):
+                raise ValueError(f"spec {spec.name}: `tables:` takes a fresh row family name, not {t!r}")
         leaks = [n for n in spec.snapshot if is_secret_field(n)]
         if leaks:
             raise ValueError(f"spec {spec.name}: a secret may not be in the snapshot: {leaks} — "
@@ -361,6 +375,7 @@ class SubsystemSpec:
                DRAIN_KEY]                                                                     # "this machine is about to stop": the operator's, and the same row for every subsystem
         for d in self.derived:
             out.append(f"{self.name}/{d.row.split('/')[0]}/*")
+        out += [f"{self.name}/{t}/*" for t in self.tables]              # the administrator's lists: `rec/volumes/*`
         return out
 
     # Placement: `<name>/workers/*`, `<name>/placement/*`, `<name>/slots/*` — never a unit's row. The
@@ -509,12 +524,22 @@ class SpecController(Controller):
         hb = self.workers_seen(max_age=1e12).get(worker)
         if hb is None:
             return "?"
-        # A worker that does not say which volume it is on is treated as one volume named after its
-        # server. That is the truth for every box with one disk, it is what a worker written before the
-        # field existed means, and where it is NOT the truth it errs the safe way: three recorders on
-        # three disks that nobody told apart read as three on one place, and `distinct` idles two of them
-        # rather than letting two think they own the same disk.
-        return str(hb.extra.get(self.spec.place_by) or hb.extra.get("server", "?"))
+        # Three cases, and the difference between the last two is the point.
+        #
+        # The field NAMES a place — the ordinary one: that is where this worker is.
+        #
+        # The field is ABSENT: one volume named after the server. That is the truth for every box with one
+        # disk, it is what a worker written before the field existed means, and where it is NOT the truth
+        # it errs the safe way — three recorders on three disks that nobody told apart read as three on
+        # one place, and `distinct` idles two of them rather than letting two think they own the same disk.
+        #
+        # The field is PRESENT AND EMPTY: the worker says it is on NO place — a spare, running and holding
+        # nothing, waiting for a place to become free. Reading that as its server would be the worst
+        # answer available: the spare would share a place with the recorder that actually owns the disk,
+        # and `distinct` would idle one of the two at random.
+        if self.spec.place_by in hb.extra:
+            return str(hb.extra[self.spec.place_by])
+        return str(hb.extra.get("server", "?"))
 
     # Sum of `extra[headroom_from]` over workers seen in the last 45 s — what the autoscaler reads via
     # `/metrics`. Stale until the workers heartbeat again after a placement.
