@@ -108,6 +108,25 @@ That is also the shape of the answer to "who decides how many". The console publ
 
 **Why load and not CPU.** A worker with two hundred idle cameras at 03:00 is at twelve percent CPU and *full* — every one of those cameras is assigned and must stay assigned. A CPU policy would scale the cluster down at night and strand them. Load says what the demand is: cameras that need a worker, over what the workers can carry. The controller adds nothing to this: it sums `headroom` from the heartbeats for the console and has no number of its own.
 
+### Three mechanisms, and exactly one per installation
+
+The Autoscaler is the answer where a metrics store exists. Two installations do not have one — a single box, and a cluster that has not stood Prometheus up yet — and "who starts the worker" cannot be left unanswered for them. So there are three, they do the same job with different hands, and picking more than one is the mistake:
+
+| | Runs as | Reads | Acts with | Pick it when |
+|---|---|---|---|---|
+| **The hand** | a person | the page: `served 3/4 · 0 spare — 1 more recorder(s) needed: …` | the command the console wrote out | always available; the last line of defence when the other two hit their ceiling |
+| **`vms-spares.timer`** | a systemd one-shot on the HOST, once a minute | `GET /rec/volumes` | `systemctl start recworker@r-N` | one box |
+| **`vms-scaler`** | a Nomad job, `count = 1`, `scale-job` and nothing else | `GET /rec/volumes` | `nomad job scale recworker N` | a cluster with no Prometheus |
+| **the Nomad Autoscaler** | a Nomad job, `count = 1` | Prometheus, which scrapes the console | `nomad job scale` | a cluster with Prometheus — М13 |
+
+**Never two at once.** Two agents with an opinion about one `count` fight, and the fight looks like a job that scales out and in every minute. When М13 brings Prometheus up, `vms-scaler` is stopped in the same movement that enables the Autoscaler's policy.
+
+**What they share matters more than what differs.** All three read the same number from the same place — `needed`, which the console computes as unserved archives minus spares — so an archive nobody *can* take (a disk on a server the scheduler puts no recorder on) stops asking after the first free process, whichever mechanism is running. All three take the NUMBER and ignore `how`, the line written out for a person: executing a string that arrived over HTTP, as root or with a scheduler token, is remote code execution with extra steps. All three carry a ceiling of their own, so a wrong number upstream costs a log line instead of nine hundred containers. And none of them scales in: a spare is cheap, and it is what makes the next archive get served in a pass instead of a deploy — deciding there are too many is a capacity judgement with a person's context behind it.
+
+**And the escalation is the same everywhere.** Ceiling reached, Prometheus down, scheduler with nowhere to place the allocation: `needed` does not fall, the page keeps showing it, and the operator sees exactly the number the agent saw. Nothing here degrades into silence.
+
+**Why the box's loop is not a container.** `vms-spares.service` runs on the host, as root, because starting a unit means talking to systemd — and the two ways to let a container do that are a privileged container or the D-Bus socket mounted in, both of which hand root on the box to something that also speaks HTTP to the world. Fifty lines of shell with no listening socket is the smaller thing to audit.
+
 ## Step 4 — Scale out, scale in, crash
 
 `test_nomad_job_scale_out_then_in`, with `capacity = 4`:
