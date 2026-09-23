@@ -104,6 +104,8 @@ The Nomad Autoscaler — a separate agent under MPL-2.0, [`deploy/autoscaler.nom
 
 That is also the shape of the answer to "who decides how many". The console publishes the number; the Autoscaler (or a hand) sets `count`; the controller places on what exists. Three actors, and the platform is not one of them.
 
+**And one of the three is not in this module.** Prometheus is not a job in `deploy/` — the Autoscaler's config assumes one at `:9090` scraping the console, and building it is М13's subject. So as this module ships, the loop closes only where an installation already runs a metrics store; everywhere else the numbers are on the page (`served 3/4 · 0 spare`, `vms_headroom`) and the hand is the operator's. Nothing else waits on it: the numbers, the refusals and every correctness mechanism here are independent of whether anybody is scraping them.
+
 **Why load and not CPU.** A worker with two hundred idle cameras at 03:00 is at twelve percent CPU and *full* — every one of those cameras is assigned and must stay assigned. A CPU policy would scale the cluster down at night and strand them. Load says what the demand is: cameras that need a worker, over what the workers can carry. The controller adds nothing to this: it sums `headroom` from the heartbeats for the console and has no number of its own.
 
 ## Step 4 — Scale out, scale in, crash
