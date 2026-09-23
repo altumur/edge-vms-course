@@ -27,6 +27,10 @@ apm "prometheus" {
   config = { address = "http://127.0.0.1:9090" }     # scrapes vms-console:8080/metrics
 }
 strategy "target-value" { driver = "target-value" }
+# The recorder's second check asks for a COUNT, not a ratio: every declared archive needs a process to
+# hold it (`rec_workers_live + rec_volumes_unserved`). Declared here because the agent loads the plugins
+# its config names — a policy using a strategy this file does not list is a policy that never runs.
+strategy "pass-through" { driver = "pass-through" }
 EOT
         destination = "local/config.hcl"
       }
