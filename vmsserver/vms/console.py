@@ -54,6 +54,7 @@ import urllib.error
 import urllib.request
 
 from w2cplatform.console import PAGE, Mount, SpecConsole, heartbeats, holder_of, send_file   # noqa: F401  (PAGE, send_file re-exported for М11)
+from w2cplatform.contract import slot_number
 from w2cplatform.eventdatabase import MergedIndex
 from w2cplatform.spec import Refused, SpecController
 
@@ -289,6 +290,29 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
 # `spare: 0` with `serving < wanted` is the one state that needs a person: an archive was declared and
 # there is no process free to serve it. The console says so; it does not start one. Starting processes is
 # the scheduler's, here as everywhere — what the platform owes is the number, not the action.
+# How many recorder processes are missing, and THE COMMAND that starts them — written out, for the
+# operator to run. Not a button: a console with a token to its orchestrator would be a console that can
+# start processes, which is the one thing this whole design keeps out of the platform (М10A, lesson 7).
+# What it can do is stop making the operator translate. It knows how many are missing (an archive is
+# declared and nobody, spare included, can take it), and it knows which orchestrator started IT —
+# `NOMAD_ALLOC_ID` in its own environment — so it can write the line out in that orchestrator's words.
+#
+# The slot name for a box is the next free number: instances are named by the slot they claim
+# (`recworker@r-3` claims `r-3`), so the command has to name one nobody holds.
+def scale_hint(rec_ctl: SpecController, unserved: int, spare: int) -> dict:
+    needed = max(0, unserved - spare)                   # a spare takes an archive on its next pass
+    if not needed:
+        return {"needed": 0, "how": None}
+    if os.environ.get("NOMAD_ALLOC_ID"):
+        live = len(rec_ctl.workers_seen())
+        return {"needed": needed, "how": f"nomad job scale recworker {live + needed}"}
+    taken = list(rec_ctl.slots())
+    nxt = max([slot_number(n) for n in taken] + [0]) + 1
+    prefix = (taken[0].rsplit("-", 1)[0] if taken and "-" in taken[0] else "r")
+    return {"needed": needed,
+            "how": " && ".join(f"systemctl start recworker@{prefix}-{nxt + i}" for i in range(needed))}
+
+
 # The two numbers a scaling policy needs and nothing else has. `declared` is how many archives the
 # operator says should be written into; `unserved` is how many of those nobody is holding — which, added
 # to the recorders that are live, is the count this job must reach.
@@ -314,6 +338,7 @@ def rec_routes(rec_ctl: SpecController):
             view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now)
             spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
             return 200, {**view, "spare": len(spare), "spares": sorted(spare),
+                         **scale_hint(rec_ctl, view["wanted"] - view["serving"], len(spare)),
                          # …and what to offer somebody who has declared nothing yet: the disk each box
                          # already records into, sized to its partition. A proposal, not a row.
                          "suggested": volumes.suggest(rec_ctl.vars, rec_ctl.objects, rec_ctl.spec.sub, now)}

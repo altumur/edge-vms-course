@@ -1,0 +1,22 @@
+# /etc/systemd/system/vms-spares.service — the one-shot the timer fires.
+#
+# Deliberately NOT a container. It talks to systemd on this host, and the two ways to let a container do
+# that are a privileged container or the D-Bus socket bind-mounted into it — both of which hand root on
+# the box to something that also speaks HTTP to the world. This is fifty lines of shell run by root, once
+# a minute, with no listening socket; that is the smaller thing to audit.
+[Unit]
+Description=vms: start a recorder for every declared archive nobody holds
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vms-spares.sh
+# CONSOLE, MAX_RECORDERS, RECORDER_PREFIX — the same file the units read, so the box has one place to
+# configure. `-` because a box that has not written it yet is a box with the defaults, not a failure.
+EnvironmentFile=-/data/config/vms.env
+# It starts units, so it cannot be locked down to nothing — but it has no reason to write anywhere, and
+# `ProtectSystem=strict` makes the difference visible in the unit rather than in a review comment.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

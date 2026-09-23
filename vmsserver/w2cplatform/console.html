@@ -610,9 +610,11 @@ async function loadArchives() {
   archives = (d.volumes || []).map(v => v.name);
   $('#archives').innerHTML = archives.map(a => `<option value="${a}"></option>`).join('');
   $('#archbox').style.display = 'block';
-  const short = d.serving < d.wanted && !d.spare;
-  $('#archstate').innerHTML = `<small${short ? ' class="err"' : ''}>served ${d.serving}/${d.wanted} · ${d.spare} spare` +
-                              `${short ? ' — declared and unserved: start another recorder' : ''}</small>`;
+  // `how` is the command, written out by the console in the words of whatever started it — systemd on a
+  // box, the scheduler on a cluster. Not a button: a console that could run it would be a console with a
+  // token to its orchestrator, and starting processes is the one thing this side never does.
+  $('#archstate').innerHTML = `<small${d.needed ? ' class="err"' : ''}>served ${d.serving}/${d.wanted} · ${d.spare} spare` +
+                              `${d.needed ? ` — ${d.needed} more recorder(s) needed: <code>${d.how}</code>` : ''}</small>`;
   const ul = $('#archlist'); ul.innerHTML = '';
   for (const v of d.volumes || []) {
     const li = document.createElement('li'); li.className = v.served_by ? 'running' : '';

@@ -1,0 +1,17 @@
+# /etc/systemd/system/vms-spares.timer — ask the console, every minute, whether an archive is waiting
+# for a process. Enable it on a box, or on a cluster with no metrics store; where the Nomad Autoscaler
+# runs, this is the same loop with a different actuator and you want one of the two, not both.
+#
+# One minute is the same order as the Autoscaler's `evaluation_interval`, and for the same reason: the
+# thing being watched is an operator declaring an archive, which happens at human speed. `AccuracySec`
+# keeps systemd from waking the box for it.
+[Unit]
+Description=Start a recorder for every declared archive nobody holds
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -307,6 +307,39 @@ def test_the_resource_sweeps_the_volumes_this_box_is_responsible_for():
     assert set(paths) == {"vol-b"}
 
 
+def test_the_console_writes_out_the_command_and_does_not_run_it():
+    """The operator's knob, and the shape it is allowed to have.
+
+    A button that started a recorder would need a token to the orchestrator in
+    the console — the one thing the platform keeps out of itself. What the
+    console can do instead is stop making the operator translate: it knows how
+    many processes are missing and which orchestrator started IT, so it writes
+    the line out in that orchestrator's words. Running it stays a person's act."""
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    route = rec_routes(rec)
+    for n in ("s3-a", "s3-b"):
+        volumes.write(box.vars, {"name": n, "kind": "network", "url": f"s3://vms/{n}", "quota_bytes": 10 ** 12})
+
+    r = _recorder(box, "r-1", "srv-a"); r.volume_pass(); r.heartbeat_once()
+    _, view = route(None, "GET", "/volumes", {})
+    assert view["needed"] == 1 and view["how"] == "systemctl start recworker@r-2"   # the next slot nobody holds
+
+    # a spare covers the gap, so nothing is needed and nothing is suggested
+    s = _recorder(box, "r-2", "srv-a"); s.volume_pass(); s.heartbeat_once()
+    _, view = route(None, "GET", "/volumes", {})
+    assert view["needed"] == 0 and view["how"] is None
+
+    # on a cluster the same number comes out in the scheduler's words
+    volumes.write(box.vars, {"name": "s3-c", "kind": "network", "url": "s3://vms/c", "quota_bytes": 10 ** 12})
+    os.environ["NOMAD_ALLOC_ID"] = "alloc-1"
+    try:
+        _, view = route(None, "GET", "/volumes", {})
+        assert view["needed"] == 1 and view["how"] == "nomad job scale recworker 3"
+    finally:
+        del os.environ["NOMAD_ALLOC_ID"]
+
+
 def test_the_numbers_a_scaling_policy_reads():
     """`spare: 0` while something is declared and unserved is the one state that
     needs a person — so it has to be a number a machine can read too, or the
