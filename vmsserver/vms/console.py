@@ -321,7 +321,7 @@ def scale_hint(rec_ctl: SpecController, unserved: int, spare: int) -> dict:
 # of one. `metrics_extra` is the seam, the same shape as `extra` for routes.
 def rec_metrics(rec_ctl: SpecController):
     def lines() -> list[str]:
-        view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall())
+        view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall(), objects=rec_ctl.objects)
         unserved = view["wanted"] - view["serving"]
         spare = sum(1 for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == "")
         return ["# TYPE rec_volumes_declared gauge",
@@ -345,7 +345,7 @@ def rec_routes(rec_ctl: SpecController):
             return None
         if method == "GET" and path in ("/volumes", "/volumes/"):
             now = rec_ctl.wall()
-            view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now)
+            view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now, objects=rec_ctl.objects)
             spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
             return 200, {**view, "spare": len(spare), "spares": sorted(spare),
                          # `live` so that whatever acts on `needed` does not have to ask the orchestrator

@@ -424,3 +424,63 @@ def test_the_recorder_writes_into_the_volume_it_took():
     assert r.volume_pass() == "vol-b" and r.archive.root == b
     assert os.path.isfile(os.path.join(a, "rec", "7", "e1", os.path.basename(spool_seg)))   # in vol-a's tree
     assert not os.path.exists(os.path.join(b, "rec", "7"))                                   # and not in vol-b's
+
+
+def test_a_volume_held_and_unwritable_is_not_served():
+    """The worst failure this subsystem has, because every number says it is fine.
+
+    A hold is fresh, so the console counted the archive served; the recorder sat
+    on it and wrote nothing; the screen was green. Only the process that opened
+    the volume knows it did not open, so it says so — and what reads that must
+    not count the volume as served, must not call the recorder a place to put
+    new recordings, and must not let go of the archive when there is nowhere
+    else to go: a box that stops recording because of diagnostics is worse."""
+    box = Box()
+    good, bad = os.path.join(box.root, "good"), os.path.join(box.root, "nope", "deeper")
+    open(os.path.join(box.root, "nope"), "wb").write(b"")          # a FILE where a directory is declared
+    volumes.write(box.vars, {"name": "a-broken", "kind": "local", "url": bad, "server": "srv-a", "quota_bytes": 10 ** 9})
+    volumes.write(box.vars, {"name": "b-good", "kind": "local", "url": good, "server": "srv-a", "quota_bytes": 10 ** 9})
+
+    # `a-broken` sorts first, so it is tried first — and handed back, because there IS somewhere to go
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "b-good" and r.volume_error == ""
+    assert r.archive.root == good
+    assert volumes.holders(box.vars, REC_SPEC.sub)["a-broken"].released    # let go at once, not sat on
+
+    # the second recorder has nowhere else: it keeps the broken archive, reports why, and offers no room
+    s = _recorder(box, "r-2", "srv-a")
+    assert s.volume_pass() == "a-broken" and s.volume_error
+    assert s.capacity == 0                                         # not a place to put a recording
+    s.heartbeat_once(); r.heartbeat_once()
+
+    view = volumes.served(box.vars, REC_SPEC.sub, box.wall(), objects=box.objects)
+    by = {v["name"]: v for v in view["volumes"]}
+    assert view["wanted"] == 2 and view["serving"] == 1            # NOT two: a held archive nobody can write to
+    assert by["a-broken"]["served_by"] is None
+    assert "cannot write there" in by["a-broken"]["why"] and s.instance in by["a-broken"]["why"]
+    assert by["b-good"]["served_by"] == r.instance
+
+    # and it heals by itself the moment the archive is there: nothing to press, nothing to restart
+    os.remove(os.path.join(box.root, "nope"))
+    assert s.volume_pass() == "a-broken" and s.volume_error == "" and s.capacity == s.full_capacity
+    s.heartbeat_once()
+    assert volumes.served(box.vars, REC_SPEC.sub, box.wall(), objects=box.objects)["serving"] == 2
+
+
+def test_the_key_never_goes_into_the_address():
+    """`volumes.py` says it handles no credentials beyond the suffix rule — and
+    the one thing it can still do is refuse the obvious way to lose them. A url
+    is printed on the page, published in the recorder's heartbeat as `archive`
+    and written into the row; a key inside it is the same secret in three public
+    places, and the `*_secret` rule cannot help, because the field it guards is
+    not the one carrying it."""
+    box = Box()
+    try:
+        volumes.write(box.vars, {"name": "s3", "kind": "network", "quota_bytes": 1,
+                                 "url": "s3://AKIAEXAMPLE:wJalrXUtnFEMI@s3.example.com/vms"})
+        raise AssertionError("a url with credentials in it was accepted")
+    except Refused as e:
+        assert "never the key to it" in str(e)
+
+    for ok in ("/data/archive/cold", "file:///data/archive/cold", "s3://s3.example.com/vms/site-7"):
+        volumes.refuse({"name": "v", "kind": "network", "url": ok, "quota_bytes": 1})

@@ -90,6 +90,7 @@ class RecWorker(VmsWorker):
         self.default_volume = str(self.server or os.path.basename(self.archive.root.rstrip("/")) or "default")
         self.volume = str(env.get("VOLUME") or self.default_volume)
         self.full_capacity = self.capacity           # what it reports while it has a place to record in
+        self.volume_error = ""                       # why the archive it holds will not open, if it will not
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -190,6 +191,10 @@ class RecWorker(VmsWorker):
         # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
         # configuration — so it says which ones are done and the console removes them.
         return {"volume": self.volume,
+                # Empty unless the archive this process holds will not open. Published because the
+                # alternative is the failure that looks like health: a fresh hold, a green console and
+                # nothing being written. Whatever reads it must not count that volume as served.
+                "volume_error": self.volume_error,
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
                 "fetched": ",".join(self.fetched[-32:]),
                 "closed": ",".join(self.closed)}
@@ -216,32 +221,63 @@ class RecWorker(VmsWorker):
         held = self.hold
         if held is not None and (held not in free or not self.renew_hold()):
             self.leave_volume(f"volume {held} is not this recorder's any more")   # withdrawn, disabled, or taken from us
-        if self.hold is not None:
-            self.volume, self.capacity = self.hold, self.full_capacity
-            self._write_into(rows[self.hold])
-            return self.volume
-        if not free:
+        if self.hold is None and not free:
             # Nothing declared anywhere: the box as it was before volumes were rows — one place, named
             # after the server. Note this is reached after letting go above, so withdrawing the last
             # volume does not leave a process quietly writing into it.
-            self.volume, self.capacity = self.default_volume, self.full_capacity
+            self.volume, self.capacity, self.volume_error = self.default_volume, self.full_capacity, ""
             return self.volume
-        taken = self.claim_hold(free)                              # None: every declared volume has a live recorder
-        self.volume = taken or ""
-        self.capacity = self.full_capacity if taken else 0         # a spare is not a place to put a recording
-        if taken:
-            self._write_into(rows[taken])
-        return self.volume
+        # Take one, and then OPEN it — the step that was missing. Holding a volume and being unable to
+        # write into it is the worst failure this subsystem has, because every number says it is fine:
+        # the hold is fresh, the console counts it served, and no footage is being written. So the open
+        # decides, and a volume that will not open is handed back — but only if there is somewhere else
+        # to go. Letting go of the only archive this box can reach would stop it recording altogether,
+        # which is a worse answer than recording into a broken one and saying so.
+        skipped: set[str] = set()
+        broken: list[tuple[str, str]] = []                         # what we handed back on the way, and why
+        while True:
+            if self.hold is None:
+                candidates = [n for n in free if n not in skipped]
+                taken = self.claim_hold(candidates) if candidates else None
+                if taken is None:
+                    # Nothing else to be had — every other declared archive has a live recorder, or there
+                    # are none. If we handed a broken one back getting here, take it BACK rather than
+                    # leave this box holding nothing: writing into an archive that will not open and
+                    # saying so is bad, and not recording at all because of diagnostics is worse.
+                    if broken and self.claim_hold([broken[0][0]]) is not None:
+                        self.volume, self.capacity, self.volume_error = self.hold, 0, broken[0][1]
+                        logging.error("%s: %s is the only archive it can reach and it will not open: %s",
+                                      self.name, self.hold, self.volume_error)
+                        return self.volume
+                    self.volume, self.capacity = "", 0             # a spare is not a place to put a recording
+                    return self.volume
+            err = self._write_into(rows[self.hold])
+            if err is None:
+                self.volume, self.capacity, self.volume_error = self.hold, self.full_capacity, ""
+                return self.volume
+            logging.warning("%s: %s will not open (%s) — looking for another", self.name, self.hold, err)
+            skipped.add(self.hold)
+            broken.append((self.hold, err))
+            self.volume_error = err
+            self.release_hold()                                    # so somebody who CAN write there may take it
 
     # Taking a volume means writing into ITS tree, so the archive this process promotes into follows the
     # hold. The spool does not: it is local scratch, one per process, and what is in it belongs to the
     # volume we were holding when it was recorded — which is why `leave_volume` promotes before letting
     # go, while we may still write there.
-    def _write_into(self, vol) -> None:
-        if vol.url and vol.url != self.archive.root:
-            self.archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall)
-            self.archive_root = vol.url
-            logging.info("%s: writing into %s (%s)", self.name, vol.name, vol.url)
+    # Returns None when the archive is open and writable, or the reason it is not. Opening is the only
+    # honest test: a declaration can name a path that does not exist, a mount that is gone or a bucket
+    # nobody can reach, and none of that is visible in the row.
+    def _write_into(self, vol) -> str | None:
+        if not vol.url or vol.url == self.archive.root:
+            return None
+        try:
+            archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall)
+        except OSError as e:
+            return str(e)
+        self.archive, self.archive_root = archive, vol.url
+        logging.info("%s: writing into %s (%s)", self.name, vol.name, vol.url)
+        return None
 
     # Stop writing into a volume that is no longer ours — the administrator withdrew it, or the hold
     # lapsed and somebody else took it. Every recording of that archive is stopped and released, which is

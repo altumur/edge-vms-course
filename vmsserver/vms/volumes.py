@@ -115,8 +115,17 @@ def refuse(fields: dict) -> None:
     if int(fields.get("quota_bytes", 0) or 0) <= 0:
         raise Refused("a volume needs `quota_bytes` — how much of the disk is ITS, in bytes "
                       "(the whole partition is a fine answer, and it is what the console offers)")
-    if not str(fields.get("url", "")):
+    url = str(fields.get("url", ""))
+    if not url:
         raise Refused("a volume needs a url: the directory it is, or the address it is at")
+    # The key never goes in the address, and this is the one place that can still say so. A url is
+    # printed on the page, carried in the recorder's heartbeat as `archive`, and written into the row —
+    # so `s3://KEY:SECRET@host/bucket` is the same secret in three public places, and the `*_secret`
+    # rule cannot help because the field it guards is not the one carrying it. The secret is a VALUE
+    # among values (`access_secret`), assembled only by the process that opens the volume.
+    if "@" in url.split("//", 1)[-1].split("/", 1)[0]:
+        raise Refused("a volume's url names the archive, never the key to it: the credentials go in "
+                      "`access_secret` — this string is printed on the page and published in heartbeats")
 
 
 def write(vars_, fields: dict) -> Volume:
@@ -195,18 +204,40 @@ def holders(vars_, sub: Subsystem) -> dict[str, Slot]:
 # see, because `home: <that volume>` is a preference and would otherwise put the footage somewhere else
 # without a word. `wanted`/`serving` is the same arithmetic one line up: how many processes the declared
 # list needs, and how many of them exist.
-def served(vars_, sub: Subsystem, now: float, lost_after: float = 45.0) -> dict:
+def served(vars_, sub: Subsystem, now: float, lost_after: float = 45.0, objects=None) -> dict:
     vols, held = declared(vars_), holders(vars_, sub)
+    broken = _unwritable(objects, sub, now, lost_after) if objects is not None else {}
     rows = []
     for v in vols:
         slot = held.get(v.name)
         live = slot is not None and not slot.released and slot.holder != "" and now <= slot.until
+        err = broken.get(v.name) if live else None
         row = {k: x for k, x in v.to_items().items() if not is_secret_field(k)}   # the rule at the source
-        rows.append({**row, "name": v.name, "served_by": slot.holder if live else None,
-                     "why": None if live else
+        rows.append({**row, "name": v.name, "served_by": slot.holder if live and not err else None,
+                     "why": None if live and not err else
+                            f"held by {slot.holder}, which cannot write there: {err}" if err else
                             "disabled by the administrator" if not v.enabled else
                             "declared, and no recorder has taken it" if slot is None or slot.holder == "" else
                             "the recorder that held it let go" if slot.released else
                             "the recorder that held it went silent"})
     wanted = len([v for v in vols if v.enabled])
     return {"volumes": rows, "wanted": wanted, "serving": len([r for r in rows if r["served_by"]])}
+
+
+# `{volume: why}` for the volumes a live recorder is holding and cannot write into.
+#
+# This is the third state, and it exists because the first two hid the worst failure there is. A hold is
+# fresh, so the console counted the volume served; no footage was being written; every number on the
+# screen was green. A declaration can name a path that is not there, a mount that went away or a bucket
+# nobody can reach, and none of that is visible in the row — only the process that opened it knows, so
+# the process says so (`volume_error` in its heartbeat) and this reads it.
+def _unwritable(objects, sub: Subsystem, now: float, lost_after: float) -> dict[str, str]:
+    from w2cplatform.console import heartbeats
+    out = {}
+    for hb in heartbeats(objects, sub.name + "/").values():
+        if now - hb.ts > lost_after:
+            continue                                    # a silent recorder's last word is not news about a volume
+        vol, err = str(hb.extra.get("volume", "")), str(hb.extra.get("volume_error", ""))
+        if vol and err:
+            out[vol] = err
+    return out
