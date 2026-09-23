@@ -289,6 +289,22 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
 # `spare: 0` with `serving < wanted` is the one state that needs a person: an archive was declared and
 # there is no process free to serve it. The console says so; it does not start one. Starting processes is
 # the scheduler's, here as everywhere — what the platform owes is the number, not the action.
+# The two numbers a scaling policy needs and nothing else has. `declared` is how many archives the
+# operator says should be written into; `unserved` is how many of those nobody is holding — which, added
+# to the recorders that are live, is the count this job must reach.
+#
+# Why here and not in the platform's `metrics_text`: it counts VOLUMES, and the platform has never heard
+# of one. `metrics_extra` is the seam, the same shape as `extra` for routes.
+def rec_metrics(rec_ctl: SpecController):
+    def lines() -> list[str]:
+        view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall())
+        return ["# TYPE rec_volumes_declared gauge",
+                f"rec_volumes_declared {view['wanted']}",
+                "# TYPE rec_volumes_unserved gauge",
+                f"rec_volumes_unserved {view['wanted'] - view['serving']}"]
+    return lines
+
+
 def rec_routes(rec_ctl: SpecController):
     def extra(handler, method, path, q):
         if not path.startswith("/volumes"):
@@ -339,7 +355,8 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))
     for name, c in (mounts or {}).items():
         m.mount(name, SpecConsole(c, wall=wall, index=index,             # every mount answers /events from the same merge
-                                  extra=rec_routes(c) if name == "rec" else None))   # …and `rec` answers for the archives too
+                                  extra=rec_routes(c) if name == "rec" else None,    # …and `rec` answers for the archives too
+                                  metrics_extra=rec_metrics(c) if name == "rec" else None))
     return m
 
 

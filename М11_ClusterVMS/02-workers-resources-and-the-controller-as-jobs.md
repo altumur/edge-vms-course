@@ -100,6 +100,10 @@ scaling {
 
 The Nomad Autoscaler — a separate agent under MPL-2.0, [`deploy/autoscaler.nomad.hcl`](clustervms/deploy/autoscaler.nomad.hcl) — evaluates that every minute against Prometheus, which scrapes the console's `/metrics`, where `vms_worker_load{worker="w-1"}` is `1 − headroom/capacity` straight from the heartbeat. At `avg = 1.0` and target `0.9` it sets `count = ⌈N × 1.0/0.9⌉`; at `0.4` it brings `N` down; `cooldown` keeps it from reading the 48 seconds of a failover as a demand change.
 
+**Why the recorder has a second check.** Load answers "are the processes that exist busy". It cannot answer "is there a process for every archive", and the recorder needs both: it holds ONE volume, so an archive the operator declared in the console and nobody is holding needs another process — while every recorder that exists may be at exactly the target. So `recworker.nomad.hcl` carries a `pass-through` check on `rec_workers_live + rec_volumes_unserved` beside the load one, and the Autoscaler takes the larger count. Scale-in stays the load check's: the archive check never asks for fewer than are running, because a spare is what makes the next archive get served in a pass instead of a deploy.
+
+That is also the shape of the answer to "who decides how many". The console publishes the number; the Autoscaler (or a hand) sets `count`; the controller places on what exists. Three actors, and the platform is not one of them.
+
 **Why load and not CPU.** A worker with two hundred idle cameras at 03:00 is at twelve percent CPU and *full* — every one of those cameras is assigned and must stay assigned. A CPU policy would scale the cluster down at night and strand them. Load says what the demand is: cameras that need a worker, over what the workers can carry. The controller adds nothing to this: it sums `headroom` from the heartbeats for the console and has no number of its own.
 
 ## Step 4 — Scale out, scale in, crash

@@ -23,6 +23,21 @@ job "recworker" {
           query  = "avg(rec_worker_load)"            # assigned ÷ capacity from the recorders' heartbeats — never disk I/O
           strategy "target-value" { target = 0.9 }
         }
+        # The second demand, and the one `load` cannot see. A recorder holds ONE archive
+        # (`servers: distinct` over `place_by: volume`), so an archive the operator declared and nobody
+        # holds needs a PROCESS, not a busier one — and the recorders that exist may be perfectly loaded
+        # while it sits unserved. `rec_volumes_unserved` is that count, published by the console beside
+        # the rest; with several checks the Autoscaler takes the larger count, so whichever demand is
+        # bigger wins and neither hides the other.
+        #
+        # Scale-IN is `load`'s alone: this check asks for at least as many processes as there are live
+        # ones, so it never brings the count down — a spare is cheap and it is what makes the NEXT
+        # archive get served in a pass instead of a deploy.
+        check "unserved-archives" {
+          source = "prometheus"
+          query  = "rec_workers_live + rec_volumes_unserved"
+          strategy "pass-through" {}
+        }
       }
     }
 

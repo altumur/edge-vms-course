@@ -307,6 +307,46 @@ def test_the_resource_sweeps_the_volumes_this_box_is_responsible_for():
     assert set(paths) == {"vol-b"}
 
 
+def test_the_numbers_a_scaling_policy_reads():
+    """`spare: 0` while something is declared and unserved is the one state that
+    needs a person — so it has to be a number a machine can read too, or the
+    person is the only mechanism there is.
+
+    And the trap this test exists for: a spare reports zero capacity, which the
+    load gauge would read as FULLY LOADED. Left in, one spare would demand the
+    next one for ever."""
+    from w2cplatform.console import SpecConsole
+    from vms.console import rec_metrics
+
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    for n in ("s3-main", "s3-cold"):
+        volumes.write(box.vars, {"name": n, "kind": "network", "url": f"s3://vms/{n}", "quota_bytes": 10 ** 12})
+    r, spare = _recorder(box, "r-1", "srv-a"), _recorder(box, "r-2", "srv-a")
+    r.volume_pass(); r.heartbeat_once()
+    spare.volume_pass(); spare.heartbeat_once()
+    assert (r.volume, spare.volume) == ("s3-cold", "s3-main")
+
+    con = SpecConsole(rec, wall=box.wall, metrics_extra=rec_metrics(rec))
+    text = con.metrics_text()
+    assert "rec_volumes_declared 2" in text and "rec_volumes_unserved 0" in text
+
+    volumes.write(box.vars, {"name": "s3-third", "kind": "network", "url": "s3://vms/z", "quota_bytes": 10 ** 12})
+    text = con.metrics_text()
+    assert "rec_volumes_declared 3" in text and "rec_volumes_unserved 1" in text   # declared, and nobody free
+
+    # every recorder here holds an archive, so none is spare and both are in the load gauge
+    assert "rec_spare_workers 0" in text
+    assert 'rec_worker_load{worker="r-1"}' in text and 'rec_worker_load{worker="r-2"}' in text
+
+    # …and when one of them is a spare, it is counted as one and kept OUT of the load gauge
+    volumes.delete(box.vars, "s3-main"); volumes.delete(box.vars, "s3-third")
+    spare.volume_pass(); spare.heartbeat_once()
+    text = con.metrics_text()
+    assert "rec_spare_workers 1" in text
+    assert 'rec_worker_load{worker="r-2"}' not in text
+
+
 def test_the_recorder_writes_into_the_volume_it_took():
     """Taking a place means writing into its tree. The archive a recorder
     promotes into follows the hold — otherwise a spare that took the network

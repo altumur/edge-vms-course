@@ -259,11 +259,16 @@ class SpecConsole:
     play (the subsystem's `extra` serves /timeline and /segment)."""
 
     def __init__(self, ctl: SpecController, marks_root: str | None = None, index=None, worst_failover: float = 0.0,
-                 wall=None, extra=None, media: bool = False, lost_after: float = 45.0):
+                 wall=None, extra=None, media: bool = False, lost_after: float = 45.0, metrics_extra=None):
         self.ctl, self.spec, self.index = ctl, ctl.spec, index
         self.worst_failover, self.wall, self.extra, self.media, self.lost_after = worst_failover, wall or ctl.wall, extra, media, lost_after
         self.instance = f"{socket.gethostname()}:{os.getpid()}"
         self.marks_root = marks_root
+        # The second seam of the same shape as `extra`. A subsystem may have a number nobody else has —
+        # `rec` knows how many archives are declared and how many nobody is writing into — and `/metrics`
+        # is where a scaling policy can see it. Called with no arguments, returns Prometheus lines; the
+        # platform never learns what it counted.
+        self.metrics_extra = metrics_extra
         self.marks = EventLog(marks_root, "console", self.instance, 1) if marks_root else None   # the console's own log: one writer, so epoch 1
         self.seen = IdempotencyKeys(ctl.vars, f"{self.spec.name}/idem/", self.wall)   # in the store: any instance answers a retry
         self.epoch_policy: dict[str, str] = {self.spec.name: self.spec.older_epochs}   # replaced by the Mount's shared one
@@ -371,7 +376,14 @@ class SpecConsole:
                  *[f'{p}_worker_headroom{{worker="{w}",server="{hb.extra.get("server", "?")}"}} {hb.extra.get(self.spec.headroom_from, 0)}' for w, hb in live.items()],
                  f"{p}_headroom {sum(int(hb.extra.get(self.spec.headroom_from, 0)) for hb in live.values())}",
                  f"# TYPE {p}_worker_load gauge",              # assigned / capacity: what a target-value policy scales on
-                 *[f'{p}_worker_load{{worker="{w}"}} {1 - int(hb.extra.get(self.spec.headroom_from, 0)) / max(1, int(hb.extra.get(self.spec.capacity_from, 1))):.3f}' for w, hb in live.items()],
+                 # …over the workers that ARE a place. A worker holding no place (`place_of` empty) is a
+                 # spare: it carries nothing and reports zero capacity, which this formula would read as
+                 # fully loaded — and a target-value policy would then scale out for ever, one spare
+                 # demanding the next. A spare is counted below instead, as what it is.
+                 *[f'{p}_worker_load{{worker="{w}"}} {1 - int(hb.extra.get(self.spec.headroom_from, 0)) / max(1, int(hb.extra.get(self.spec.capacity_from, 1))):.3f}'
+                   for w, hb in live.items() if self.ctl.place_of(w) != ""],
+                 f"# TYPE {p}_spare_workers gauge",            # running, holding no place, ready to take one
+                 f'{p}_spare_workers {sum(1 for w in live if self.ctl.place_of(w) == "")}',
                  f"# TYPE {p}_epoch_conflicts counter",
                  *[f'{p}_epoch_conflicts{{worker="{w}"}} {hb.extra.get("conflicts", 0)}' for w, hb in hbs.items()],
                  f"# TYPE {p}_failover_seconds gauge", f'{p}_failover_seconds{{kind="worst"}} {self.worst_failover}',
@@ -396,6 +408,8 @@ class SpecConsole:
                       f"{p}_blobs_total {len(self.ctl.objects.list(self.ctl.sub.blobs_prefix()))}",
                       f"# TYPE {p}_blobs_marked gauge",
                       f"{p}_blobs_marked {len(marked)}"]
+        if self.metrics_extra is not None:
+            lines += list(self.metrics_extra())                # the subsystem's own numbers, in its own words
         return "\n".join(lines) + "\n"
 
     # -- writes ---------------------------------------------------------------------------------
