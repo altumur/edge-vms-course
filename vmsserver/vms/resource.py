@@ -153,10 +153,64 @@ def vms_resource(archive: ArchiveResource, server: str, url: str, vars_, objects
 
     `archives` is {volume: ArchiveResource} on a box with several disks — one tree per
     volume, one recorder per volume (`place_by: volume`). Without it there is one
-    volume, it is the whole box, and nothing here is named."""
+    volume, it is the whole box, and nothing here is named — and `refresh_volumes`
+    replaces that with whatever the operator has declared, once a pass."""
     wall = wall or archive.wall
     volumes = {name: a.root for name, a in (archives or {}).items()} or None
     r = Resource(archive.root, server, url, vars_, objects, archive.bucket_seconds, wall, peers, volumes=volumes)
     r.register("rec", ArchivePolicy(archive, vars_, objects, r.peers, server, volumes=archives))   # footage is the recorder's: rec/<unit>/…, rec/recordings/<unit>
     r.database = EventDatabase(archive.root, server, database, wall, archive.bucket_seconds)
     return r
+
+
+# Which archives THIS server's resource is responsible for, from the declared rows — the trees whose
+# manifests it repairs, whose footage it retains and whose watermark it enforces.
+#
+# Two kinds and two answers. A LOCAL volume declared for this server is ours by declaration: the disk is
+# here whoever is recording into it, and its retention has to run even when no recorder is holding it —
+# footage does not stop ageing because nobody is writing. A NETWORK volume is ours only while a recorder
+# ON THIS BOX holds it, because exactly one box may sweep a bucket and the hold is what says which.
+#
+# The holder is an instance string, not a server, so the rec heartbeats are what map the two. A hold whose
+# holder nothing is heartbeating for is nobody's — the process is gone and another box will take the
+# volume and its policy with it.
+def archives_of(vars_, objects, sub, server: str, now: float, lost_after: float = 45.0) -> tuple[dict, dict]:
+    """`({volume: path}, {volume: quota_bytes})` for this server's resource."""
+    from w2cplatform.console import heartbeats
+    from . import volumes as vols_
+    on_server = {str(hb.extra.get("instance", "")): str(hb.extra.get("server", ""))
+                 for hb in heartbeats(objects, sub.name + "/").values() if now - hb.ts <= lost_after}
+    held = vols_.holders(vars_, sub)
+    paths, quotas = {}, {}
+    for v in vols_.declared(vars_):
+        if not v.enabled:
+            continue
+        if v.kind == "local":
+            mine = v.server == server
+        else:
+            slot = held.get(v.name)
+            mine = slot is not None and not slot.released and now <= slot.until and on_server.get(slot.holder) == server
+        if mine:
+            paths[v.name], quotas[v.name] = v.url, v.quota_bytes
+    return paths, quotas
+
+
+# Once a pass, before the policy runs: the declared list is configuration and it changes while this
+# process is alive. Nothing is torn down — a volume that went away simply stops being walked, and one
+# that arrived is created and swept from the next pass. With nothing declared this is a no-op and the
+# resource stays the single unnamed tree it was built as.
+def refresh_volumes(r: Resource, vars_, objects, sub, now: float) -> dict:
+    paths, quotas = archives_of(vars_, objects, sub, r.server, now)
+    if not paths:
+        return r.volumes
+    if paths != r.volumes:
+        for p in paths.values():
+            os.makedirs(p, exist_ok=True)
+        r.volumes, r.root = dict(paths), next(iter(paths.values()))
+        r._volume_usage = {}                                   # the numbers belonged to the old set
+        hook = r.hooks.get("rec")
+        if hook is not None:                                   # the media policy walks the same trees
+            hook.volumes = {name: ArchiveResource(hook.res.spool, path, hook.res.bucket_seconds, r.wall)
+                            for name, path in paths.items()}
+    r.quotas = {k: v for k, v in quotas.items() if v > 0}
+    return r.volumes

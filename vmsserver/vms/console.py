@@ -294,9 +294,13 @@ def rec_routes(rec_ctl: SpecController):
         if not path.startswith("/volumes"):
             return None
         if method == "GET" and path in ("/volumes", "/volumes/"):
-            view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall())
+            now = rec_ctl.wall()
+            view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now)
             spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
-            return 200, {**view, "spare": len(spare), "spares": sorted(spare)}
+            return 200, {**view, "spare": len(spare), "spares": sorted(spare),
+                         # …and what to offer somebody who has declared nothing yet: the disk each box
+                         # already records into, sized to its partition. A proposal, not a row.
+                         "suggested": volumes.suggest(rec_ctl.vars, rec_ctl.objects, rec_ctl.spec.sub, now)}
         if method == "POST" and path in ("/volumes", "/volumes/"):
             body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))) or b"{}")
             try:

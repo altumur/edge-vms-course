@@ -437,7 +437,8 @@ def resource() -> None:
     import socket
     import time
     from w2cplatform.resource import serve
-    from .resource import vms_resource, vms_routes, vms_writes
+    from .config import REC_SPEC
+    from .resource import refresh_volumes, vms_resource, vms_routes, vms_writes
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
     vars_ = open_vars(CONFIG_URL)
     objects = FsObjectStore(os.path.join(root, "objects"))
@@ -451,6 +452,10 @@ def resource() -> None:
     last_policy = 0.0
     while not stop.is_set():
         try:
+            # The declared volumes are configuration and they change under a running process: a network
+            # archive created on the console, a disk split in two. Read before the heartbeat, so the
+            # spaces this box publishes are the spaces it is actually responsible for.
+            refresh_volumes(res, vars_, objects, REC_SPEC.sub, time.time())
             res.heartbeat()
             if time.time() - last_policy >= 600:
                 logging.info("policy: %s", res.pass_()); last_policy = time.time()

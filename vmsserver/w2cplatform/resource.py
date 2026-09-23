@@ -246,7 +246,7 @@ class Resource:
 
     def __init__(self, root: str | None, server: str, url: str, vars_, objects, bucket_seconds: int = 600,
                  wall=time.time, peers: PeerClient | None = None, lost_after: float = 45.0, space_probe=None,
-                 volumes: dict[str, str] | None = None):
+                 volumes: dict[str, str] | None = None, quotas: dict[str, int] | None = None):
         # A server's disks, named. One volume is the common case and stays the whole of `root`; several are
         # what a box with more than one disk actually has, and they are the resource's INTERNAL structure:
         # the resource is still one per server, because reachability is a property of a server and a volume
@@ -255,12 +255,23 @@ class Resource:
         self.volumes = dict(volumes) if volumes else {"default": root}
         if not self.volumes or any(not v for v in self.volumes.values()):
             raise ValueError("a resource needs at least one volume with a path")
+        # A CEILING per volume, in bytes, and zero means "the disk is the ceiling". Two things need it and
+        # neither is exotic. A network archive has no disk to ask — `shutil.disk_usage` on a mount point
+        # answers about the machine, not the bucket. And two volumes on ONE partition — which is how an
+        # operator splits a disk between a long-retention archive and a short one — would otherwise both
+        # read the same free space and both believe they own it.
+        #
+        # A quota is a ceiling, not a reservation: a volume gets the SMALLER of what its quota leaves and
+        # what the disk actually has. Nothing is set aside, and a disk filled by somebody else is still
+        # full, whatever the quota says.
+        self.quotas = {k: int(v) for k, v in (quotas or {}).items() if int(v) > 0}
         self.root = next(iter(self.volumes.values()))          # the first: what single-volume callers still mean
         self.server, self.url, self.vars, self.objects = server, url, vars_, objects
         self.bucket_seconds, self.wall, self.peers, self.lost_after = bucket_seconds, wall, peers or PeerClient(), lost_after
         check_schema(vars_)                                  # a build older than the store does not run at all
         self.space_probe = space_probe or disk_space         # a test cannot fill a disk
         self.last_usage: int | None = None                   # the tree walk's answer, refreshed by `pass_`
+        self._volume_usage: dict[str, int] = {}              # …and per volume, for the ones with a quota
         self.usage_at = 0.0                                  # …and when it was taken: a stale number must say so
         self.hooks: dict[str, object] = {}         # subsystem -> object with .pass_(now) -> dict: its own policy on ITS part of the tree
         self.database = None                       # an eventdatabase.EventDatabase over this tree, if the job runs one: served as GET /events
@@ -326,9 +337,10 @@ class Resource:
     # archive is a quarter of a million files, and walking them touches every inode in the tree. Measured
     # once per policy pass (`pass_`), published from the cache with the time it was taken (`usage_at`).
     # What decides anything is `space()` — one `statvfs`, cheap enough for every heartbeat.
-    def usage(self) -> int:
+    def usage(self, volume: str | None = None) -> int:
+        roots = [self.volumes[volume]] if volume is not None else list(self.volumes.values())
         total = 0
-        for root in self.volumes.values():
+        for root in roots:
             for d, _, files in os.walk(root):
                 for f in files:
                     total += os.path.getsize(os.path.join(d, f))
@@ -340,6 +352,16 @@ class Resource:
             self.last_usage, self.usage_at = self.usage(), self.wall()
         return self.last_usage
 
+    # The same, per volume, and only for the volumes that have a quota — the rest never ask. Cached beside
+    # the whole-tree number and refreshed by `pass_`: a walk per volume per watermark check would be the
+    # one place in this file where measuring costs more than what it decides.
+    def usage_of(self, volume: str) -> int:
+        cached = self._volume_usage.get(volume)
+        if cached is None:
+            cached = self.usage(volume)
+            self._volume_usage[volume] = cached
+        return cached
+
     # (total, free) of the disk, and how full it is. `free` is what a peer reads before sending anything
     # here: an evacuation onto a disk that is itself tight only moves the problem.
     def space(self, volume: str | None = None) -> dict:
@@ -350,6 +372,11 @@ class Resource:
         total = free = 0
         for n in names:
             t, f = self.space_probe(self.volumes[n])
+            q = self.quotas.get(n, 0)
+            if q:
+                left = max(0, q - self.usage_of(n))           # what the CEILING leaves
+                t = min(t, q) if t else q                     # `t == 0`: no disk behind this path (a bucket)
+                f = min(f, left) if t else left               # …and then the quota is the only truth there is
             total += t; free += f
         return {"total": total, "free": free, "used": total - free,
                 "full": (total - free) / total if total else 0.0}
@@ -499,6 +526,7 @@ class Resource:
             out.update({f"{sub}.{k}": v for k, v in h.pass_(self.wall()).items()})
         out["removed"] = self.retain()
         self.last_usage, self.usage_at = self.usage(), self.wall()    # the one walk of the pass, not one per heartbeat
+        self._volume_usage = {n: self.usage(n) for n in self.quotas}  # …and the same for the volumes with a ceiling
         out["usage"] = self.last_usage
         out.update(self.relieve())
         out.update(self.mirror())

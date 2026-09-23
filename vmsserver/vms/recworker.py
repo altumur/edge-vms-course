@@ -211,12 +211,14 @@ class RecWorker(VmsWorker):
     def volume_pass(self) -> str:
         if self.pinned:
             return self.volume
-        free = volumes.servable(volumes.declared(self.vars), self.server)
+        rows = {v.name: v for v in volumes.declared(self.vars)}
+        free = volumes.servable(list(rows.values()), self.server)
         held = self.hold
         if held is not None and (held not in free or not self.renew_hold()):
             self.leave_volume(f"volume {held} is not this recorder's any more")   # withdrawn, disabled, or taken from us
         if self.hold is not None:
             self.volume, self.capacity = self.hold, self.full_capacity
+            self._write_into(rows[self.hold])
             return self.volume
         if not free:
             # Nothing declared anywhere: the box as it was before volumes were rows — one place, named
@@ -227,7 +229,19 @@ class RecWorker(VmsWorker):
         taken = self.claim_hold(free)                              # None: every declared volume has a live recorder
         self.volume = taken or ""
         self.capacity = self.full_capacity if taken else 0         # a spare is not a place to put a recording
+        if taken:
+            self._write_into(rows[taken])
         return self.volume
+
+    # Taking a volume means writing into ITS tree, so the archive this process promotes into follows the
+    # hold. The spool does not: it is local scratch, one per process, and what is in it belongs to the
+    # volume we were holding when it was recorded — which is why `leave_volume` promotes before letting
+    # go, while we may still write there.
+    def _write_into(self, vol) -> None:
+        if vol.url and vol.url != self.archive.root:
+            self.archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall)
+            self.archive_root = vol.url
+            logging.info("%s: writing into %s (%s)", self.name, vol.name, vol.url)
 
     # Stop writing into a volume that is no longer ours — the administrator withdrew it, or the hold
     # lapsed and somebody else took it. Every recording of that archive is stopped and released, which is
@@ -235,6 +249,10 @@ class RecWorker(VmsWorker):
     # running, and may take another volume on the next pass.
     def leave_volume(self, why: str) -> None:
         logging.warning("%s: %s — stopping its recordings", self.name, why)
+        try:
+            self.promote_closed()                    # what is in the spool belongs to THAT archive, and we still hold it
+        except OSError as e:                         # a volume that went away under us: the footage is where it is
+            logging.warning("%s: could not promote the spool into %s: %s", self.name, self.archive.root, e)
         for uid in list(self.reconciler.actual):
             self.actuator("stop", {"id": uid})
             self.reconciler.actual.pop(uid, None)

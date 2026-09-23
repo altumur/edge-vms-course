@@ -7,6 +7,7 @@ and a hold (`rec/holds/<name>`), and these tests are about the seam between the
 two: a declaration is not a place until somebody is holding it."""
 import io
 import json
+import os
 
 from w2cplatform.contract import Heartbeat, Slot
 from w2cplatform.spec import Refused, SpecController
@@ -24,9 +25,10 @@ def _recorder(box, name, server, **kw):
                      clock=box.clock, wall=box.wall, server=server, env={}, **kw)
 
 
-def _resource(box, server):
+def _resource(box, server, total=0):
     box.objects.put(f"platform/resources/{server}/heartbeat",
-                    json.dumps({"server": server, "ts": box.wall(), "url": f"http://{server}", "units": {}}).encode())
+                    json.dumps({"server": server, "ts": box.wall(), "url": f"http://{server}", "units": {},
+                                "space": {"total": total, "free": total}}).encode())
 
 
 def test_a_network_volume_needs_a_quota_and_a_local_one_needs_a_server():
@@ -35,17 +37,19 @@ def test_a_network_volume_needs_a_quota_and_a_local_one_needs_a_server():
     machine can reach — but there is no `statvfs` for a bucket, so the ceiling
     the watermark counts against has to be given, not read."""
     box = Box()
-    for bad, why in (({"name": "vol-a", "kind": "local", "url": "/data/a"}, "server"),
+    for bad, why in (({"name": "vol-a", "kind": "local", "url": "/data/a", "quota_bytes": 1}, "server"),
                      ({"name": "s3", "kind": "network", "url": "s3://b/p"}, "quota_bytes"),
                      ({"name": "s3", "kind": "network", "url": "s3://b/p", "quota_bytes": 1, "server": "srv-a"}, "server"),
-                     ({"name": "../etc", "kind": "local", "url": "/data/a", "server": "srv-a"}, "not a path")):
+                     ({"name": "../etc", "kind": "local", "url": "/data/a", "server": "srv-a",
+                       "quota_bytes": 1}, "not a path"),
+                     ({"name": "vol-a", "kind": "local", "url": "/data/a", "server": "srv-a"}, "quota_bytes")):
         try:
             volumes.write(box.vars, bad)
             raise AssertionError(f"accepted {bad}")
         except Refused as e:
             assert why in str(e), (bad, e)
 
-    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": "/data/a", "server": "srv-a"})
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": "/data/a", "server": "srv-a", "quota_bytes": 10 ** 11})
     volumes.write(box.vars, {"name": "s3-main", "kind": "network", "url": "s3://vms/site-7", "quota_bytes": 10 ** 12,
                              "access_secret": "AKIA-and-the-rest"})
     assert [v.name for v in volumes.declared(box.vars)] == ["s3-main", "vol-a"]
@@ -61,8 +65,8 @@ def test_who_may_serve_what():
     volume has any. That asymmetry is the whole arithmetic of spares: one spare
     per box absorbs one network volume per box."""
     box = Box()
-    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": "/data/a", "server": "srv-a"})
-    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": "/data/b", "server": "srv-b"})
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": "/data/a", "server": "srv-a", "quota_bytes": 10 ** 11})
+    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": "/data/b", "server": "srv-b", "quota_bytes": 10 ** 11})
     volumes.write(box.vars, {"name": "s3-main", "kind": "network", "url": "s3://vms/x", "quota_bytes": 10 ** 12})
     volumes.write(box.vars, {"name": "s3-old", "kind": "network", "url": "s3://vms/y", "quota_bytes": 10 ** 12,
                              "enabled": "false"})
@@ -208,3 +212,127 @@ def test_the_console_declares_a_volume_and_says_who_serves_it():
     status, body = route(_Body(json.dumps({"name": "s3-x", "kind": "network", "url": "s3://vms/y"}).encode()),
                          "POST", "/volumes", {})
     assert status == 400 and "quota_bytes" in body["detail"]
+
+
+def test_the_console_offers_the_disk_this_box_already_records_into():
+    """The first volume an operator ever declares should not be typed out. The
+    box already says where it records (the recorder's heartbeat) and how big
+    that filesystem is (the resource's), so the console offers exactly that,
+    with the partition's own size as the capacity — a number the operator can
+    then make smaller to fit a second volume on the same disk beside it.
+
+    It is an OFFER: nothing here writes configuration on a process's behalf."""
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    route = rec_routes(rec)
+    _resource(box, "srv-a", total=4 * 10 ** 12)
+    r = _recorder(box, "r-1", "srv-a"); r.volume_pass(); r.heartbeat_once()
+
+    _, view = route(None, "GET", "/volumes", {})
+    assert view["wanted"] == 0 and view["suggested"] == [
+        {"name": "srv-a", "kind": "local", "url": box.archive, "server": "srv-a", "quota_bytes": 4 * 10 ** 12,
+         "why": "this box records here and the disk is not declared as a volume"}]
+
+    offer = {k: v for k, v in view["suggested"][0].items() if k != "why"}   # `why` is for the operator, not the row
+    assert route(_Body(json.dumps(offer).encode()), "POST", "/volumes", {})[0] == 201
+    _, view = route(None, "GET", "/volumes", {})
+    assert view["wanted"] == 1 and view["suggested"] == []          # declared: nothing left to offer
+
+    # and now the disk can be split: half of it to a second volume beside the first
+    status, _ = route(_Body(json.dumps({"name": "cold", "kind": "local", "url": box.archive + "/cold",
+                                        "server": "srv-a", "quota_bytes": 2 * 10 ** 12}).encode()),
+                      "POST", "/volumes", {})
+    assert status == 201
+    assert [v["name"] for v in route(None, "GET", "/volumes", {})[1]["volumes"]] == ["cold", "srv-a"]
+
+
+def test_a_quota_is_a_ceiling_and_not_a_reservation():
+    """What lets one partition hold two volumes. Each has a number of its own,
+    so neither reads the whole disk's free space and believes it is its own —
+    and neither is promised anything either: a volume gets the smaller of what
+    its quota leaves and what the disk actually has."""
+    from w2cplatform.resource import Resource
+
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    res = Resource(None, "srv-a", "http://srv-a", box.vars, box.objects, wall=box.wall,
+                   volumes={"vol-a": a, "vol-b": b}, quotas={"vol-a": 1000, "vol-b": 4000})
+    os.makedirs(os.path.join(a, "rec"), exist_ok=True)
+    open(os.path.join(a, "rec", "x"), "wb").write(b"." * 400)
+
+    assert res.space("vol-a") == {"total": 1000, "free": 600, "used": 400, "full": 0.4}
+    assert res.space("vol-b")["free"] == 4000                      # same partition, and not the same number
+    assert res.space()["total"] == 5000                            # the box is the sum of its volumes, once each
+
+    # the ceiling never promises more than the disk has: a probe that says the filesystem is nearly full
+    # wins over a generous quota, because a quota is not storage
+    res.space_probe = lambda path: (10 ** 6, 250)
+    assert res.space("vol-b")["free"] == 250
+
+
+def test_the_resource_sweeps_the_volumes_this_box_is_responsible_for():
+    """Which trees this server's resource repairs, retains and watches.
+
+    A LOCAL volume declared for it is its own by declaration — footage ages
+    whether anybody is recording into it or not. A NETWORK volume is its own
+    only while a recorder here holds it: exactly one box may sweep a bucket,
+    and the hold is what says which."""
+    from vms.archive import ArchiveResource
+    from vms.resource import archives_of, refresh_volumes, vms_resource
+
+    box = Box()
+    a, s3 = os.path.join(box.root, "vol-a"), os.path.join(box.root, "s3")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": os.path.join(box.root, "vol-b"),
+                             "server": "srv-b", "quota_bytes": 10 ** 9})
+    volumes.write(box.vars, {"name": "s3-main", "kind": "network", "url": s3, "quota_bytes": 10 ** 12})
+
+    res = vms_resource(ArchiveResource(box.spool, box.archive, wall=box.wall), "srv-a", "http://srv-a",
+                       box.vars, box.objects, wall=box.wall)
+    refresh_volumes(res, box.vars, box.objects, REC_SPEC.sub, box.wall())
+    assert set(res.volumes) == {"vol-a"}                           # srv-b's disk is not ours; the bucket is nobody's yet
+    assert res.quotas["vol-a"] == 10 ** 9
+
+    r1, r2 = _recorder(box, "r-1", "srv-a"), _recorder(box, "r-2", "srv-a")
+    r1.volume_pass(); r1.heartbeat_once()                          # takes vol-a: its own disk first
+    r2.volume_pass(); r2.heartbeat_once()                          # takes the bucket
+    assert (r1.volume, r2.volume) == ("vol-a", "s3-main")
+
+    refresh_volumes(res, box.vars, box.objects, REC_SPEC.sub, box.wall())
+    assert set(res.volumes) == {"vol-a", "s3-main"}                # ours while this box holds it
+    assert set(res.hooks["rec"].volumes) == {"vol-a", "s3-main"}   # …and the media policy walks both trees
+
+    # the same cluster from srv-b's side: the bucket is not its business, and its own disk is
+    paths, _ = archives_of(box.vars, box.objects, REC_SPEC.sub, "srv-b", box.wall())
+    assert set(paths) == {"vol-b"}
+
+
+def test_the_recorder_writes_into_the_volume_it_took():
+    """Taking a place means writing into its tree. The archive a recorder
+    promotes into follows the hold — otherwise a spare that took the network
+    archive would go on filling the local disk, and the declaration would be a
+    label on nothing."""
+    from datetime import datetime, timezone
+    from vms.archive import segment_path
+
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    for n, url in (("vol-a", a), ("vol-b", b)):
+        volumes.write(box.vars, {"name": n, "kind": "local", "url": url, "server": "srv-a", "quota_bytes": 10 ** 9})
+
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-a"
+    assert r.archive.root == a and r.archive_root == a             # …and the heartbeat says so too
+
+    # a segment closed in the spool while we held vol-a is promoted into vol-a, even though the volume is
+    # withdrawn in the same pass: we promote first, while we may still write there
+    t = box.wall()
+    spool_seg = segment_path(r.archive.spool, "7", 1, datetime.fromtimestamp(t - 600, timezone.utc))
+    os.makedirs(os.path.dirname(spool_seg), exist_ok=True)
+    open(spool_seg, "wb").write(b"footage")
+    os.utime(spool_seg, (t - 600, t - 600))                        # closed ten minutes ago, by the box's clock
+
+    volumes.delete(box.vars, "vol-a")
+    assert r.volume_pass() == "vol-b" and r.archive.root == b
+    assert os.path.isfile(os.path.join(a, "rec", "7", "e1", os.path.basename(spool_seg)))   # in vol-a's tree
+    assert not os.path.exists(os.path.join(b, "rec", "7"))                                   # and not in vol-b's

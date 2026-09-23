@@ -174,6 +174,28 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
   <div id="status"></div>
   <div id="policy"></div>
   <div id="servers"></div>
+  <div id="archbox" style="display:none">
+    <div class="row" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"><strong>Archives</strong><span id="archstate"></span></div>
+    <ul id="archlist"></ul>
+    <details id="archaddbox"><summary>Declare an archive</summary>
+      <form id="archadd">
+        <div class="row">
+          <label>name <input type="text" name="name" placeholder="cold | s3-main" required style="width:9em"></label>
+          <label>kind <select name="kind"><option value="local">local</option><option value="network">network</option></select></label>
+        </div>
+        <div class="row">
+          <label>path or url <input type="text" name="url" placeholder="/data/archive/cold" required style="width:16em"></label>
+        </div>
+        <div class="row">
+          <label>server <input type="text" name="server" placeholder="local only" style="width:8em"></label>
+          <label>capacity <input type="number" name="quota_gb" min="1" required style="width:6em"> GB</label>
+          <label>key <input type="password" name="access_secret" placeholder="network only" style="width:8em"></label>
+          <button type="submit">Declare</button>
+        </div>
+        <div class="err" id="archerr"></div>
+      </form>
+    </details>
+  </div>
   <div id="mounts"></div>
 </aside>
 <main>
@@ -575,15 +597,56 @@ $('#live').onclick = () => { if (current) startLive(); };
 // recorder, where that archive is — and the row's phase (running / waiting / pending) is the recorder's
 // word from its heartbeat. No recording: the unit is held (live, detectors, events) and not recorded.
 let rec = null;                                                       // the /rec/spec reply, or false when the console mounts no rec
-let archives = null;                                                  // the places rec workers report — `place_by: volume`, so: the archives
+// -- the archives: `/rec/volumes`, the administrator's list of places footage may go, and who is
+// writing into each. A declaration is not a place until a recorder takes it, so every line says both:
+// what was declared, and whether anybody is serving it. `served 1/2 · 0 spare` is the state that needs a
+// person — an archive was declared and no process is free to take it — and the console says so rather
+// than starting one, because starting processes is the scheduler's.
+const GB = 1024 * 1024 * 1024;
+let archives = null;                                                  // the declared volume names, for the Record form
 async function loadArchives() {
-  if (archives !== null) return;
-  try {
-    const d = await (await fetch('/rec/servers')).json();
-    archives = [...new Set(Object.values(d.servers || {}).flatMap(s => (s.workers || []).map(w => w.place)).filter(Boolean))].sort();
-  } catch (_) { archives = []; }
+  let d;
+  try { d = await (await fetch('/rec/volumes')).json(); } catch (_) { archives = []; return; }
+  archives = (d.volumes || []).map(v => v.name);
   $('#archives').innerHTML = archives.map(a => `<option value="${a}"></option>`).join('');
+  $('#archbox').style.display = 'block';
+  const short = d.serving < d.wanted && !d.spare;
+  $('#archstate').innerHTML = `<small${short ? ' class="err"' : ''}>served ${d.serving}/${d.wanted} · ${d.spare} spare` +
+                              `${short ? ' — declared and unserved: start another recorder' : ''}</small>`;
+  const ul = $('#archlist'); ul.innerHTML = '';
+  for (const v of d.volumes || []) {
+    const li = document.createElement('li'); li.className = v.served_by ? 'running' : '';
+    li.innerHTML = `<span><span class="dot"></span>${v.name} <small>${v.kind} · ${Math.round(v.quota_bytes / GB)} GB · ${v.url}</small></span>` +
+                   `<small>${v.served_by ? 'served by ' + v.served_by : v.why} <a href="#" data-act="del">delete</a></small>`;
+    li.querySelector('[data-act=del]').onclick = async e => {
+      e.preventDefault();
+      if (!confirm(`Stop using ${v.name}? The footage already written stays where it is — this removes the declaration, not the archive.`)) return;
+      try { await send('DELETE', `/rec/volumes/${encodeURIComponent(v.name)}`); } catch (err) { $('#archerr').textContent = 'refused: ' + err.message; }
+      loadArchives();
+    };
+    ul.appendChild(li);
+  }
+  for (const s of d.suggested || []) {                                // a disk nobody declared yet: one button, pre-filled
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${s.name} <small>${s.why}</small></span><small>${Math.round(s.quota_bytes / GB)} GB <a href="#" data-act="dec">declare</a></small>`;
+    li.querySelector('[data-act=dec]').onclick = async e => {
+      e.preventDefault();
+      try { await send('POST', '/rec/volumes', { name: s.name, kind: 'local', url: s.url, server: s.server, quota_bytes: s.quota_bytes }); }
+      catch (err) { $('#archerr').textContent = 'refused: ' + err.message; }
+      loadArchives();
+    };
+    ul.appendChild(li);
+  }
 }
+$('#archadd').onsubmit = async e => {
+  e.preventDefault(); $('#archerr').textContent = '';
+  const f = Object.fromEntries(new FormData(e.target));
+  const body = { name: f.name, kind: f.kind, url: f.url, quota_bytes: Math.round(parseFloat(f.quota_gb) * GB) };
+  if (f.server) body.server = f.server;
+  if (f.access_secret) body.access_secret = f.access_secret;
+  try { await send('POST', '/rec/volumes', body); e.target.reset(); loadArchives(); }
+  catch (err) { $('#archerr').textContent = 'refused: ' + err.message; }
+};
 async function loadRec() {
   if (rec === null) { try { const r = await fetch('/rec/spec'); rec = r.ok ? await r.json() : false; } catch (_) { rec = false; } }
   $('#recbox').style.display = rec && current != null ? 'block' : 'none';
@@ -700,5 +763,5 @@ async function loadResources() {
 window.addEventListener('beforeunload', stopLive);
 $('#last24').onclick = () => { window_ = [Date.now() / 1000 - 86400, Date.now() / 1000]; if (current) loadTimeline(); };
 $('#all').onclick = () => { window_ = null; if (current) loadTimeline(); };
-loadSpec().then(() => { loadUnits(); loadResources(); setInterval(() => { loadUnits(); loadDets(); loadRec(); loadResources(); }, 10000); setInterval(loadEvents, 5000); });
+loadSpec().then(() => { loadUnits(); loadResources(); loadArchives(); setInterval(() => { loadUnits(); loadDets(); loadRec(); loadResources(); loadArchives(); }, 10000); setInterval(loadEvents, 5000); });
 </script>

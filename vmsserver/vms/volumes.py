@@ -104,11 +104,17 @@ def refuse(fields: dict) -> None:
         raise Refused(f"a volume is {' or '.join(KINDS)}, not {kind!r}")
     if kind == "local" and not str(fields.get("server", "")):
         raise Refused("a local volume is a disk on one server: name it")
-    if kind == "network":
-        if str(fields.get("server", "")):
-            raise Refused("a network volume is served by whichever box takes it — leave `server` empty")
-        if int(fields.get("quota_bytes", 0) or 0) <= 0:
-            raise Refused("a network volume needs `quota_bytes`: there is no disk to ask how full it is")
+    if kind == "network" and str(fields.get("server", "")):
+        raise Refused("a network volume is served by whichever box takes it — leave `server` empty")
+    # EVERY declared volume has a ceiling, local ones included, and that is the change that lets a disk
+    # hold more than one. A volume without a quota means "this whole filesystem", and two of those on one
+    # partition both read the same free space and both believe it is theirs — the watermark then frees
+    # from one to make room the other immediately takes. A number each is what makes them two volumes and
+    # not two names for one. The console fills it with the partition's own size when it declares the first
+    # one, so the ordinary answer is a number the operator can then make smaller.
+    if int(fields.get("quota_bytes", 0) or 0) <= 0:
+        raise Refused("a volume needs `quota_bytes` — how much of the disk is ITS, in bytes "
+                      "(the whole partition is a fine answer, and it is what the console offers)")
     if not str(fields.get("url", "")):
         raise Refused("a volume needs a url: the directory it is, or the address it is at")
 
@@ -149,6 +155,28 @@ def servable(vols: list[Volume], server: str) -> list[str]:
     mine = [v.name for v in vols if v.enabled and v.kind == "local" and v.server == server]
     net = [v.name for v in vols if v.enabled and v.kind == "network"]
     return mine + net
+
+
+# What to offer an operator who has never declared anything. Every server whose recorder says which
+# archive root it writes into, and whose resource says how big that filesystem is, and for which no local
+# volume is declared yet: one proposal, named after the server, sized to the partition. A PROPOSAL and not
+# a row — nothing here writes configuration on a process's behalf. The operator presses the button, and
+# from that moment the disk is a volume with a number on it, which is the whole point: the number can be
+# made smaller, and a second volume can have the rest.
+def suggest(vars_, objects, sub: Subsystem, now: float, lost_after: float = 45.0) -> list[dict]:
+    from w2cplatform.console import heartbeats
+    from w2cplatform.resource import resources_seen
+    have = {v.server for v in declared(vars_) if v.kind == "local"}
+    res = resources_seen(objects)
+    out = {}
+    for _, hb in heartbeats(objects, sub.name + "/").items():
+        server, root = str(hb.extra.get("server", "")), str(hb.extra.get("archive", ""))
+        if not server or not root or server in have or now - hb.ts > lost_after:
+            continue
+        total = int(((res.get(server) or {}).get("space") or {}).get("total", 0))
+        out[server] = {"name": server, "kind": "local", "url": root, "server": server, "quota_bytes": total,
+                       "why": "this box records here and the disk is not declared as a volume"}
+    return [out[k] for k in sorted(out)]
 
 
 def holders(vars_, sub: Subsystem) -> dict[str, Slot]:
