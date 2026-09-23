@@ -19,7 +19,11 @@ each half can only learn from the other:
   4. a planned stop (SIGTERM) releases the slot ON PURPOSE, which is a different row from a lapse — the
      thing М10A Lesson 22's rolling upgrade depends on.
 
-It needs a Go toolchain and skips without one (the authoring box has none; CI has both).
+The Go half lives in the PRODUCT now, not in the course: `../vmsserver-go/` is kept as the product's
+port and is no longer written alongside these lessons. This test therefore runs only when it is asked
+for — `VMS_GO_PARITY=1`, with a Go toolchain present — and skips otherwise. That is the honest shape for
+a check that spans a boundary the course does not own: it stays here, buildable and true, and it does
+not colour the course's suite red because something on the other side of the boundary moved.
 """
 from __future__ import annotations
 
@@ -51,8 +55,8 @@ def p_slot(vars_, name):
 HERE = os.path.dirname(os.path.abspath(__file__))
 GO_SRC = os.path.join(os.path.dirname(os.path.dirname(HERE)), "vmsserver-go")
 
-pytestmark = pytest.mark.skipif(shutil.which("go") is None,
-                                reason="no Go toolchain: the cross-language test needs one")
+pytestmark = pytest.mark.skipif(os.environ.get("VMS_GO_PARITY") != "1" or shutil.which("go") is None,
+                                reason="the Go port is the product's: set VMS_GO_PARITY=1, with a Go toolchain, to check parity")
 
 
 def _build(tmp: str) -> str:

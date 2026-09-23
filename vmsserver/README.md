@@ -50,7 +50,8 @@ vmsserver/
                                recworker@.container (the only writer of segments), vmscontroller.container, reccontroller.container, console.container, resource.container,
                                liveworker@.container, livecontroller.container, detworker@.container, detcontroller.container, vms.env.example, check-quadlet.sh
   tests/                       113 tests, milliseconds, no GStreamer — including test_cross_go_worker.py, the real Go binary
-                               from ../vmsserver-go against this controller over one store (skipped where there is no Go)
+                               from the product's ../vmsserver-go against this controller over one store
+                               (opt-in: VMS_GO_PARITY=1, and a Go toolchain)
 ```
 
 ```bash
@@ -61,12 +62,20 @@ RECORDER_NAME=r-1 python3 -m vms recorder              # subscribes to the fan-o
 python3 -m vms worker                                  # no name: claims the first free slot — a lapsed one first
 ```
 
-## The Go port, and the one test that holds the two together
+## The Go port — the product's — and the test that can still hold the two together
 
 [`../vmsserver-go/`](../vmsserver-go/README.md) is this package whole, in Go: the same platform, the same
-subsystem, the same decisions, 102 tests. Both ports are complete and both are kept complete — the claim
-this course makes is that the shape can be stated twice, in two languages, and come out the same, and a
-half-port would not state it.
+subsystem, the same decisions, 102 tests. It was written alongside the course to make one claim — that
+the shape can be stated twice, in two languages, and come out the same — and that claim stands where it
+was made.
+
+What changed is ownership. **The Go port belongs to the product now.** The course is written against
+this package, and lessons no longer promise that Go has caught up: where they compare the two, they are
+describing how the product does it, not a second thing kept in step lesson by lesson.
+
+The cross-language test stays, and it is opt-in — `VMS_GO_PARITY=1` with a Go toolchain. A check that
+spans a boundary the course does not own should be runnable on demand and should not colour this suite
+red because something moved on the other side of it.
 
 A green suite here and a green suite there prove each side self-consistent and **nothing at all** about
 whether the two agree. They meet only in the store, so a disagreement would be silent: a renamed
