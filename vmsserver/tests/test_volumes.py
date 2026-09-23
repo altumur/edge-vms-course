@@ -484,3 +484,50 @@ def test_the_key_never_goes_into_the_address():
 
     for ok in ("/data/archive/cold", "file:///data/archive/cold", "s3://s3.example.com/vms/site-7"):
         volumes.refuse({"name": "v", "kind": "network", "url": ok, "quota_bytes": 1})
+
+
+def test_evacuation_reads_the_emptiest_volume_and_not_the_sum():
+    """A sum is the one number that cannot answer "can this box take a gigabyte".
+
+    The destination reports `space` across all its volumes, and the segments
+    land on ONE of them — whichever its recorder writes to. A box with one full
+    disk and one empty one reports half free, the "it is tight there" check
+    stops working, and back come the two servers trading gigabytes."""
+    from vms.space import room_on
+
+    half_full = {"space": {"total": 200, "free": 100},                 # the sum says: plenty
+                 "volumes": {"vol-a": {"total": 100, "free": 0},       # …and every byte of it is here
+                             "vol-b": {"total": 100, "free": 100}}}
+    assert room_on(half_full) == 100                                   # the emptiest, not the sum
+
+    tight = {"space": {"total": 200, "free": 20},
+             "volumes": {"vol-a": {"total": 100, "free": 10}, "vol-b": {"total": 100, "free": 10}}}
+    assert room_on(tight) == 10                                        # …and here the sum would have lied upward
+
+    # a resource that names no volumes was written before there were any: sum and volume are one number
+    assert room_on({"space": {"total": 100, "free": 40}}) == 40
+    assert room_on({}) == 0
+
+
+def test_a_recorder_that_holds_an_archive_is_not_a_spare():
+    """Taking a volume and opening it are two moments, and on a bucket whose
+    previous writer is still letting go the gap is most of a minute. A process
+    counted spare in that gap is a spare the operator is promised and the
+    scaling policy will not ask to replace — and both numbers heal themselves,
+    which is exactly when nobody notices."""
+    from vms.console import spare_workers
+
+    box = Box()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    volumes.write(box.vars, {"name": "s3-main", "kind": "network", "url": "s3://vms/x", "quota_bytes": 10 ** 12})
+
+    r, s = _recorder(box, "r-1", "srv-a"), _recorder(box, "r-2", "srv-a")
+    r.volume_pass(); s.volume_pass()
+    r.heartbeat_once(); s.heartbeat_once()
+    assert spare_workers(rec) == ["r-2"]                               # r-1 holds it, r-2 has nothing
+
+    # now the heartbeat of the holder says it is nowhere — the window between taking and opening
+    r.volume = ""
+    r.heartbeat_once()
+    assert rec.place_of("r-1") == ""                                   # the heartbeat alone would say "spare"
+    assert spare_workers(rec) == ["r-2"]                               # the hold says otherwise, and it wins

@@ -69,6 +69,22 @@ def foreign(archive: ArchiveResource, objects, server: str, now: float, lost_aft
 # The destination's free space is read from its heartbeat FIRST. Evacuating onto a disk that is itself
 # tight moves the problem and invites the pair to trade gigabytes back and forth; a destination with no
 # room is skipped, and step 2 answers instead.
+# What a destination can actually take, and why it is not `space.free`.
+#
+# `space` is the SUM over that server's volumes, and a sum is the one number that cannot answer this
+# question. A box with one full disk and one empty one reports "half free" — and the segments land on
+# ONE volume, whichever its recorder writes to. The check "the destination is tight" then silently stops
+# working, and back come the two servers trading gigabytes that `ROOM_MARGIN` exists to prevent.
+#
+# So: the emptiest volume it names, and the sum only for a resource that names no volumes — one written
+# before there were any, where the sum and the volume are the same number.
+def room_on(hb: dict) -> float:
+    vols = hb.get("volumes") or {}
+    if vols:
+        return max(float(v.get("free", 0) or 0) for v in vols.values())
+    return float(hb.get("space", {}).get("free", 0) or 0)
+
+
 def evacuate(archive: ArchiveResource, objects, peers, server: str, need: int, now: float,
              lost_after: float = 45.0, max_segments: int = MAX_SEGMENTS, vars_=None) -> dict:
     """Send foreign units home, delete what the destination confirms."""
@@ -84,7 +100,7 @@ def evacuate(archive: ArchiveResource, objects, peers, server: str, need: int, n
         if to == drains:                                         # about to stop: do not hand it gigabytes first
             skipped[unit] = f"{to} draining"
             continue
-        room = float(hb.get("space", {}).get("free", 0)) * ROOM_MARGIN
+        room = room_on(hb) * ROOM_MARGIN
         man = Manifest(archive.root, unit)
         segs = sorted(man.read(), key=lambda s: (s.start, s.epoch))
         sent, size = [], 0

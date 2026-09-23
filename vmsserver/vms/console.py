@@ -319,11 +319,28 @@ def scale_hint(rec_ctl: SpecController, unserved: int, spare: int) -> dict:
 #
 # Why here and not in the platform's `metrics_text`: it counts VOLUMES, and the platform has never heard
 # of one. `metrics_extra` is the seam, the same shape as `extra` for routes.
+# Running, and holding no archive. Two sources and not one, because the obvious single source is wrong
+# in a window that lasts: a recorder names its volume in the heartbeat once it has TAKEN it, and taking
+# is not opening — a bucket whose previous writer is still letting go can take the better part of a
+# minute. A process counted spare in that window is a spare the operator is promised and the scaling
+# policy will not ask to replace, and both numbers heal themselves, which is exactly when nobody notices.
+#
+# So a worker whose instance holds a volume is not spare, whatever its heartbeat says about where it is.
+def spare_workers(rec_ctl: SpecController) -> list[str]:
+    holding = {s.holder for s in volumes.holders(rec_ctl.vars, rec_ctl.spec.sub).values()
+               if s.holder and not s.released}
+    out = []
+    for w, hb in rec_ctl.workers_seen().items():
+        if rec_ctl.place_of(w) == "" and str(hb.extra.get("instance", "")) not in holding:
+            out.append(w)
+    return sorted(out)
+
+
 def rec_metrics(rec_ctl: SpecController):
     def lines() -> list[str]:
         view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall(), objects=rec_ctl.objects)
         unserved = view["wanted"] - view["serving"]
-        spare = sum(1 for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == "")
+        spare = len(spare_workers(rec_ctl))
         return ["# TYPE rec_volumes_declared gauge",
                 f"rec_volumes_declared {view['wanted']}",
                 "# TYPE rec_volumes_unserved gauge",
@@ -346,7 +363,7 @@ def rec_routes(rec_ctl: SpecController):
         if method == "GET" and path in ("/volumes", "/volumes/"):
             now = rec_ctl.wall()
             view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now, objects=rec_ctl.objects)
-            spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
+            spare = spare_workers(rec_ctl)
             return 200, {**view, "spare": len(spare), "spares": sorted(spare),
                          # `live` so that whatever acts on `needed` does not have to ask the orchestrator
                          # how many recorders are running — the console already knows, from heartbeats,
