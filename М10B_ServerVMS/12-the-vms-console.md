@@ -261,7 +261,8 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
     if live_ctl is not None:
         m.mount("live", SpecConsole(live_ctl, wall=wall, index=index))
     for name, c in (mounts or {}).items():
-        m.mount(name, SpecConsole(c, wall=wall, index=index))            # every mount answers /events from the same merge
+        m.mount(name, SpecConsole(c, wall=wall, index=index,             # every mount answers /events from the same merge
+                                  extra=rec_routes(c) if name == "rec" else None))   # …и `rec` отвечает ещё и про архивы
     return m
 ```
 
@@ -278,6 +279,14 @@ def make_console(ctl: VmsController, archive: ArchiveResource | None, wall=None,
 У консоли нет базы событий. Она спрашивает ресурсы по HTTP и сливает ответы (урок 15 М10A). И индекс **общий для всех подсистем**: события камеры, детекторов и отметок приходят одним запросом, потому что лежат на одних ресурсах в разных деревьях.
 
 Отсюда таймлайн, на котором рядом стоят засечки четырёх подсистем, — и ни одна из них об этом не знает.
+
+**`extra` у монтирования** — тот же протокол, что на корне, и ровно для того же: у `rec` есть вопрос, которого нет у генеричной консоли, — «какие вообще есть архивы, и пишет ли кто-нибудь в каждый». `GET /rec/volumes` отвечает списком заявленных томов и тем, кто их держит, `POST` заводит том, `DELETE` убирает **заявление** (не видео — так и сказано в ответе). Три числа рядом, и они важнее списка:
+
+```
+served 3/4 · 0 spare        объявлено четыре, обслуживаются три, свободных процессов нет
+```
+
+`spare: 0` при `serving < wanted` — единственное состояние, которому нужен человек: архив заведён, и взять его некому. Консоль это **называет** и не исправляет сама. Правило урока 4 М10A в третий раз: платформа не запускает процессов — но обязана сказать число, по которому поднимают `count`.
 
 Тест, который стоит прочитать целиком (он назван в примечании):
 
@@ -318,6 +327,8 @@ POST /whep/7                 → 201 + SDP, Location: /whep/session/<id>?gateway
 GET  /whep/7                 → строка вещания, шлюз, его статус
 DELETE /whep/session/<id>?gateway=g-1
 GET  /rec/recordings         → записи
+GET  /rec/volumes            → архивы: заявленные тома, кто их держит, сколько запасных
+POST /rec/volumes            → завести том (локальный: сервер и потолок; сетевой: адрес и ключ)
 GET  /det/units              → детекторы
 GET  /live/streams           → вещания
 GET  /mounts                 → {root: vms, mounts: {live, rec, det}}
