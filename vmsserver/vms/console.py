@@ -348,6 +348,10 @@ def rec_routes(rec_ctl: SpecController):
             view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, now)
             spare = [w for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == ""]
             return 200, {**view, "spare": len(spare), "spares": sorted(spare),
+                         # `live` so that whatever acts on `needed` does not have to ask the orchestrator
+                         # how many recorders are running — the console already knows, from heartbeats,
+                         # and one source for the pair means the two numbers cannot disagree.
+                         "live": len(rec_ctl.workers_seen()),
                          **scale_hint(rec_ctl, view["wanted"] - view["serving"], len(spare)),
                          # …and what to offer somebody who has declared nothing yet: the disk each box
                          # already records into, sized to its partition. A proposal, not a row.

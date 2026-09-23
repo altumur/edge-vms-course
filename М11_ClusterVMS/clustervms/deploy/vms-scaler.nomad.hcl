@@ -28,16 +28,23 @@ job "vms-scaler" {
         args    = ["-c", <<-EOS
           set -eu
           while true; do
-            # The number, never the command. `/rec/volumes` also returns `how` — a line written out for a
-            # person — and running a string that arrived over HTTP with a scheduler token in hand is
-            # remote code execution with extra steps.
-            needed=$(curl -fsS --max-time 5 "$CONSOLE/rec/volumes" \
-                     | python3 -c 'import json,sys; print(max(0,int(json.load(sys.stdin).get("needed") or 0)))' || echo 0)
+            # Both numbers from one reply, and the NUMBERS only. `/rec/volumes` also returns `how` — a
+            # line written out for a person — and running a string that arrived over HTTP with a
+            # scheduler token in hand is remote code execution with extra steps.
+            #
+            # `live` comes from the console rather than from `nomad job allocs` because the console
+            # already counts recorders, by heartbeat, which is the same evidence the shortage was
+            # computed from. Two sources would be two answers, and they would differ exactly while an
+            # allocation is starting — the moment this loop runs.
+            read -r live needed <<EOF
+          $(curl -fsS --max-time 5 "$CONSOLE/rec/volumes" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(int(d.get("live") or 0), max(0,int(d.get("needed") or 0)))' \
+            || echo "0 0")
+          EOF
             if [ "$needed" -gt 0 ]; then
-              live=$(nomad job status -json recworker | python3 -c 'import json,sys; print(len([a for a in json.load(sys.stdin).get("Allocations",[]) if a.get("ClientStatus")=="running"]))')
               want=$((live + needed))
               [ "$want" -le "$MAX_RECORDERS" ] || want=$MAX_RECORDERS
-              echo "vms-scaler: $needed archive(s) unheld; scaling recworker to $want"
+              echo "vms-scaler: $needed archive(s) unheld; $live recorder(s) live; scaling recworker to $want"
               nomad job scale recworker "$want" || true
             fi
             sleep "$INTERVAL"

@@ -324,6 +324,9 @@ def test_the_console_writes_out_the_command_and_does_not_run_it():
     r = _recorder(box, "r-1", "srv-a"); r.volume_pass(); r.heartbeat_once()
     _, view = route(None, "GET", "/volumes", {})
     assert view["needed"] == 1 and view["how"] == "systemctl start recworker@r-2"   # the next slot nobody holds
+    # `live` rides along so that whatever acts on `needed` — the timer on a box, the scaler on a cluster —
+    # gets both numbers from one reply and never asks the orchestrator for a second opinion
+    assert view["live"] == 1
 
     # a spare covers the gap, so nothing is needed and nothing is suggested
     s = _recorder(box, "r-2", "srv-a"); s.volume_pass(); s.heartbeat_once()
