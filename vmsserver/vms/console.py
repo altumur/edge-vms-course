@@ -322,10 +322,20 @@ def scale_hint(rec_ctl: SpecController, unserved: int, spare: int) -> dict:
 def rec_metrics(rec_ctl: SpecController):
     def lines() -> list[str]:
         view = volumes.served(rec_ctl.vars, rec_ctl.spec.sub, rec_ctl.wall())
+        unserved = view["wanted"] - view["serving"]
+        spare = sum(1 for w in rec_ctl.workers_seen() if rec_ctl.place_of(w) == "")
         return ["# TYPE rec_volumes_declared gauge",
                 f"rec_volumes_declared {view['wanted']}",
                 "# TYPE rec_volumes_unserved gauge",
-                f"rec_volumes_unserved {view['wanted'] - view['serving']}"]
+                f"rec_volumes_unserved {unserved}",
+                # The number a scaling policy must use, and the reason it is not `unserved` itself: an
+                # archive nobody CAN take does not become takeable by starting processes. A local volume
+                # declared for a server where the scheduler puts no recorder leaves `unserved` at one for
+                # ever, and a policy reading that would ask for one more worker, then another, up to its
+                # ceiling — every one of them a spare that cannot help. Subtracting the spares stops it
+                # after the first: one free process proves the shortage is not a shortage of processes.
+                "# TYPE rec_recorders_needed gauge",
+                f"rec_recorders_needed {max(0, unserved - spare)}"]
     return lines
 
 

@@ -364,20 +364,32 @@ def test_the_numbers_a_scaling_policy_reads():
     text = con.metrics_text()
     assert "rec_volumes_declared 2" in text and "rec_volumes_unserved 0" in text
 
-    volumes.write(box.vars, {"name": "s3-third", "kind": "network", "url": "s3://vms/z", "quota_bytes": 10 ** 12})
-    text = con.metrics_text()
-    assert "rec_volumes_declared 3" in text and "rec_volumes_unserved 1" in text   # declared, and nobody free
-
-    # every recorder here holds an archive, so none is spare and both are in the load gauge
+    # both recorders hold an archive, so neither is spare and both are in the load gauge
     assert "rec_spare_workers 0" in text
     assert 'rec_worker_load{worker="r-1"}' in text and 'rec_worker_load{worker="r-2"}' in text
 
-    # …and when one of them is a spare, it is counted as one and kept OUT of the load gauge
-    volumes.delete(box.vars, "s3-main"); volumes.delete(box.vars, "s3-third")
-    spare.volume_pass(); spare.heartbeat_once()
+    volumes.write(box.vars, {"name": "s3-third", "kind": "network", "url": "s3://vms/z", "quota_bytes": 10 ** 12})
     text = con.metrics_text()
-    assert "rec_spare_workers 1" in text
-    assert 'rec_worker_load{worker="r-2"}' not in text
+    assert "rec_volumes_declared 3" in text and "rec_volumes_unserved 1" in text   # declared, and nobody free
+    assert "rec_recorders_needed 1" in text                        # …and no spare to take it: a process is missing
+
+    # A shortage a process cannot fix, which is the runaway this gauge exists to stop. `srv-b-disk` is a
+    # disk on a box that runs no recorder: starting one HERE does not make it servable, and a policy
+    # reading `unserved` would ask for a worker, and another, and another, to its ceiling — every one of
+    # them a spare that cannot help. One spare is proof the shortage is not a shortage of processes.
+    volumes.delete(box.vars, "s3-third")                           # everything a recorder here could take is taken
+    volumes.write(box.vars, {"name": "srv-b-disk", "kind": "local", "url": "/data/b", "server": "srv-b",
+                             "quota_bytes": 10 ** 9})
+    idle = _recorder(box, "r-3", "srv-a")
+    assert idle.volume_pass() == ""                                # nothing here for it: a spare
+    idle.heartbeat_once()
+    text = con.metrics_text()
+    assert "rec_volumes_unserved 1" in text and "rec_spare_workers 1" in text
+    assert "rec_recorders_needed 0" in text
+
+    # …and a spare is kept OUT of the load gauge, where zero capacity would read as fully loaded
+    assert 'rec_worker_load{worker="r-3"}' not in text
+    assert 'rec_worker_load{worker="r-1"}' in text
 
 
 def test_the_recorder_writes_into_the_volume_it_took():

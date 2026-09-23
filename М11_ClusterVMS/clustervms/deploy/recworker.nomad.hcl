@@ -33,9 +33,17 @@ job "recworker" {
         # Scale-IN is `load`'s alone: this check asks for at least as many processes as there are live
         # ones, so it never brings the count down — a spare is cheap and it is what makes the NEXT
         # archive get served in a pass instead of a deploy.
+        # `rec_recorders_needed`, not `rec_volumes_unserved`: an archive nobody CAN take does not become
+        # takeable by starting processes. A local volume declared for a server the scheduler puts no
+        # recorder on would leave `unserved` at one for ever, and this check would then ask for one more
+        # worker, and another, to the ceiling — each of them a spare that cannot help. The console
+        # subtracts the spares, so one free process is proof the shortage is not a shortage of processes.
+        #
+        # Counting LIVE workers rather than the configured count matters for the same reason: an
+        # allocation that cannot be placed leaves the query where it was instead of compounding.
         check "unserved-archives" {
           source = "prometheus"
-          query  = "rec_workers_live + rec_volumes_unserved"
+          query  = "rec_workers_live + rec_recorders_needed"
           strategy "pass-through" {}
         }
       }
