@@ -211,6 +211,21 @@ class SubsystemSpec:
     # is, and a second copy on the same server is not a second copy. Unplaceable while no other server
     # qualifies, and that is the honest answer — `/unplaceable` says so rather than quietly co-locating.
     spread_by: str = ""
+    # `group_by: <name>` — the mirror image, and the one the VMS needed first: units sharing a value go on
+    # the SAME worker. Also a FILTER, for a reason that is not about preference at all — a device is ONE
+    # connection. Sixteen channels of one recorder are sixteen units, and placing them on four workers
+    # opens four sessions to a box that licenses two; the subsystem then fails in the device's words
+    # ("too many sessions"), which is the hardest kind of failure to trace back to a placement decision.
+    #
+    # What the value is, the platform does not know: `group_value(row)` reads the field of this name by
+    # default, and a subsystem whose grouping is not a plain field overrides it — the VMS parses the
+    # device out of `driverpack://<device>/<channel>`, which no generic loader could do.
+    #
+    # Where it hurts, and it does: the worker holding the group is not chosen for its room. A group that
+    # outgrows its worker becomes unplaceable rather than spilling over, because spilling over is the
+    # thing being prevented. The operator raises that worker's capacity or moves the group — `/unplaceable`
+    # names the device, so the answer is on the screen rather than in a session count on a camera.
+    group_by: str = ""
     # `place_by: <field>` — WHAT the policy and the home are counted in: the heartbeat field that names the
     # place a worker occupies. `server` by default, and for everything whose unit of storage is a server
     # that is the truth. A recorder's is not: a box with three disks runs three recorders, one per volume,
@@ -293,6 +308,7 @@ class SubsystemSpec:
                    near_by=str((pl.get("near") or {}).get("by", "id") if isinstance(pl.get("near"), dict) else "id"),
                    near_of=str((pl.get("near") or {}).get("of", "") if isinstance(pl.get("near"), dict) else ""),
                    spread_by=str(pl.get("spread_by", "") or ""),
+                   group_by=str(pl.get("group_by", "") or ""),
                    place_by=str(pl.get("place_by", "server") or "server"),
                    home=str(pl.get("home", "") or ""),
                    retire_field=str((pl.get("retire_when") or {}).get("field", "") or ""),
@@ -338,6 +354,10 @@ class SubsystemSpec:
             raise ValueError(f"spec {spec.name}: near.by names no field: {spec.near_by!r}")
         if spec.near_by != "id" and spec.near == "none":
             raise ValueError(f"spec {spec.name}: near.by needs a near to follow")
+        if spec.group_by and spec.group_by == spec.spread_by:
+            raise ValueError(f"spec {spec.name}: `group_by` and `spread_by` name the same field "
+                             f"({spec.group_by!r}): together they say units must be on one worker and on "
+                             f"different servers")
         if spec.near_of and spec.near == "none":
             raise ValueError(f"spec {spec.name}: near.of needs a near to follow")
         # `of` names a field of the OTHER subsystem's status, which this loader cannot see — nothing to
@@ -704,7 +724,39 @@ class SpecController(Controller):
     def eligible(self, row: dict, workers: list[str]) -> list[str]:
         rule = CONSTRAINTS[self.spec.constraint]
         out = [w for w in workers if rule(row, self.labels_of(w))]
-        return [w for w in out if self.server_of(w) not in self.servers_taken(row)]
+        out = [w for w in out if self.server_of(w) not in self.servers_taken(row)]
+        with_group = self.worker_with_group(row, out)
+        return [w for w in out if w == with_group] if with_group else out
+
+    # The worker already carrying a unit of this row's group, if there is one and it is still in the pool.
+    #
+    # "Still in the pool" is the whole of the care needed here. A placement on a worker that is gone,
+    # draining or idle by policy must NOT pin the group to it: that worker's units are on their way out,
+    # and honouring its placement would make every unit of the group unplaceable at exactly the moment
+    # the group has to move. Read from the live pool and the group re-forms wherever its first unit lands.
+    #
+    # Ties go to the smallest worker name so two passes agree — after a partial move two peers can sit on
+    # two workers, and picking "whichever came first" would walk the group between them.
+    def worker_with_group(self, row: dict, pool: list[str]) -> str | None:
+        if not self.spec.group_by:
+            return None
+        value = self.group_value(row)
+        if not value:
+            return None
+        mine, found = str(row["id"]), []
+        for other in self.units():
+            if str(other["id"]) == mine or self.group_value(other) != value:
+                continue
+            pl = self.placement(other["id"])
+            if pl is not None and pl.worker in pool:
+                found.append(pl.worker)
+        return sorted(found)[0] if found else None
+
+    # What `group_by` names, for this row. A field by default; a subsystem that knows better overrides —
+    # `VmsController` returns the device out of the source URL, because the row has no device field and
+    # a generic loader has no business parsing a scheme it has never heard of.
+    def group_value(self, row: dict) -> str:
+        return str(row.get(self.spec.group_by, "") or "")
 
     # The servers already carrying a unit that shares this row's `spread_by` value — where this one may
     # therefore NOT go. Empty when the subsystem does not ask to spread, which is every subsystem today.

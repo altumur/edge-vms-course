@@ -65,7 +65,7 @@ from w2cplatform.objects import ObjectStore
 from w2cplatform.spec import Placement, Refused, SpecController  # noqa: F401  — the VMS's names for the platform's things
 from w2cplatform.variables import Variables
 
-from .config import SPEC
+from .config import SPEC, device_of
 
 VMS = SPEC.sub
 
@@ -83,6 +83,15 @@ class VmsController(SpecController):
     # says which server, the hostname.
     def __init__(self, vars_: Variables, objects: ObjectStore, capacity: int = 50, wall=time.time, cluster: str | None = None):
         super().__init__(SPEC, vars_, objects, capacity, wall, cluster)
+
+    # WHAT `group_by: device` counts in. The row has no device field and never will: the operator types a
+    # source, and `driverpack://<device>/<channel>` is a scheme the platform has never heard of. So the
+    # subsystem that owns the scheme answers, and the platform keeps a hook instead of a parser.
+    #
+    # Empty for a row with no source — a camera being created, or a unit of another kind — and an empty
+    # group is no group: it constrains nothing.
+    def group_value(self, row: dict) -> str:
+        return device_of(row["source"]) if row.get("source") else ""
 
     # the VMS's word is "camera"
     create_camera = SpecController.create

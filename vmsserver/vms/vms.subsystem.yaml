@@ -87,6 +87,16 @@ placement:
   # labels in the worker's heartbeat (from `NOMAD_META_labels`). The placement reason names the labels
   # reached; `unplaceable()` lists cameras no live worker's labels can serve.
   constraint: labels-subset                     # the camera's labels ⊆ the worker's server's labels
+  # ONE CONNECTION PER DEVICE, and this is the line that makes it true. A recorder with sixteen channels
+  # is sixteen rows; without this they are placed by capacity alone, land on four workers, and open four
+  # sessions to a box that licenses two. The failure then arrives in the device's words — "too many
+  # sessions", a channel that will not start, a stream that drops when the fifth is added — and nothing
+  # in it points at a placement decision made on another server an hour earlier.
+  #
+  # `device` is not a field: `VmsController.group_value` parses it out of `driverpack://<device>/<channel>`,
+  # because the scheme is the subsystem's business and not the platform's. A row with no source groups
+  # with nothing, which is what a half-created camera should do.
+  group_by:   device                            # channels of one device go to ONE worker — it is one connection
   # a worker records into the resource on its own server: Nomad's `meta.archive` constraint puts it where
   # disks are declared, and this is the live fact — a worker whose server's resource has gone silent is
   # not placed on, and its cameras are moved off on the controller's next pass (`redistribute`).
