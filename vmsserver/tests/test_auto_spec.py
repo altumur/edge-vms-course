@@ -116,7 +116,7 @@ def test_matching_is_equality_and_nothing_else():
     """The evaluator's half of the language, beside the validation on purpose:
     two files would drift, and the drift would look like a scenario that never
     fires — the hardest kind of bug to see, because nothing happens."""
-    ev = {"sub": "vms", "unit": "12", "kind": "io.input", "t": 100.0, "port": "1", "value": "closed"}
+    ev = {"subsystem": "vms", "unit": "12", "kind": "io.input", "t": 100.0, "port": "1", "value": "closed"}
     assert fires({"sub": "vms", "kind": "io.input"}, ev)
     assert fires({"sub": "vms", "kind": "io.input", "unit": "12"}, ev)
     assert fires({"sub": "vms", "kind": "io.input", "match": {"port": 1}}, ev)       # numbers compare as text

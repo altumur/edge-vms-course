@@ -57,6 +57,19 @@ class AutoWorker(Worker):
     # How long a firing id is remembered after it is filed. Long enough that the same event, still inside
     # somebody's window, is not filed twice; short enough to be a handful of strings.
     REMEMBER = 900.0
+    # How far BEHIND `now` the cursor is allowed to stop, and the reason there is a distance at all: the
+    # merge is not a stream this process reads. A resource tails its files on a timer and the console
+    # merges over HTTP, so an event written at T becomes visible some seconds later. A cursor set to `now`
+    # is already past it, and `t <= since` then skips it FOR EVER — no refusal, no log line, just a
+    # scenario that does not fire, which is the most expensive silence in this subsystem.
+    #
+    # The asymmetry decides the number: re-reading a stretch costs a comparison (the firing ids are
+    # deterministic and the ones just filed are still remembered), running ahead costs a firing. Five
+    # seconds is comfortably more than the tail period.
+    SETTLE = 5.0
+    # Rows per (subsystem, kind) query. The merge answers `ORDER BY t LIMIT ?`, so a full window drops the
+    # NEWEST events — exactly the ones a scenario exists for.
+    PER_KIND = 500
 
     def __init__(self, name: str | None, vars_: Variables, objects, index=None, capacity: int | None = None,
                  clock=time.monotonic, wall=time.time, server: str | None = None,
@@ -120,7 +133,7 @@ class AutoWorker(Worker):
         window = float(row.get("within") or 0)
         # Read back far enough to answer the question, not far enough to answer it twice: the window is
         # how much history a firing may span, and `since` is how much of it is new.
-        events = self.window(since - window, now)
+        events = self.window(row, since - window, now)
         fired = 0
         for fid, at in self.firings(row, events, since):
             if fired >= self.PER_PASS:
@@ -133,15 +146,36 @@ class AutoWorker(Worker):
             self.file(row, fid, at)
             fired += 1
         self.forget(now)
-        front.set(now)                               # considered through NOW: a later event is a later pass
+        front.set(max(since, now - self.SETTLE))     # …and never further than the log has caught up to
         return fired
 
-    # The events to decide on. `unit=None`: a scenario watches every subsystem, which is the whole point of
-    # the merge — motion from `det`, an input from `vms`, a mark from the console, all in one list, already
-    # sorted by time and already fenced.
-    def window(self, t0: float, t1: float) -> list[dict]:
-        rep = self.index.query(max(0.0, t0), t1, limit=1000)
-        return [e for e in rep.get("events", []) if not e.get("fenced")]
+    # The events to decide on — ONE QUERY PER KIND THE SCENARIO WATCHES, and that is not an optimisation.
+    #
+    # A single "everything in the last five minutes" comes back `ORDER BY t LIMIT n`: when it overflows,
+    # what is dropped is the NEWEST end, which is the end a scenario cares about. Three cameras writing a
+    # statistics line every few seconds fill a thousand rows in a five-minute window, and from that moment
+    # the evaluator sees the beginning of the window and never the end. No refusal, no log line — the
+    # language gets blamed.
+    #
+    # The trigger already names the subsystem and the kind. Letting the query name them too means the
+    # window holds only what this scenario is looking at, and there are at most `MAX_TRIGGERS` of them.
+    #
+    # And when a window still comes back full, SAY SO: a decision taken on truncated data must not look
+    # like a decision taken on all of it.
+    def window(self, row: dict, t0: float, t1: float) -> list[dict]:
+        kinds = sorted({(str(t.get("sub", "")), str(t.get("kind", ""))) for t in row["when"]})
+        out, full = [], []
+        for sub, kind in kinds:
+            rep = self.index.query(max(0.0, t0), t1, subsystem=sub, kind=kind, limit=self.PER_KIND)
+            evs = [e for e in rep.get("events", []) if not e.get("fenced")]
+            if len(evs) >= self.PER_KIND:
+                full.append(f"{sub}.{kind}")
+            out += evs
+        if full:
+            log.warning("%s: %s — the window came back full for %s; a firing may have been cut off its "
+                        "newest end", self.name, row["id"], ", ".join(full))
+        out.sort(key=lambda e: float(e.get("t", 0)))
+        return out
 
     # Which firings this scenario has, newest first — `(id, when)`.
     #

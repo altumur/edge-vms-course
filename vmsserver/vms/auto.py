@@ -114,11 +114,15 @@ def refuse_scenario(fields: dict) -> None:
 # validation deliberately: two files would drift, and the drift would look like a scenario that never
 # fires — the hardest kind of bug to see, because nothing happens.
 #
-# An event is what the console's merge hands over: `{sub, unit, kind, t, …fields}`. Matching is equality on
-# strings and nothing else. No ranges, no negation, no substring: each of those is a question about what
-# the operator meant, and the answer belongs in another trigger or in another field of the event.
+# An event is what the console's merge hands over, and the key names are ITS, not ours: `subsystem`, not
+# `sub` (`eventdatabase.py`, the row built in `query`). A trigger says `sub` because that is what an
+# operator writes; the comparison reads what the log actually carries. Getting this wrong is invisible in
+# a test with a hand-built event and total on a box: the scenario simply never fires.
+#
+# Matching is equality on strings and nothing else. No ranges, no negation, no substring: each of those is
+# a question about what the operator meant, and the answer belongs in another trigger or in another field.
 def fires(trigger: dict, event: dict) -> bool:
-    if str(trigger.get("sub", "")) != str(event.get("sub", "")):
+    if str(trigger.get("sub", "")) != str(event.get("subsystem", "")):
         return False
     if str(trigger.get("kind", "")) != str(event.get("kind", "")):
         return False

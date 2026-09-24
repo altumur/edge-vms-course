@@ -15,20 +15,36 @@ from tests.conftest import Box
 
 
 class _Log:
-    """The merged event index, as a list. The real one asks every live resource
-    over HTTP; what the evaluator needs from it is this shape."""
-    def __init__(self, events=()):
-        self.events = list(events)
-        self.asked: list[tuple] = []
+    """The merged event index, as a list — and as unkind as the real one.
 
-    def query(self, t0, t1, **kw):
-        self.asked.append((t0, t1))
-        return {"events": [e for e in self.events if t0 <= e["t"] <= t1], "state": "live"}
+    Two properties matter and both were missing from the first version of this
+    fake, which is why two defects lived through seven green tests: the merge
+    answers `ORDER BY t LIMIT ?` (a full window drops the NEWEST rows), and an
+    event becomes visible some seconds AFTER its own timestamp, because a
+    resource tails its files on a timer."""
+    def __init__(self, events=(), lag=0.0, wall=None):
+        self.events = list(events)
+        self.lag, self.wall = lag, wall
+        self.asked: list[dict] = []
+
+    def query(self, t0, t1, subsystem=None, kind=None, limit=1000, **kw):
+        self.asked.append({"t0": t0, "t1": t1, "subsystem": subsystem, "kind": kind, "limit": limit})
+        now = self.wall() if self.wall else t1
+        rows = [e for e in self.events
+                if t0 <= e["t"] <= t1
+                and e["t"] + self.lag <= now                      # not in the merge yet
+                and (subsystem is None or e["subsystem"] == subsystem)
+                and (kind is None or e["kind"] == kind)]
+        rows.sort(key=lambda e: e["t"])
+        return {"events": rows[:limit], "state": "live"}          # the oldest survive, as in SQL
 
 
 def ev(t, sub, unit, kind, **fields):
-    return {"t": float(t), "sub": sub, "subsystem": sub, "unit": str(unit), "kind": kind, "epoch": 1,
-            "server": "srv-a", "fenced": False, **fields}
+    """Exactly the row `MergedIndex.query` returns — `subsystem`, not `sub`, and
+    no second spelling to hide behind. The fake that carried both keys is how a
+    scenario that could never fire passed seven tests."""
+    return {"t": float(t), "subsystem": sub, "unit": str(unit), "cam": None, "kind": kind, "epoch": 1,
+            "server": "srv-a", "bucket": "b", "fenced": False, "epoch_is": "current", **fields}
 
 
 DOOR = {"name": "door-on-badge",
@@ -236,3 +252,50 @@ def test_a_record_request_the_recorder_sees_is_not_its_to_serve():
                   clock=box.clock, wall=box.wall, server="srv-a", env={})
     box.vars.put("rec/requests/x", {"action": "record", "cam": "7", "minutes": "10", "unit": "7"})
     assert r.requests() == [] and r.fetched == []             # not served, and not tripped over either
+
+
+def test_an_event_that_reaches_the_merge_late_is_still_considered():
+    """The defect this cursor rule exists for, and it is invisible with a fake
+    that answers instantly.
+
+    The merge is not a stream: a resource tails its files on a timer, so an
+    event written at T is visible some seconds later. A cursor set to `now`
+    is already past it, and `t <= since` then skips it FOR EVER — no refusal,
+    no log line, just a scenario that does not fire."""
+    box = Box()
+    t = box.wall()
+    late = ev(t - 1, "vms", 12, "io.input", port="1", value="closed")
+    log = _Log([late], lag=3.0, wall=box.wall)                    # visible only three seconds after it happened
+    _scenario(box, name="one", when=[DOOR["when"][0]], within=0, then=[DOOR["then"][0]])
+    _assigned(box, "one")
+    w = _worker(box, log)
+
+    assert w.reconcile_once() == []                               # nothing to see yet — and that is fine
+    assert box.vars.list("vms/requests/") == []
+
+    box.wall.advance(4)                                           # now the merge has it
+    assert w.reconcile_once() == ["one"]
+    assert len(box.vars.list("vms/requests/")) == 1
+
+
+def test_a_noisy_log_does_not_hide_the_event_the_scenario_watches():
+    """`ORDER BY t LIMIT n` drops the NEWEST rows, which is the end a scenario
+    exists for. Three cameras writing a statistics line every few seconds fill a
+    thousand rows in a five-minute window; from that moment the evaluator sees
+    the beginning of the window and never the end.
+
+    The trigger already names the subsystem and the kind — so the query names
+    them too, and the window holds only what this scenario is looking at."""
+    box = Box()
+    t = box.wall()
+    noise = [ev(t - 300 + i * 0.1, "rec", 7, "stats", n=str(i)) for i in range(2000)]
+    wanted = ev(t - 2, "vms", 12, "io.input", port="1", value="closed")
+    log = _Log(noise + [wanted], wall=box.wall)
+    _scenario(box, name="one", when=[DOOR["when"][0]], within=0, then=[DOOR["then"][0]])
+    _assigned(box, "one")
+    w = _worker(box, log)
+
+    assert w.reconcile_once() == ["one"], "the event was there and the noise buried it"
+    assert len(box.vars.list("vms/requests/")) == 1
+    # one query per kind the scenario watches, each naming what it wants
+    assert [(q["subsystem"], q["kind"]) for q in log.asked] == [("vms", "io.input")]
