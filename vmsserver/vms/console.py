@@ -225,6 +225,35 @@ def vms_routes(archive: ArchiveResource | None, live: LiveFront | None = None, c
             if method == "GET" and not path.startswith("/whep/session/"):
                 return 200, live.status(path[len("/whep/"):])           # GET /whep/<cam>: the stream, its gateway, that gateway's word
             return None
+        # A COMMAND to a device, filed as a row for whoever holds it — `POST /requests`. Not a call: the
+        # console does not open devices, and the one process that has this device open is the worker that
+        # holds it (М10B, lesson 4). It writes the row; the holder performs it on its next pass, says so
+        # in its heartbeat, and the controller clears it.
+        #
+        # `valid_until` is the field that makes this safe to file and forget. Thirty seconds by default,
+        # because the commands an operator sends are answers to something they are looking at: a door
+        # opened a minute after the button is an incident, and a request that misses its moment must
+        # expire rather than wait. Automation will set its own, from the scenario.
+        if method == "POST" and path == "/requests" and ctl is not None:
+            body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))) or b"{}")
+            unit, action = str(body.get("unit", "")), str(body.get("action", ""))
+            if not unit or ctl.camera(unit) is None:
+                return 404, {"detail": f"no unit {unit}", "error": "no such unit"}
+            if action not in ("output", "preset"):
+                return 400, {"detail": f"actions are output and preset, not {action!r}", "error": "unknown action"}
+            now = con_wall()
+            rid = str(body.get("id") or f"{unit}-{action}-{int(now * 1000)}")
+            if "/" in rid:
+                return 400, {"detail": "a request id is a name, not a path", "error": "bad id"}
+            row = {"unit": unit, "action": action, "at": str(now), "by": handler.headers.get("X-User", "operator"),
+                   "valid_until": str(float(body.get("valid_until") or now + 30))}
+            for f in ("port", "state", "pulse_ms", "n"):
+                if body.get(f) is not None:
+                    row[f] = str(body[f])
+            ctl.vars.put(ctl.spec.sub.request_key(rid), row)
+            return 202, {"queued": {"id": rid, **row},
+                         "detail": "the worker holding this device performs it on its next pass; "
+                                   "after valid_until it expires unperformed"}
         if method == "POST" and path == "/backfill" and archive is not None:
             # This used to answer 202 and store nothing: the text below was true about what the recorder
             # WOULD do and false about anything having been asked. The request is a row now

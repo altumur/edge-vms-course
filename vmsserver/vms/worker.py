@@ -120,16 +120,36 @@ VMS = Subsystem("vms")
 class FakeDevice:
     """A held device: its channels, its own footage, and how many playbacks it allows at once."""
 
-    def __init__(self, key: str, channels=(), coverage=None, max_playbacks: int = 2, bps: int = 1, index=None):
+    def __init__(self, key: str, channels=(), coverage=None, max_playbacks: int = 2, bps: int = 1, index=None,
+                 rays: int = 0, relays: int = 0, ptz: bool = False):
         self.key, self._channels = key, [str(c) for c in channels]
         self._coverage = {str(k): v for k, v in (coverage or {}).items()}   # camera -> (from, to[, fragments])
         self._index = {str(k): [(float(a), float(b)) for a, b in v] for k, v in (index or {}).items()}
         self.max_playbacks, self.bps = max_playbacks, bps
         self.open: dict[str, tuple] = {}
         self.fetched: list[tuple] = []
+        self.rays, self.relays, self.ptz = rays, relays, ptz     # what the `.rep` file would have said
+        self.did: list[tuple] = []                               # every command performed, in order
 
     def channels(self) -> list[str]:
         return list(self._channels)
+
+    # What the device can DO, beside what it can show. Two of the eleven part-kinds DriverPack describes
+    # (`ioDevice` with its `rayCount`/`relayCount`, and `telemetry`), because those are the two an
+    # operator points at: open the door, look at the gate. Both are momentary — there is nothing to hold
+    # open, nothing to fence over time — which is why they are requests and not units.
+    def capabilities(self) -> dict:
+        return {"rays": self.rays, "relays": self.relays, "ptz": self.ptz}
+
+    def output(self, port: int, state: str, ms: int = 0) -> None:
+        if not 1 <= int(port) <= self.relays:
+            raise ValueError(f"{self.key} has {self.relays} relay(s), not {port}")
+        self.did.append(("output", int(port), state, int(ms)))
+
+    def preset(self, n: int) -> None:
+        if not self.ptz:
+            raise ValueError(f"{self.key} has no telemetry")
+        self.did.append(("preset", int(n), "", 0))
 
     # The summary the holder puts in its heartbeat — not the index. Drawing a timeline must not
     # cost a session, and on a device that allows two of them, it must not cost a request either.
@@ -300,6 +320,10 @@ class VmsWorker(Worker):
         self.shm_dir = env.get("SHM_DIR", SHM_DIR)                                 # the tee's shared-memory branch, for subscribers on this server
         self.bucket_seconds = bucket_seconds
         self.observed: list[tuple[int, float, str]] = []
+        # Request ids this worker has served — performed, refused or expired, all three being answers.
+        # The heartbeat carries them and the controller's `clear_requests` removes the rows: a worker
+        # writes no configuration, so it cannot delete what it has done, only say that it did it.
+        self.fetched: list[str] = []
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
         self.actuator = actuator or FakeActuator()
         self.rows: list[dict] = []
@@ -505,6 +529,73 @@ class VmsWorker(Worker):
         for cid in dead:
             self.reconciler.lost(cid, self.now())
             self.observe(cid, "silent")                 # the event with no segment open, by definition
+        self.requests()                                 # …and what somebody asked this device to DO
+
+    # -- commands: `<sub>/requests/<id>`, done by whoever holds the device ------------------------------
+    # The other half of what a device is. Until now a holder only OBSERVED: one connection, a fan-out,
+    # events. A device also acts — a relay to pulse, a preset to go to — and the command has to travel the
+    # same connection, because there is only one: a second process opening the device to click a relay is
+    # the thing this subsystem is built not to do.
+    #
+    # So a command is a ROW, in the family the platform already has for "bounded work somebody asked for",
+    # and the worker holding the unit performs it. Not a unit of its own: a pulse has no duration to hold,
+    # no epoch to fence, nothing to reconcile — it happens and it is over. `RecWorker.requests` is the
+    # same method for the same reason, one subsystem over.
+    #
+    # `valid_until` is the one field a recording's request does not need. Footage fetched an hour late is
+    # still the footage; a door opened an hour late is an incident. A request that arrives after its
+    # moment is EXPIRED, reported as such and cleared — never performed, never silently dropped.
+    def requests(self, budget: int = 4, now: float | None = None) -> list[dict]:
+        now = self.wall() if now is None else now
+        mine = {str(r["id"]): r for r in self.rows}
+        done: list[dict] = []
+        for key in sorted(self.vars.list(self.SUB.requests_prefix())):
+            if len(done) >= budget:
+                break
+            it, _ = self.vars.get(key)
+            rid = key.rsplit("/", 1)[1]
+            row = mine.get(str(it.get("unit", ""))) if it else None
+            if row is None or rid in self.fetched:
+                continue                                 # another worker's device, or one we have done
+            until = float(it.get("valid_until", 0) or 0)
+            if until and now > until:
+                self.fetched.append(rid)                 # say so, so it is cleared rather than asked again
+                done.append({"request": rid, "unit": row["id"], "expired": True})
+                log.warning("%s: request %s expired unperformed (%.0fs late)", self.name, rid, now - until)
+                continue
+            dev = self.device_of_row(row)
+            if dev is None:
+                continue                                 # the device is not open yet: ask again next pass
+            try:
+                out = self.perform(dev, row, it)
+            except Exception as e:                       # noqa: BLE001 — the device's word, whatever it is
+                self.fetched.append(rid)                 # a refusal is an answer: do not ask for ever
+                done.append({"request": rid, "unit": row["id"], "error": str(e)})
+                self.observe(row["id"], "command.failed", action=str(it.get("action", "")), error=str(e))
+                continue
+            self.fetched.append(rid)
+            done.append({"request": rid, "unit": row["id"], **out})
+            self.observe(row["id"], "command", **out)    # what was done to a device is an event about it
+        return done
+
+    # One command against an open device. Two verbs, because two are what an operator points at; a third
+    # belongs here and not in a new place. Unknown verbs raise, which the caller turns into a refusal
+    # recorded on the unit — an operator who asked for something this device cannot do gets an answer.
+    def perform(self, dev, row: dict, it: dict) -> dict:
+        action = str(it.get("action", ""))
+        if action == "output":
+            port, state, ms = int(it.get("port", 0)), str(it.get("state", "pulse")), int(it.get("pulse_ms", 0) or 0)
+            if not hasattr(dev, "output"):
+                raise ValueError("this device has no outputs")
+            dev.output(port, state, ms)
+            return {"action": action, "port": port, "state": state}
+        if action == "preset":
+            n = int(it.get("n", 0))
+            if not hasattr(dev, "preset"):
+                raise ValueError("this device has no telemetry")
+            dev.preset(n)
+            return {"action": action, "n": n}
+        raise ValueError(f"unknown action {action!r}")
 
     # The read model, per assigned row: `id`, `ref`, `name`, `enabled`, `phase` (`running` if in
     # `reconciler.actual`; `pending` if disabled; `failed` if in `reconciler.failures`; else `pending`),
@@ -620,10 +711,11 @@ class VmsWorker(Worker):
                        archive=self.archive_root, devices=self.device_status(),                                    # the resource its events (a recorder: its footage) go to — Nomad's meta.archive, through $ARCHIVE
                        **self.heartbeat_extra())
 
-    # What a subclass adds to the heartbeat. Empty here: a worker publishes what every worker publishes,
-    # and a subsystem that has one more fact about itself says it without this method being rewritten.
+    # What a subclass adds to the heartbeat. `fetched` for everyone — the requests this worker has
+    # answered, which is how the rows get cleared — and a subsystem with one more fact about itself says
+    # it by extending this, not by rewriting the heartbeat.
     def heartbeat_extra(self) -> dict:
-        return {}
+        return {"fetched": ",".join(self.fetched[-32:])}
 
     # -- the playback door ---------------------------------------------------------------------------
     # The holder's second surface, and the reason it is HTTP and not the RTSP fan-out: a browser has to

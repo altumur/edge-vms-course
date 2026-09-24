@@ -414,7 +414,10 @@ def console() -> None:
     job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
     survey_ctl = SpecController(SURVEY_SPEC, vars_, objects)
     threading.Thread(target=_sweep_loop, args=([ctl, det_ctl, rec_ctl, job_ctl, survey_ctl],), daemon=True).start()
-    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl], rec_ctl, det_ctl, survey_ctl), daemon=True).start()
+    # `[rec_ctl, ctl]`: two families of requests to clear now — footage a person asked for, and commands
+    # somebody sent a device (a relay, a preset). Same division as everywhere: the worker performs and
+    # says so in its heartbeat, the controller removes the row, because a worker writes no configuration.
+    threading.Thread(target=_reap_loop, args=([job_ctl], [rec_ctl, ctl], rec_ctl, det_ctl, survey_ctl), daemon=True).start()
     stop.wait()
     srv.shutdown()
 

@@ -12,6 +12,7 @@ SAME worker, as a filter. These tests are about that, and about the three places
 a naive version of it goes wrong — a dead holder, a group that outgrows its
 worker, and a spec that asks for both at once.
 """
+import io
 import json
 
 from w2cplatform.spec import SpecController, SubsystemSpec
@@ -188,3 +189,108 @@ def test_a_device_with_no_picture_is_a_unit_like_any_other():
 
     # …and it observes: an input change is an event in its own bucket, like any other event
     assert w.observe(door, "io.input", port=1, value="closed") is not None
+
+
+class _Body:
+    def __init__(self, payload: bytes):
+        self.headers, self.rfile = {"Content-Length": str(len(payload))}, io.BytesIO(payload)
+
+
+def _holder(box, server="srv-a", **devkw):
+    """A worker with a real device open, so a command has something to reach."""
+    from vms.worker import FakeActuator, FakeDevice, VmsWorker
+    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
+                  server=server, env={}, archive_root=box.archive,
+                  device_factory=lambda key: FakeDevice(key, channels=["1"], **devkw))
+    return w
+
+
+def test_a_command_is_a_row_performed_by_whoever_holds_the_device():
+    """The other half of what a device is: until now a holder only observed.
+
+    A relay pulse travels the connection that already exists, because there is
+    only one — a second process opening the device to click a relay is the thing
+    this subsystem is built not to do. So the command is a row, the holder
+    performs it, and the row is cleared by the controller when the heartbeat
+    says it was done."""
+    from vms.jobs import clear_requests
+
+    box = Box(); ctl, con = _ctl(box)
+    door = con.create_camera({"name": "front door", "source": "driverpack://acme/10.0.0.90/ch/1",
+                              "kind": "io"})["id"]
+    _worker(box, "w-1", "srv-a"); ctl.ensure_placed()
+    w = _holder(box, relays=2, ptz=True)
+    w.reconcile_once()
+
+    con.vars.put(SPEC.sub.request_key("r1"), {"unit": str(door), "action": "output", "port": "2",
+                                              "state": "pulse", "pulse_ms": "500",
+                                              "valid_until": str(box.wall() + 30)})
+    done = w.requests()
+    dev = w.devices["acme/10.0.0.90"]
+    assert dev.did == [("output", 2, "pulse", 500)]        # it reached the device, on the open connection
+    assert done[0]["request"] == "r1" and done[0]["action"] == "output"
+    assert ("command" in [k for _, _, k in w.observed])    # …and what was done to a device is an event about it
+
+    w.heartbeat_once()
+    assert clear_requests(ctl) == 1                        # the worker says done; the controller removes the row
+    assert box.vars.list(SPEC.sub.requests_prefix()) == []
+
+    # doing it again is not doing it twice: the row is gone, and the id is remembered while it is not
+    assert w.requests() == [] and dev.did == [("output", 2, "pulse", 500)]
+
+
+def test_a_command_that_missed_its_moment_expires_instead_of_firing():
+    """The field a recording's request does not need. Footage fetched an hour
+    late is still the footage; a door opened an hour late is an incident."""
+    box = Box(); ctl, con = _ctl(box)
+    door = con.create_camera({"name": "door", "source": "driverpack://acme/10.0.0.90/ch/1", "kind": "io"})["id"]
+    _worker(box, "w-1", "srv-a"); ctl.ensure_placed()
+    w = _holder(box, relays=1)
+    w.reconcile_once()
+
+    con.vars.put(SPEC.sub.request_key("late"), {"unit": str(door), "action": "output", "port": "1",
+                                                "valid_until": str(box.wall() - 1)})
+    done = w.requests()
+    assert done == [{"request": "late", "unit": door, "expired": True}]
+    assert w.devices["acme/10.0.0.90"].did == []           # never performed
+    assert "late" in w.fetched                             # and cleared rather than retried for ever
+
+
+def test_a_device_that_cannot_do_it_answers_and_is_not_asked_for_ever():
+    """A refusal is an answer. An operator who asked a camera with no relays to
+    open a door gets told, on the unit, and the row goes — the alternative is a
+    request retried every pass until somebody notices the log."""
+    box = Box(); ctl, con = _ctl(box)
+    cam = con.create_camera({"name": "lobby", "source": "driverpack://acme/10.0.0.77/ch/1"})["id"]
+    _worker(box, "w-1", "srv-a"); ctl.ensure_placed()
+    w = _holder(box)                                       # no relays, no telemetry
+    w.reconcile_once()
+
+    con.vars.put(SPEC.sub.request_key("nope"), {"unit": str(cam), "action": "preset", "n": "3",
+                                                "valid_until": str(box.wall() + 30)})
+    done = w.requests()
+    assert done[0]["request"] == "nope" and "telemetry" in done[0]["error"]
+    assert ("command.failed" in [k for _, _, k in w.observed])
+    assert "nope" in w.fetched
+
+
+def test_the_console_files_a_command_and_refuses_the_ones_it_cannot():
+    """The door an operator uses, and a `curl` away: `POST /requests`. The
+    console does not open devices — it writes a row for the one process that
+    has this device open."""
+    from vms.console import vms_routes
+
+    box = Box(); ctl, con = _ctl(box)
+    door = con.create_camera({"name": "door", "source": "driverpack://acme/10.0.0.90/ch/1", "kind": "io"})["id"]
+    route = vms_routes(None, None, con, None)
+
+    status, body = route(_Body(json.dumps({"unit": door, "action": "output", "port": 2,
+                                           "state": "pulse", "pulse_ms": 500}).encode()),
+                         "POST", "/requests", {})
+    assert status == 202 and float(body["queued"]["valid_until"]) == box.wall() + 30   # thirty seconds by default
+    assert box.vars.list(SPEC.sub.requests_prefix())
+
+    for bad, why in (({"unit": 999, "action": "output"}, "no such unit"),
+                     ({"unit": door, "action": "reboot"}, "unknown action")):
+        st, b = route(_Body(json.dumps(bad).encode()), "POST", "/requests", {})
+        assert st in (400, 404) and b["error"] == why

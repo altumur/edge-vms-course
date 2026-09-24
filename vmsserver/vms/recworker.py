@@ -190,13 +190,13 @@ class RecWorker(VmsWorker):
         #
         # `fetched`: the requests this recorder has closed. It cannot delete the rows — a worker writes no
         # configuration — so it says which ones are done and the console removes them.
-        return {"volume": self.volume,
+        return {**super().heartbeat_extra(),         # `fetched`: the same answer every worker gives
+                "volume": self.volume,
                 # Empty unless the archive this process holds will not open. Published because the
                 # alternative is the failure that looks like health: a fresh hold, a green console and
                 # nothing being written. Whatever reads it must not count that volume as served.
                 "volume_error": self.volume_error,
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
-                "fetched": ",".join(self.fetched[-32:]),
                 "closed": ",".join(self.closed)}
 
     # -- which archive this recorder writes into ------------------------------------------------------
@@ -310,9 +310,11 @@ class RecWorker(VmsWorker):
         return n
 
     def pump_once(self) -> None:
-        super().pump_once()
+        super().pump_once()                         # …which now includes `requests()`: the base serves the
+                                                    # family for every subsystem, and this one overrides
+                                                    # the method, not the call — asking twice a pass would
+                                                    # spend the budget twice
         self.promote_closed()
-        self.requests()                             # what a person asked for: outside the budget and the hour
         if self.backfill_budget:                    # bounded, and inside the window: it shares the device's uplink
             self.backfill(self.backfill_budget)
 
