@@ -1,4 +1,22 @@
+---
+genre: записки
+kind: разбор кода + предложения
+subject: М10A_Platform, М11_ClusterVMS
+source-commit: 4099cd5
+date: 2026-09-23
+status: draft
+---
+
 # Куда попадает настройка камеры
+
+> [!note] Записки поверх репозитория, а не его документация
+> Это документ для обсуждения. Части про устройство восстановлены по коду, а в конце стоят открытые вопросы с предложениями — того, чего в коде ещё нет.
+> **Источник истины — код.** Где описание расходится с кодом, прав код. Предложения кодом не являются и ни к чему не обязывают.
+> Проект описывает себя сам: [`README.md`](../README.md) и указатели модулей.
+> Состояние: коммит `4099cd5`, 23 сентября 2026.
+
+[← все записки](README.md)
+
 
 Документ для обсуждения. Разбирает один простой вопрос: оператор поменял настройку камеры — что происходит дальше, кто её читает, и кто решает, на каком воркере камера поднимется.
 
@@ -18,7 +36,7 @@
 | **heartbeat** | отчёт воркера о себе: какие камеры он поднял, в какой фазе каждая, сколько ещё влезет. Воркер пишет его раз в 10 секунд |
 | **слот** | имя воркера как строка в хранилище (`w-1`, `w-2`). Процесс берёт имя сам и потом **продлевает аренду**; отпустил или не продлил — имя достаётся сменщику вместе с назначением |
 | **эпоха** | номер, который воркер берёт на камеру, прежде чем что-то для неё писать. Защита от двух процессов на одной камере: у кого номер старый, тому писать нельзя |
-| **снапшот** | копия всех камер кластера и их размещения одним объектом. Её делает контроллер раз в 5 секунд, а читает домен |
+| **снапшот** | копия камер кластера и их размещения, по объекту на каждого воркера. Её делает контроллер раз в 5 секунд, а читает домен |
 | **jobspec** | файл описания задачи для Nomad (`*.nomad.hcl`): сколько экземпляров запускать, с какими лимитами |
 | **ACL токена** | права, с которыми процесс приходит в Nomad. Именно они, а не договорённость в коде, запрещают консоли писать размещение |
 
@@ -31,9 +49,9 @@
 3. **Никто никому ничего не пушит.** Воркер и контроллер сами читают Variables на своём проходе. Так сделано потому, что процесс, недоступный в момент правки, пропустил бы push, а с чтением он догоняет сам, когда вернётся.
 4. **Правка настройки никогда не двигает камеру на другой воркер.** Контроллер выбирает размещение один раз, при создании, потому что переезд рвёт запись: архив камеры лежит на диске того сервера, где она работает.
 5. Из ста настроек камеры контроллер читает **одну** — `labels`, потому что только от неё зависит выбор воркера. Остальные для него непрозрачные данные, и это позволяет добавлять настройки, не трогая контроллер.
-6. **Снапшот перестаёт публиковаться примерно на 270 камерах, а проектный максимум кластера — около 600.** Это самый срочный дефект в документе, и десять тысяч камер для него не нужны: мы не дотягиваем до собственного числа, записанного в jobspec'е. Снапшот упирается первым, потому что он один на весь кластер. Но **heartbeat'ы упираются в тот же лимит следом**: их размер держится на дефолте `CAPACITY=50`, а при 400 камерах на воркера heartbeat весит ~100 КБ и ломается тоже. Значит правильная форма heartbeat'а — **сводка плюс исключения** (часть 2, вопрос 19), а вариант «перенести конфигурацию в heartbeat» из вопроса 3 отпадает.
-7. **Десять тысяч камер в домене мы рассматриваем, и мешает им ровно этот дефект — ценой, а не запретом.** Домен такое количество держит (модель чтения — 2.4 МБ в памяти), но узнаёт о камерах только из снапшотов, поэтому потолок кластера становится делителем: 10 000 раскладываются на ~38 кластеров вместо ~17. Серверов при этом примерно поровну — их число диктует ёмкость воркеров; удваивается число **кластеров**, то есть кворумов, контроллеров и регионов в WAN-gossip'е.
-8. **Полный скан упирается вслед за ним — и первым упирается контроллер, а не UI.** Уже на проектных 600 камерах спокойный проход стоит около 13 800 чтений каждые пять секунд. Больше половины этого — одна строка: `snapshot()` зовёт `server_of()` на каждую камеру, а тот заново вычитывает heartbeat'ы всех воркеров. **Вынести этот вызов из цикла — самое дешёвое действие во всём документе с самым большим эффектом.** Фона, кстати, три источника, а не два: воркеры перечитывают свои строки **каждые две секунды**, и это ещё ~306 чтений в секунду — столько же, сколько дают пять консолей. Всё остальное лечится диффом по `ModifyIndex`, который Nomad уже присылает в листинге, а клиент выбрасывает.
+6. **Снапшот больше не ломается на 270 камерах: его нарезали по воркерам.** Прежде это был один объект на весь кластер, единственное место в платформе, где данные росли внутри одного ключа, — и на проектных шестистах камерах он не влезал в 64 KiB. Теперь объект пишется на каждого воркера и растёт вместе с его назначением, а не с кластером. Потолок остался, но переехал: **и шард снапшота, и heartbeat упираются в 64 KiB примерно на 260–270 камерах на воркера**. При дефолте `CAPACITY=50` это не проявляется, при 400 ломается сразу и то и другое. Так что вопрос теперь не «как опубликовать кластер», а «какой `CAPACITY` мы разрешаем» и «не пора ли ставить полноценное объектное хранилище».
+7. **Десять тысяч камер в домене мы рассматриваем, и теперь им мешает не снапшот.** Домен такое количество держит (модель чтения — 2.4 МБ в памяти), и после нарезки кластер публикуется целиком до своих проектных шестисот. Значит 10 000 раскладываются на ~17 кластеров, а не на ~38. Осталось два ограничения помельче: `rows()` в доменной модели пересобирает весь список на каждый запрос, и поиска **поверх** доменов нет вообще.
+8. **Полный скан — теперь самый дорогой дефект, и упирается в него контроллер, а не UI.** Уже на проектных 600 камерах спокойный проход стоит около **24 000 чтений** каждые пять секунд. Две трети этого — одна функция: `workers_seen()` перечитывает все heartbeat'ы заново, а зовут её на каждую камеру (через `server_of`) из двух разных циклов. **Запомнить её на время прохода — самое дешёвое действие во всём документе с самым большим эффектом.** Фона, кстати, три источника, а не два: воркеры перечитывают свои строки **каждые две секунды**, и это ещё ~306 чтений в секунду — столько же, сколько дают пять консолей. Всё остальное лечится диффом по `ModifyIndex`, который Nomad уже присылает в листинге, а клиент выбрасывает.
 9. **Число машин диктует география, а не ёмкость** (часть 5). Живая конфигурация «Интеллекта» — 2502 камеры на 207 объектах конфигурации, причём **часть из них рабочие места, а не видеосерверы**. Большие числа живут на уровне домена, а не единицы: вендор сам ставит пороги «500 на сервер» и «1500 на домен». Облачные продукты единицу либо держат в пределах 300 (мост Eagle Eye), либо упраздняют (Verkada — одна камера, Kinesis — квота региона). Для нас отсюда два вопроса, и ни один не про «хватит ли 600 на кластер»: **не слишком ли три сервера кворума для маленькой площадки**, и **где вообще живут раскладки экранов** — у нас их нет нигде.
 
 ---
@@ -58,8 +76,8 @@
 | `vms/workers/<w>` — что должен запустить воркер | контроллер |
 | `vms/slots/<w>` — занятость слота | воркер (берёт и продлевает) и контроллер (только `retire`) — **единственный общий ключ**, и оба пишут в него через CAS |
 | `vms/epoch/<id>` — токен ограждения | воркер |
-| `objects/vms/<w>/heartbeat` — отчёт воркера | воркер |
-| `objects/vms/snapshot` — копия для домена | контроллер |
+| `objects/vms/heartbeats/<w>` — отчёт воркера о себе | воркер |
+| `objects/vms/snapshot/<w>` — копия для домена, по объекту на воркера | контроллер |
 
 Это не соглашение в коде, а **ACL токена**. Консоль, попытавшаяся записать размещение, получит от Nomad 403.
 
@@ -79,8 +97,8 @@ flowchart LR
             EPO["vms/epoch/id<br/>токен ограждения"]
         end
         subgraph OBJ["Объекты: префикс objects/"]
-            HRT["objects/vms/w/heartbeat<br/>отчёт воркера"]
-            SNP["objects/vms/snapshot<br/>копия для домена"]
+            HRT["objects/vms/heartbeats/w<br/>отчёт воркера"]
+            SNP["objects/vms/snapshot/w<br/>копия для домена"]
         end
     end
 
@@ -258,7 +276,7 @@ PUT /v1/var/vms/retention/7?cas=3
 
 Строка **не удаляется, а помечается**:
 
-```442:447:vmsserver/w2cplatform/spec.py
+```549:554:vmsserver/w2cplatform/spec.py
     def delete(self, uid) -> None:
         """The operator's half: the row is marked. Its placement is the controller's
         half, taken back on the next pass (`unplace_deleted`) — a console's token
@@ -278,7 +296,7 @@ GET /v1/var/vms/workers/w-1        → назначение ВСЁ ЕЩЁ наз
 GET /v1/var/vms/cameras/7          → deleted: "true"  → строка пропускается
 ```
 
-```335:339:vmsserver/vms/worker.py
+```348:352:vmsserver/vms/worker.py
         for unit in a.units:
             items, _ = self.vars.get(self.SUB.config(self.ROWS, unit))
             if items and items.get("deleted") != "true":
@@ -319,13 +337,13 @@ PUT  /v1/var/vms/placement/7?cas=12     {"worker":"","reason":"deleted","at":…
 
 Выше несколько раз сказано «воркер на своём проходе» — пора назвать число. Проход — **раз в две секунды**, и это дефолт, который оба развёртывания берут как есть (`w.run(stop=stop)` в `vmsserver/vms/__main__.py` и в `cluster/__main__.py`):
 
-```630:630:vmsserver/vms/worker.py
+```673:673:vmsserver/vms/worker.py
     def run(self, poll: float = 2.0, stop=None) -> None:
 ```
 
 Отсюда сразу ответ на самый частый вопрос оператора: **правка настройки доходит до видео не дольше двух секунд.** Но внутри одного цикла живут три разных такта, и путать их не стоит:
 
-```641:651:vmsserver/vms/worker.py
+```684:694:vmsserver/vms/worker.py
         while not stop.is_set():
             try:
                 self.reconcile_once()
@@ -408,7 +426,7 @@ GET /v1/var/vms/epoch/12   → {"epoch": "5"}   а мой был 4 → ОГРА�
 
 Слот — это строка с четырьмя полями: кто держит, до какого времени, отпустил ли по-хорошему и какое это по счёту владение.
 
-```236:243:vmsserver/w2cplatform/contract.py
+```350:357:vmsserver/w2cplatform/contract.py
 class Slot:
     """A worker's name, as a row: who holds it, until when (wall clock), and
     whether the last holder let go of it on purpose."""
@@ -421,7 +439,7 @@ class Slot:
 
 Продление — это буквально «перечитать строку и убедиться, что держатель по-прежнему я»:
 
-```520:535:vmsserver/w2cplatform/contract.py
+```634:649:vmsserver/w2cplatform/contract.py
     def renew_slot(self) -> bool:
         """Still me? Read the slot; if another instance holds it now, the
         instance is fenced as a whole. Extends `until` by CAS otherwise."""
@@ -478,7 +496,7 @@ class Slot:
 
 Вот это и есть самое неочевидное место, потому что реакция зависит от того, что именно потерялось:
 
-```418:431:vmsserver/vms/worker.py
+```431:444:vmsserver/vms/worker.py
     def lease_pass(self) -> list[str]:
         """Renew every lease. A lost lease on a camera that is no longer
         assigned to me is a reassignment: let it go. A lost lease on a camera
@@ -509,7 +527,7 @@ class Slot:
 
 **Остановка по-хорошему.** Nomad присылает SIGTERM (уменьшили `count`, выводим сервер), и воркер отмечает это в строке:
 
-```540:543:vmsserver/w2cplatform/contract.py
+```654:657:vmsserver/w2cplatform/contract.py
     def release_slot(self) -> None:
         """An orderly stop (SIGTERM from the scheduler: scale-in, or a drain).
         Says so in the row — `released` — which is what tells scale-in from a
@@ -520,7 +538,7 @@ class Slot:
 
 **Падение.** Процесс умер и ничего сказать не успел. Слот просто истёк, и `released` в нём по-прежнему `false`. Контроллер такие слоты **не разбирает специально**, потому что Nomad поднимет процесс под тем же именем, и тот подберёт своё назначение сам:
 
-```376:382:vmsserver/w2cplatform/contract.py
+```490:496:vmsserver/w2cplatform/contract.py
     def released_slots(self) -> list[str]:
         """Slots whose holder let go on purpose (scale-in, or `retire`) and
         that still have an assignment: what a subsystem redistributes. A slot
@@ -571,7 +589,7 @@ GET /metrics     → строка статуса: сколько воркеро�
 
 И вот нюанс, который стоит обсудить. `configured` собирается так:
 
-```466:472:vmsserver/w2cplatform/spec.py
+```607:613:vmsserver/w2cplatform/spec.py
     def units(self) -> list[dict]:
         out = []
         for p in self.vars.list(self.sub.config(self.spec.rows) + "/"):
@@ -631,9 +649,9 @@ GET /v1/var/vms/cameras/2
 
 ### Как это решено на уровне домена
 
-Интересно, что для доменной консоли эта задача уже решена, и решена **не через Variables**. Доменная модель чтения читает `objects/vms/snapshot` — один объект со всеми камерами сразу — плюс heartbeat'ы, держит результат в памяти и отдаёт список с поиском и пагинацией, не делая ни одного запроса к воркеру или контроллеру:
+Интересно, что для доменной консоли эта задача уже решена, и решена **не через Variables**. Доменная модель чтения читает каталог `objects/vms/snapshot/` — десяток объектов вместо шестисот — плюс heartbeat'ы, держит результат в памяти и отдаёт список с поиском и пагинацией, не делая ни одного запроса к воркеру или контроллеру:
 
-```111:118:М12_DomainVMS/domainvms/domain/readview.py
+```164:172:М12_DomainVMS/domainvms/domain/readview.py
     def list(self, q: str = "", page: int = 1, size: int = 50, cluster: str | None = None) -> dict:
         rows = [r for r in self.rows() if (not cluster or r.cluster == cluster)
                 and (not q or q.lower() in r.name.lower() or q == str(r.camera))]
@@ -641,12 +659,13 @@ GET /v1/var/vms/cameras/2
         page_rows = rows[(page - 1) * size: page * size]
         return {"total": total, "page": page, "size": size, "rows": [r.to_json() for r in page_rows],
                 "clusters": {n: ("unreachable" if n in self.cluster_down_since else "ok") for n in self.fed.clusters},
+                "rpo": self.rpo(),
                 "complete": not self.cluster_down_since}
 ```
 
 Фильтр и срез страницы — по данным, уже лежащим в памяти. Записка М12 формулирует это правилом: список камер для UI собирается из heartbeat'ов и снапшота, **никогда фан-аутом по консолям и никогда из Variables**.
 
-Пагинация «в памяти после полного чтения» выглядит наивно, но она правильная — **когда полное чтение дешёвое**. Снапшот это один объект, поэтому дешёвое; Variables по одной — нет. Вся разница здесь.
+Пагинация «в памяти после полного чтения» выглядит наивно, но она правильная — **когда полное чтение дешёвое**. Снапшот это десяток объектов на кластер, поэтому дешёвое; Variables по одной — нет. Вся разница здесь.
 
 ### Отсюда двухуровневая модель
 
@@ -654,14 +673,14 @@ GET /v1/var/vms/cameras/2
 
 | Экран | Источник | Цена | Что видно |
 |---|---|---|---|
-| **список** (10 000 строк, поиск, страницы) | снапшот, одно чтение, дальше память | **1 запрос** | поля из списка `snapshot:` в YAML, с отставанием до 5 с |
+| **список** (10 000 строк, поиск, страницы) | снапшот, листинг и десяток чтений, дальше память | **1 листинг** | поля из списка `snapshot:` в YAML, с отставанием до 5 с |
 | **карточка** (оператор открыл одну камеру) | `GET /v1/var/vms/cameras/7` | **1 запрос** | все поля, свежие, без отставания |
 
 При такой раскладке «какие поля мне нужны» перестаёт быть вопросом производительности и становится вопросом трафика до браузера — то есть его нормально сделать как `?fields=name,source`, фильтруя уже прочитанное.
 
 И заметьте: **серверная проекция в дизайне уже есть** — проекция значит «отдавать не всю запись, а только перечисленные поля». Вот только список полей здесь выбран при проектировании, а не в момент запроса:
 
-```101:101:vmsserver/vms/vms.subsystem.yaml
+```111:111:vmsserver/vms/vms.subsystem.yaml
 snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 ```
 
@@ -677,7 +696,7 @@ snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, 
 
 Nomad на `GET /v1/vars?prefix=…` отдаёт по записи на каждую переменную: `Namespace`, `Path`, `CreateIndex`, `CreateTime`, **`ModifyIndex`**, `ModifyTime`. Значений нет — но версия каждой строки есть. А клиент оставляет только путь:
 
-```86:88:М11_ClusterVMS/clustervms/cluster/variables.py
+```99:101:М11_ClusterVMS/clustervms/cluster/variables.py
     def list(self, prefix: str) -> list[str]:
         status, body = self._req("GET", f"{self.addr}/v1/vars?prefix={quote(prefix, safe=chr(47))}&namespace={self.namespace}")
         return [v["Path"] for v in (body or [])]
@@ -718,7 +737,7 @@ async function loadUnits() {
 
 Здесь и выясняется, что отдельный процесс заводить не нужно, и я зря предлагал выбирать между ним и контроллером. **Все дорогие пути проходят через одну функцию:**
 
-```466:472:vmsserver/w2cplatform/spec.py
+```607:613:vmsserver/w2cplatform/spec.py
     def units(self) -> list[dict]:
         out = []
         for p in self.vars.list(self.sub.config(self.spec.rows) + "/"):
@@ -736,7 +755,7 @@ async function loadUnits() {
 |---|---|---|
 | опрос списка одной консолью | 613 чтений | **1 листинг** |
 | пять консолей, спокойный кластер | **~306 чтений/с** | **0.5 листинга/с** |
-| проход контроллера (600 камер) | ~13 800 чтений — см. часть 3, там есть причина хуже этой | **1 листинг** плюс чтения размещений |
+| проход контроллера (600 камер) | ~24 000 чтений — см. часть 3, там есть причина хуже этой | **1 листинг** плюс чтения размещений и heartbeat'ов |
 
 Нужное изменение ровно одно и лежит этажом ниже: `list()` должен возвращать `ModifyIndex`, а не только путь. Всё остальное — словарь в памяти `SpecController`.
 
@@ -771,16 +790,16 @@ async function loadUnits() {
 
 Сначала про кластер, потому что именно там вопрос и стоит. Вот весь список камер в консоли кластера:
 
-```476:477:vmsserver/w2cplatform/console.py
+```561:562:vmsserver/w2cplatform/console.py
             if path == rows_path:
-                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": ctl.units()})
+                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": mask_secrets(ctl.units())})
 ```
 
-Ни `q`, ни страниц, ни кэша — отдаётся всё целиком. **Но в этой строке два источника, и они различаются в пятьдесят раз по цене.**
+Ни `q`, ни страниц, ни кэша — отдаётся всё целиком. **Но в этой строке два источника, и они различаются в пятьдесят раз по цене.** Обёртка `mask_secrets` здесь появилась позже остального: она вычищает пароли из `source`, прежде чем строки уедут в браузер.
 
 `units()` — дорогой. Это лист плюс чтение на каждую камеру:
 
-```466:472:vmsserver/w2cplatform/spec.py
+```607:613:vmsserver/w2cplatform/spec.py
     def units(self) -> list[dict]:
         out = []
         for p in self.vars.list(self.sub.config(self.spec.rows) + "/"):
@@ -792,7 +811,7 @@ async function loadUnits() {
 
 `read_model()` — дешёвый. Он читает **heartbeat'ы воркеров**, а это объекты, по одному на воркера:
 
-```861:869:vmsserver/w2cplatform/spec.py
+```1045:1053:vmsserver/w2cplatform/spec.py
     def read_model(self, lost_after: float = 45.0) -> list[dict]:
         now = self.wall()
         rows = []
@@ -829,7 +848,7 @@ async function loadUnits() {
 
 Выше — про кластер. На домене поиск **уже есть**, и он правильной формы:
 
-```111:113:М12_DomainVMS/domainvms/domain/readview.py
+```164:166:М12_DomainVMS/domainvms/domain/readview.py
     def list(self, q: str = "", page: int = 1, size: int = 50, cluster: str | None = None) -> dict:
         rows = [r for r in self.rows() if (not cluster or r.cluster == cluster)
                 and (not q or q.lower() in r.name.lower() or q == str(r.camera))]
@@ -839,15 +858,20 @@ async function loadUnits() {
 
 **Дефект первый: `rows()` пересобирается на каждый вызов.** Посмотрите, что происходит перед фильтром:
 
-```98:109:М12_DomainVMS/domainvms/domain/readview.py
+```125:134:М12_DomainVMS/domainvms/domain/readview.py
     def rows(self) -> list[Row]:
         now = self.wall()
         out = []
         for s in self.snapshots.values():
-            # ... по строке Row на каждую камеру ...
-        out.sort(key=lambda r: (r.cluster, r.worker, r.camera))
-        return out
+            age = max(0.0, now - s.ts)
+            state = "unreachable" if s.cluster in self.cluster_down_since else ("stale" if age > self.lost_after else "live")
+            for st in s.status:
+                out.append(Row(int(st["id"]), st.get("name", ""), s.worker, s.cluster, s.server, st.get("phase", "?"),
+                               st.get("position", "?"), int(st.get("revision", 0)), int(st.get("observed_revision", 0)),
+                               int(st.get("epoch", 0)), age, state, str(st.get("ref", ""))))
 ```
+
+Дальше идёт второй такой же проход по камерам из снапшота, а в конце — сортировка всего списка.
 
 На каждое нажатие клавиши это **создание 10 000 объектов `Row` и сортировка десяти тысяч** — и только после этого фильтр. По порядку величины: сборка ~15–25 мс, сортировка ~5–10 мс, собственно поиск ~1–2 мс. **То есть 95 % времени уходит не на поиск**, и оптимизировать надо не его.
 
@@ -855,7 +879,7 @@ async function loadUnits() {
 
 **Дефект второй: искать по `ref` нельзя, хотя `ref` — это домашняя личность домена.** Воркер кладёт `ref` в heartbeat:
 
-```503:503:vmsserver/vms/worker.py
+```516:516:vmsserver/vms/worker.py
             out.append({"id": cid, "ref": cam.get("ref", ""), "name": cam.get("name", str(cid)), "enabled": cam["enabled"], "phase": phase, "position": pos,
 ```
 
@@ -895,41 +919,46 @@ async function loadUnits() {
 
 Делает его **контроллер**, последним шагом каждого прохода, то есть **раз в 5 секунд**:
 
-```186:198:vmsserver/vms/__main__.py
-def _controller_loop(ctl) -> None:
-    """One controller process per subsystem, the same loop: unplace what was deleted, place what is new onto the
-    workers it sees, move what a released slot left, bring one unit home if its server came back, publish the
-    snapshot. Nothing else, ever."""
+```191:197:vmsserver/vms/__main__.py
     while not stop.is_set():
         try:
             ctl.ensure_placed()                       # deleted rows unplaced; new units onto the workers it sees
             ctl.redistribute()                        # units of a RELEASED slot (scale-in) onto the rest
             ctl.ensure_home(1)                        # ONE unit a pass back to the server its row names, if it is back
-            ctl.publish_snapshot()
         except Exception:                             # noqa: BLE001
             logging.exception("placement pass failed")
-        stop.wait(5)
+```
+
+Публикация вынесена в собственный блок `try`, и это не аккуратность ради аккуратности. Размещение и публикация — две разные работы, поэтому у них две разные строчки в журнале: иначе отказ публикации маскировался бы под «placement pass failed», а отказ размещения молча уносил бы с собой снапшот.
+
+```203:204:vmsserver/vms/__main__.py
+        try:
+            ctl.publish_snapshot()
 ```
 
 Это **единственная безусловная запись** контроллера: шаги 1–3 срабатывают только по событию (создали, удалили, отпустили слот), а снапшот публикуется всегда. В спокойном кластере контроллер пишет только его.
 
-#### Что внутри
+#### Что внутри: объект на каждого воркера
 
-```873:881:vmsserver/w2cplatform/spec.py
-    def snapshot(self) -> dict:
-        """Units and placement as one object: what the layer above reads. A copy
-        with an age — never the rows themselves, which do not leave raft."""
+Раньше снапшот был одним объектом на весь кластер, и именно поэтому он ломался. Сейчас он нарезан по воркерам:
+
+```1164:1174:vmsserver/w2cplatform/spec.py
+    def snapshot_shards(self) -> dict[str, dict]:
+        """The snapshot as one object per worker, keyed by shard name."""
         keep = ["id"] + [f for f in self.spec.snapshot if f != "id"] + ["revision"]
-        units = []
+        now, out = self.wall(), {}
         for r in self.units():
             w = self.where(r["id"])
-            units.append({**{k: r[k] for k in keep if k in r}, "worker": w, "server": self.server_of(w or "")})
-        return {"cluster": self.cluster, "ts": self.wall(), self.spec.rows: units}
+            self.sub.snapshot_key(w)              # refuses a worker named `unplaced` before it shadows the shard
+            sh = out.setdefault(w or UNPLACED, {"cluster": self.cluster, "worker": w, "ts": now, self.spec.rows: []})
+            sh[self.spec.rows].append({**{k: r[k] for k in keep if k in r}, "worker": w,
+                                       "server": self.server_of(w or "")})
+        return out
 ```
 
-То есть на каждую камеру — поля из списка `snapshot:` в YAML плюс `id`, `revision`, и добавленные контроллером `worker` и `server`. На весь объект — имя кластера и **одна отметка времени**, `ts`.
+На каждую камеру — поля из списка `snapshot:` в YAML плюс `id`, `revision`, и добавленные контроллером `worker` и `server`. На каждый шард — имя кластера, имя воркера и **отметка времени** `ts`. Камеры, которых никто не держит, уезжают в отдельный шард `unplaced`.
 
-`ts` здесь не украшение: домен печатает возраст снапшота на каждой строке, потому что это единственный способ отличить «так и есть» от «так было четыре минуты назад».
+`ts` здесь не украшение: домен печатает возраст снапшота на каждой строке, потому что это единственный способ отличить «так и есть» от «так было четыре минуты назад». Возраст всей картины считается по **самому старому** шарду, а не по самому свежему, — каталог свеж настолько, насколько свежа его отставшая часть.
 
 #### Куда именно он попадает: да, это Nomad Variable
 
@@ -937,30 +966,42 @@ def _controller_loop(ctl) -> None:
 
 Контроллер кладёт его в **объектное хранилище**, а не в Variables напрямую:
 
-```883:886:vmsserver/w2cplatform/spec.py
-    # Writes the snapshot JSON to the object store at `<name>/snapshot`.
+```1208:1218:vmsserver/w2cplatform/spec.py
     def publish_snapshot(self) -> None:
         import json
-        self.objects.put(self.sub.config("snapshot"), json.dumps(self.snapshot()).encode())
+        shards = self.snapshot_shards()
+        prefix = self.sub.snapshot_prefix()
+        # A worker that is GONE — scaled in, or its units moved away — keeps its last shard forever: nothing
+        # in the platform deletes an object. Its units would go on being reported to М12 from a worker that
+        # no longer exists. So every shard already in the store that this pass did not fill is written EMPTY.
+        for key in self.objects.list(prefix):
+            shards.setdefault(key[len(prefix):], {"cluster": self.cluster, "worker": None, "ts": self.wall(),
+                                                  self.spec.rows: []})
+        for name, shard in shards.items():
 ```
+
+Обратите внимание на середину: шард ушедшего воркера контроллер переписывает **пустым**. Удалять объекты платформа не умеет вовсе, поэтому иначе камеры уехавшего воркера домен показывал бы вечно.
 
 Но объектное хранилище на кластере — это **`variables://objects`** (дефолт во всех jobspec'ах), то есть адаптер, который складывает объекты в те же Variables под префиксом `objects/`:
 
-```106:107:М11_ClusterVMS/clustervms/cluster/objectstore.py
+```115:117:М11_ClusterVMS/clustervms/cluster/objectstore.py
     def put(self, key: str, data: bytes) -> None:
+        check(key, len(data), self.max_bytes)
         self.vars.put(self._path(key), {"data": data.decode("utf-8")})       # no cas: the last heartbeat wins, as it should
 ```
 
-Складываем: ключ объекта `vms/snapshot` плюс префикс `objects` даёт путь Variable, и запись выглядит так:
+Первая строка здесь новая и важная: хранилище **само объявляет свой потолок** и отказывает в записи сверх него. Раньше файловое хранилище принимало что угодно, поэтому запись, которую Nomad отверг бы на проде, в тестах проходила.
+
+Складываем: ключ объекта `vms/snapshot/w-1` плюс префикс `objects` даёт путь Variable, и запись выглядит так:
 
 ```
-PUT /v1/var/objects/vms/snapshot
-    {"Items": {"data": "{\"cluster\":\"room-a\",\"ts\":1757500000.0,\"cameras\":[…]}"}}
+PUT /v1/var/objects/vms/snapshot/w-1
+    {"Items": {"data": "{\"cluster\":\"room-a\",\"worker\":\"w-1\",\"ts\":1757500000.0,\"cameras\":[…]}"}}
 ```
 
 **Да, снапшот — это Nomad Variable, в raft, реплицированная на все серверы кластера.** Три следствия, и все три важны.
 
-**Весь JSON — одна строка в одном ключе `data`.** Не объект на камеру, не страницы: один `put`. Отсюда и лимит 64 KiB на весь снапшот, о котором ниже.
+**Весь JSON шарда — одна строка в одном ключе `data`.** Не объект на камеру, не страницы: один `put` на воркера. Отсюда и лимит 64 KiB, но теперь он считается **на шард**, а не на весь кластер, — про это ниже.
 
 **Пишется без CAS** — видно в комментарии выше. И это правильно: у снапшота один писатель (контроллер) и никакой «потерянной правки» тут быть не может, а последняя версия всегда лучше предыдущей. Сравните со строкой камеры, которую пишут через CAS, потому что писателей может оказаться двое.
 
@@ -973,7 +1014,7 @@ PUT /v1/var/objects/vms/snapshot
 Сначала **heartbeat**. Его пишет воркер `w-2` про самого себя, раз в десять секунд:
 
 ```
-PUT /v1/var/objects/vms/w-2/heartbeat
+PUT /v1/var/objects/vms/heartbeats/w-2
 ```
 ```json
 {"Items": {"data": "{
@@ -989,14 +1030,15 @@ PUT /v1/var/objects/vms/w-2/heartbeat
 }"}}
 ```
 
-Теперь **снапшот**. Его пишет контроллер про весь кластер, раз в пять секунд:
+Теперь **снапшот**. Его пишет контроллер, раз в пять секунд, и тоже по объекту на воркера — но про камеры, которые этому воркеру **назначены**:
 
 ```
-PUT /v1/var/objects/vms/snapshot
+PUT /v1/var/objects/vms/snapshot/w-2
 ```
 ```json
 {"Items": {"data": "{
   \"cluster\": \"room-a\",
+  \"worker\": \"w-2\",
   \"ts\": 1757500000.0,
   \"cameras\": [
     {\"id\": 7, \"name\": \"cam7\", \"source\": \"driverpack://acme/10.2.0.7\",
@@ -1011,13 +1053,15 @@ PUT /v1/var/objects/vms/snapshot
 
 | | heartbeat | снапшот |
 |---|---|---|
-| Путь | `objects/vms/w-2/heartbeat` | `objects/vms/snapshot` |
-| Кто пишет | **каждый воркер — свой** | **контроллер — один** |
-| Сколько их | по одному на воркера, до 12 | **один на кластер** |
+| Путь | `objects/vms/heartbeats/w-2` | `objects/vms/snapshot/w-2` |
+| Кто пишет | **каждый воркер — свой** | **контроллер — все** |
+| Сколько их | по одному на воркера, до 12 | по одному на воркера, плюс `unplaced` |
 | Как часто | раз в 10 с | раз в 5 с |
-| Чьи камеры внутри | **только свои** (~50) | **все** (до 600) |
+| Чьи камеры внутри | те, что воркер **держит** (~50) | те, что воркеру **назначены** (~50) |
 | Что утверждает | **как есть** | **как должно быть** |
-| Размер | ~12 КБ при `CAPACITY=50`; **~100 КБ при 400 — тоже не влезает** | **~144 КБ на 600 камерах — не влезает** |
+| Размер | ~12 КБ при `CAPACITY=50`, **~100 КБ при 400** | ~12 КБ при `CAPACITY=50`, **~96 КБ при 400** |
+
+Соседние строки «чьи камеры внутри» — не описка. Назначение и удержание расходятся ровно в тот момент, когда что-то пошло не так, и всё наблюдение за системой построено на этом расхождении.
 
 Обратите внимание, какие поля в каком объекте, потому что это и есть суть разделения:
 
@@ -1031,7 +1075,7 @@ PUT /v1/var/objects/vms/snapshot
 
 **Про `worker` и `server` стоит отдельно, потому что совпадение имён обманчиво.** В heartbeat'е `server` — первоисточник: процесс сообщает, где он прямо сейчас. В снапшоте `worker` — это решение контроллера («я определил камеру 7 на `w-2`»), а `server` контроллер списывает из heartbeat'а этого воркера в момент публикации:
 
-```350:352:vmsserver/w2cplatform/spec.py
+```464:466:vmsserver/w2cplatform/spec.py
     def server_of(self, worker: str) -> str:
         hb = self.workers_seen(max_age=1e12).get(worker)
         return hb.extra.get("server", "?") if hb else "?"
@@ -1056,31 +1100,26 @@ PUT /v1/var/objects/vms/snapshot
 
 Домен читает оба объекта, и в коде они различаются даже формой пути:
 
-```45:59:М12_DomainVMS/domainvms/domain/federation.py
-    def snapshot(self) -> dict | None:
-        """The controller's copy of the cluster's cameras and placement, with its age."""
-        raw = self.objects.get(SNAPSHOT)
-        return json.loads(raw) if raw else None
-
-    def heartbeats(self) -> dict[str, dict]:
-        """worker -> its last heartbeat (М10's shape: status, server, epoch per camera)."""
-        out = {}
-        for key in self.objects.list("vms/"):
-            if key.endswith("/heartbeat") and key.count("/") == 2:
-                raw = self.objects.get(key)
-                if raw:
-                    hb = json.loads(raw)
-                    out[hb["worker"]] = hb
-        return out
+```61:63:М12_DomainVMS/domainvms/domain/federation.py
+        keys = self.objects.list(SNAPSHOT)
+        if not keys:
+            return None
 ```
 
-**И практический вывод, ради которого всё это различение и нужно.** Лимит 64 KiB бьёт по снапшоту **первым и сильнее всего**, потому что он один и в нём все камеры. Поэтому «положить heartbeat внутрь снапшота» сделало бы хуже, а не лучше. Обратный ход — перенести поля конфигурации в статус heartbeat'а — выглядел бы соблазнительно, и он записан вариантом в вопросе 3, но у него обнаружился предел, и следующий раздел как раз про него.
+```87:90:М12_DomainVMS/domainvms/domain/federation.py
+        for key in self.objects.list(HEARTBEATS):
+            raw = self.objects.get(key)
+            if raw:
+                hb = json.loads(raw)
+```
+
+**И практический вывод, ради которого всё это различение и нужно.** Раньше лимит 64 KiB бил по снапшоту первым и сильнее всего, потому что он был один на кластер. Теперь оба объекта нарезаны по воркерам и упираются в потолок одинаково, поэтому перекладывать данные из одного в другой бессмысленно в любую сторону. Что именно этому потолку осталось — в следующем разделе.
 
 #### Пятьдесят камер на воркера — это дефолт переменной окружения, а не свойство дизайна
 
 Сказанное выше про heartbeat'ы («каждый несёт только свои пятьдесят, запас пятикратный») держится на одном числе, и число это не архитектурное:
 
-```290:290:vmsserver/vms/worker.py
+```303:303:vmsserver/vms/worker.py
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
 ```
 
@@ -1094,13 +1133,15 @@ PUT /v1/var/objects/vms/snapshot
 | **~260** | **~64 КБ** | **на границе** |
 | 400 | ~100 КБ | **нет** |
 
-**И потолок кластера — это `12 × CAPACITY`, а не 600.** Проектные 600 из части 5 — это дефолт, умноженный на `max = 12`. При 400 на воркера потолок 4 800, и снапшот на этом числе — 1.15 МБ, то есть **в восемнадцать раз над лимитом**, а не в два. Тогда из четырёх вариантов вопроса 3 узкий список полей не спасает (даже 80 байт на камеру дают 384 КБ), а вариант «перенести конфигурацию в heartbeat» **отпадает совсем**: он переносит данные из объекта, который лимит уже пробил, в объект, который пробьёт его следом.
+**И потолок кластера — это `12 × CAPACITY`, а не 600.** Проектные 600 из части 5 — это дефолт, умноженный на `max = 12`. При 400 на воркера потолок 4 800 камер, и вот тут видно, что дала нарезка снапшота: раньше единый снапшот на этом числе весил бы 1.15 МБ, то есть в восемнадцать раз над лимитом, а теперь шард весит ~96 КБ — в полтора. **Обе половины сравнялись и упираются в одну стену примерно на 260–270 камерах на воркера.**
+
+Отсюда и практический вывод: `CAPACITY` стал единственным числом, которое возвращает лимит 64 KiB на сцену, и оно бьёт сразу по двум объектам. Нарезать их мельче уже некуда — оба и так по одному на воркера. Значит выбор простой: **ограничить `CAPACITY`** или **сменить объектное хранилище** (вопрос 3). Вариант «перенести конфигурацию в heartbeat» при этом отпадает совсем: он переносил бы данные в объект, который упирается в тот же потолок.
 
 #### Что тогда делать с heartbeat'ом: сводка вместо списка
 
 Хорошая новость в том, что heartbeat **уже разделён** на две части — это видно по его форме:
 
-```153:154:vmsserver/w2cplatform/contract.py
+```333:334:vmsserver/w2cplatform/contract.py
     def to_bytes(self) -> bytes:
         return json.dumps({"worker": self.worker, "ts": self.ts, "status": self.status, **self.extra}).encode()
 ```
@@ -1139,7 +1180,7 @@ PUT /v1/var/objects/vms/snapshot
 
 Первый сорт проверяется прямо, и docstring сам объясняет, зачем его вообще передают:
 
-```105:108:vmsserver/vms/config.py
+```107:110:vmsserver/vms/config.py
 def live_url(server: str, cid) -> str:
     """Where a camera's stream is served from: the worker's RTSP fan-out. In the
     heartbeat, so a subscriber needs only the heartbeat — on any server."""
@@ -1179,46 +1220,33 @@ def live_url(server: str, cid) -> str:
 
 **И собственно опцион.** Интерфейс из трёх методов (`put`/`get`/`list`, значение — голые `bytes`) — это вся цена возможности сменить реализацию. Триггер возврата второго хранилища назван в М11: **сто воркеров, или heartbeat'ы с превьюшками.**
 
-Причём этот опцион **уже сработал — ровно на дефекте снапшота из этого раздела.** Один из трёх способов вылечить 64 KiB — это `OBJECTS=s3+https://…` или MinIO, то есть **смена переменной окружения без единой правки выше**. Если бы снапшот писался в Variables напрямую, этот выход приходилось бы прорубать рефакторингом.
+Причём этот опцион **остаётся последним ответом на лимит 64 KiB.** После нарезки снапшота резать дальше нечего, поэтому если `CAPACITY` большой, то выход один — `OBJECTS=s3+https://…` или MinIO, то есть **смена переменной окружения без единой правки выше**. Если бы снапшот писался в Variables напрямую, этот выход приходилось бы прорубать рефакторингом.
 
-Одна честная оговорка, записанная в самом проекте (`vmsworker-policy.hcl.md`): грант `objects/vms/*` покрывает и `objects/vms/snapshot`, так что **токен воркера мог бы перезаписать снапшот контроллера**. Код так не делает, но право шире, чем «только свой heartbeat», и в проекте это объяснено как неизбежное: «путь на аллокацию требует имени слота, а оно неизвестно в момент написания политики».
+Одна честная оговорка, записанная в самом проекте (`vmsworker-policy.hcl.md`): грант `objects/vms/*` покрывает и снапшот, так что **токен воркера может перезаписать снапшот контроллера**. Код так не делает, но право шире, чем «только свой heartbeat», и в проекте это объяснено как неизбежное: «путь на аллокацию требует имени слота, а оно неизвестно в момент написания политики».
 
-Похоже, что неизбежным это выглядит по случайной причине — heartbeat'ы и снапшот просто оказались соседями под одним префиксом:
+Неизбежным это выглядело по случайной причине — heartbeat'ы и снапшот просто оказались соседями под одним префиксом. **С тех пор раскладку развели, и обе стороны теперь разложены по своим каталогам:**
 
-| | Ключ объекта | Путь Variable |
+| | Было | Стало |
 |---|---|---|
-| heartbeat воркера | `vms/w-1/heartbeat` | `objects/vms/w-1/heartbeat` |
-| снапшот | `vms/snapshot` | `objects/vms/snapshot` |
+| heartbeat воркера | `objects/vms/w-1/heartbeat` | `objects/vms/heartbeats/w-1` |
+| снапшот | `objects/vms/snapshot` | `objects/vms/snapshot/w-1` |
 
-Развести их — одна строка: если `heartbeat_key()` начнёт возвращать `<name>/hb/<worker>/heartbeat`, политика воркера сужается до `objects/vms/hb/*` и снапшот в неё больше не попадает. Обычно такое переименование ломает всех читателей, поэтому их надо пересчитать — и их **два, ведущие себя по-разному.** Первый, в кластере, правки не требует:
+Теперь каждый префикс держит один вид объектов и ничего больше, поэтому политику воркера можно сузить до `objects/vms/heartbeats/*`, и снапшот в неё не попадёт. **Само сужение политики ещё надо сделать** — раскладка его только сделала выразимым.
 
-```241:253:vmsserver/w2cplatform/contract.py
-    def workers_seen(self, max_age: float = 45.0) -> dict[str, Heartbeat]:
-        """Which workers exist: those that heartbeat recently. Never a list
-        the controller keeps — a fact it reads."""
-        out = {}
-        now = self.wall()
-        for key in self.objects.list(self.sub.name + "/"):
-            if key.endswith("/heartbeat"):
-                raw = self.objects.get(key)
-                if raw:
-                    hb = Heartbeat.from_bytes(raw)
-                    if now - hb.ts <= max_age:
-                        out[hb.worker] = hb
-        return out
+Заодно из читателей ушёл фильтр, который раньше был ценой старой раскладки. В кластере `workers_seen()` теперь листит один каталог и ничего не отсеивает:
+
+```427:429:vmsserver/w2cplatform/contract.py
+        # One prefix, no filter: `<name>/heartbeats/` holds heartbeats and nothing else.
+        for key in self.objects.list(self.sub.heartbeats_prefix()):
+            raw = self.objects.get(key)
 ```
 
-Листинг идёт по `vms/` с фильтром **по суффиксу**, а имя воркера берётся **из тела** heartbeat'а (`out[hb.worker]`), а не разбирается из пути. Здесь раскладка ключей свободна, и лишний уровень вложенности ничего не задевает.
+На домене был читатель похуже — он **считал слэши**, и любой лишний уровень вложенности сделал бы кластер пустым на вид. Его тоже переписали, и в докстроке прямо сказано, чем был тот фильтр:
 
-А вот второй читатель, на домене, ту же задачу решает иначе — **считая слэши**:
-
-```53:55:М12_DomainVMS/domainvms/domain/federation.py
-        for key in self.objects.list("vms/"):
-            if key.endswith("/heartbeat") and key.count("/") == 2:
-                raw = self.objects.get(key)
+```84:85:М12_DomainVMS/domainvms/domain/federation.py
+        The filter this used to carry (`endswith("/heartbeat") and count("/") == 2`)
+        was the price of a key layout that put every worker's name at the top."""
 ```
-
-В новом пути слэша три, и под этот фильтр heartbeat'ы перестанут попадать — домен увидит кластер пустым. Правка на один символ, но не заметить её нельзя; разумнее заодно убрать счёт слэшей совсем и оставить суффикс, как сделано в кластере.
 
 #### Кто его читает и зачем
 
@@ -1228,13 +1256,14 @@ def live_url(server: str, cid) -> str:
 
 Читателей у него ровно два, и оба на домене.
 
-**Читатель первый — каталог, «где камера 7».** Домену запрещено читать строки камер из Variables кластера: строки принадлежат контроллеру, и веер поштучных чтений через WAN был бы и медленным, и нарушением правила одного писателя. Поэтому домен читает **один объект на кластер**:
+**Читатель первый — каталог, «где камера 7».** Домену запрещено читать строки камер из Variables кластера: строки принадлежат контроллеру, и веер поштучных чтений через WAN был бы и медленным, и нарушением правила одного писателя. Поэтому домен читает **каталог шардов** — листинг и `get` на каждый, ровно как он уже читает heartbeat'ы:
 
-```45:47:М12_DomainVMS/domainvms/domain/federation.py
+```50:51:М12_DomainVMS/domainvms/domain/federation.py
     def snapshot(self) -> dict | None:
-        """The cluster's one published object, or None if it never published."""
-        raw = self.objects.get(SNAPSHOT)
+        """The cluster's cameras and placement, merged from one object per worker.
 ```
+
+Слияние шардов — не формальность. У каждого своя отметка времени, поэтому возрастом всей картины домен считает **самый старый** шард. А камера, которую как раз переносят, какое-то время лежит в двух шардах сразу; побеждает тот, что свежее, иначе `where()` спотыкался бы на том, что вовсе не является отказом.
 
 Из этого строятся три ответа: `snapshots()` — что в каждом кластере и какие кластеры не ответили; `holdings()` — какой воркер что держит; `ages()` — **насколько устарел мой взгляд на каждый кластер**. Последнее и есть смысл поля `ts`: домен печатает возраст на каждой строке, потому что иначе нельзя отличить «так и есть» от «так было четыре минуты назад». То есть домен прямо говорит, насколько его картина может отставать от реальности.
 
@@ -1257,27 +1286,24 @@ def live_url(server: str, cid) -> str:
 
 **Главное следствие: снапшот нужен не для того, чтобы ускорить UI, а как интерфейс между кластером и доменом.** Строки камер из raft не уезжают никогда; уезжает снапшот. Перестал публиковаться — домен ослеп на этот кластер, хотя запись и правка настроек внутри кластера продолжаются как ни в чём не бывало.
 
-#### И третий дефект: доменный список камер снапшот не читает, хотя должен
+#### Бывший третий дефект: доменный список камер теперь снапшот читает
 
-Это стоит отдельного абзаца, потому что дефект видимый для оператора.
+Раньше здесь был дефект, видимый оператору: `readview.py` обещал в докстроке читать снапшот, а в `refresh()` читал только heartbeat'ы. Камера, которую никакой воркер не подхватил, в доменном списке не появлялась вообще. **Это починили**, и теперь `refresh()` в одном проходе берёт оба источника:
 
-Документация `readview.py` обещает читать снапшот — и обещает ровно для того случая, который без него теряется:
-
-```5:9:М12_DomainVMS/domainvms/domain/readview.py
-The read model reads what each cluster's WORKERS already publish beside
-their heartbeat — `vms/<worker>/heartbeat`, carrying the worker's status
-per camera, its server, its epochs — plus each cluster's `vms/snapshot`
-for the rows a worker is not yet running. It holds them in memory and
-serves the list, search and pagination from there.
+```109:116:М12_DomainVMS/domainvms/domain/readview.py
+                for w, hb in c.heartbeats().items():
+                    self.snapshots[(name, w)] = Snapshot(w, name, float(hb.get("ts", 0)), str(hb.get("server", "?")),
+                                                         list(hb.get("status", [])))
+                # …and the cluster's own copy of what SHOULD exist, for the cameras no worker reports.
+                # Read in the same pass and from the same cluster, so a cluster that goes unreachable
+                # loses both together rather than leaving one of them stale in a way nothing explains.
+                self.configured[name] = (c.snapshot() or {}).get("cameras", [])
+                self.configured_at[name] = float((c.snapshot() or {}).get("ts", 0))
 ```
 
-«Plus each cluster's `vms/snapshot` **for the rows a worker is not yet running**» — то есть для камер, которые созданы, но никуда не встали. А в самом `refresh()` снапшота нет: цикл читает только `c.heartbeats()`.
+Камера, которую никто не держит, приходит из снапшота и получает в списке состояние `configured` — «настроена, но её никто не отчитывает». Дедупликация идёт по паре «кластер и `ref`», чтобы камера, попавшая и в heartbeat, и в снапшот, не показалась дважды.
 
-Что из этого следует практически. Камера, которую **никакой воркер не подхватил**, в доменном списке **не появляется вообще** — ни серой строкой, ни с пометкой «не размещена». А это ровно то состояние, в котором камера оказывается, когда её создали при упавшем контроллере: часть 4 показывает, что она создастся с `worker: null`. **Оператор в этом случае не увидит её нигде** и решит, что создание не прошло.
-
-Заметьте, что в консоли кластера этот случай обработан — именно за этим там `configured: ctl.units()`. На домене эквивалента просто нет. Причём лечится он дешевле, чем в кластере: снапшот — **один объект на кластер**, а не поштучное чтение.
-
-Заодно это объясняет путаницу в именах, на которую легко напороться при чтении кода: в `readview.py` поле `self.snapshots` и класс `Snapshot` — это **heartbeat'ы воркеров**, а не снапшот контроллера. Снапшот контроллера в этом файле не упоминается нигде, кроме docstring'а.
+Заодно снялась путаница в именах, хотя и не до конца: в `readview.py` поле `self.snapshots` и класс `Snapshot` — это по-прежнему **heartbeat'ы воркеров**, а копия снапшота живёт в `self.configured`. Имена стоило бы поменять местами, но это уже косметика.
 
 #### Сколько он весит
 
@@ -1297,17 +1323,27 @@ serves the list, search and pagination from there.
 | `"worker":"w-2","server":"srv-1"` | ~32 |
 | **итого на камеру** | **~240** |
 
-Отсюда:
+Раньше здесь была таблица, которая упиралась в стену: единый снапшот на весь кластер весил ~144 КБ на шестистах камерах и не публиковался. **Этот дефект закрыт нарезкой по воркерам**, и теперь считать надо не по кластеру, а по одному воркеру:
 
-| Камер | Размер снапшота | Влезает в 64 KiB? |
+| Камер **на воркера** | Размер шарда | Влезает в 64 KiB? |
 |---|---|---|
-| 100 | ~24 КБ | да |
-| 270 | ~64 КБ | **на границе** |
-| **600** — максимум по jobspec'у воркера | **~144 КБ** | **нет** |
-| 1 000 | ~240 КБ | нет |
-| 10 000 | **~2.4 МБ** | нет, в 37 раз больше |
+| 50 — дефолт `CAPACITY` | ~12 КБ | да, с пятикратным запасом |
+| 150 | ~36 КБ | да |
+| **270** | **~64 КБ** | **на границе** |
+| 400 | ~96 КБ | **нет** |
 
-И вот главное в этой таблице, и для этого не нужны никакие десять тысяч. Посмотрите на границы, которые дизайн объявляет сам:
+Важно, что́ именно изменилось. Потолок никуда не делся — это по-прежнему 64 KiB на объект, — но он перестал зависеть от размера кластера. Шард растёт вместе с `CAPACITY` одного воркера, а кластер растёт числом воркеров, то есть числом объектов. Причина записана прямо в коде:
+
+```206:211:vmsserver/w2cplatform/contract.py
+    # `<name>/snapshot/<worker>` — one object per worker, the same shape the heartbeat key already has.
+    # The snapshot used to be ONE object for the whole cluster, and it was the only place in the platform
+    # where data grew in a single object: an object store has a ceiling (Nomad Variables: 64 KiB on the
+    # whole object), and 600 cameras — the cluster's own design maximum — did not fit under it. Sharded by
+    # the worker that holds the unit, it grows the way the cluster grows: more units means more workers
+    # means more objects, each the size of one worker's assignment.
+```
+
+Посмотрите на границы, которые дизайн объявляет сам:
 
 ```17:20:М11_ClusterVMS/clustervms/deploy/vmsworker.nomad.hcl
     scaling {
@@ -1316,28 +1352,35 @@ serves the list, search and pagination from there.
       max     = 12                                   # the servers' budget: B + n·I from М9 Lesson 7
 ```
 
-Двенадцать воркеров максимум, по ~50 камер на воркера ([`spec.py`](./vmsserver/w2cplatform/spec.py), строка 166: `capacity_fallback: int = 50`; [`ARCHITECTURE.md`](./ARCHITECTURE.md) говорит «up to ~50 GStreamer pipelines in one process»). **То есть проектный максимум кластера — около 600 камер, а снапшот перестаёт публиковаться примерно на 270.**
+Двенадцать воркеров максимум, по ~50 камер на воркера ([`spec.py`](../vmsserver/w2cplatform/spec.py), `capacity_fallback: int = 50`; [`ARCHITECTURE.md`](../ARCHITECTURE.md) говорит «up to ~50 GStreamer pipelines in one process»). **Проектные 600 камер теперь публикуются штатно: двенадцать шардов по 12 КБ.**
 
-Снапшот ломается **на сорока пяти процентах от заявленного максимума самого дизайна.** Это не гипотетическая проблема масштаба, это дефект в объявленных границах, и ломает он не UI, а то, как домен видит кластер. Замер нужен, но искать его надо не на десяти тысячах камер, а на трёхсот.
+#### Что осталось от этого вопроса
 
-#### Что с этим делать
+Осталось ровно одно, и оно общее у снапшота с heartbeat'ом: **оба масштабируются по `CAPACITY`, а не по числу камер в кластере, и оба ломаются примерно на 260–270 камерах на воркера.** При дефолте 50 это не проявляется, при 400 ломается сразу и то и другое. То есть вопрос переехал с «как нам вообще опубликовать кластер» на «какой `CAPACITY` мы разрешаем ставить».
 
-**Проекция полей наконец начинает работать** — но не как параметр запроса, а как способ уменьшить объект. Узкий снапшот из `id`, `name`, `worker`, `revision` — около 80 байт на камеру, предел поднимается с 270 до ~800. Этого хватает, чтобы закрыть проектные 600, и не хватает ни для чего большего.
+Второе изменение к лучшему: **отказ стал громким.** Раньше файловое хранилище принимало объект любого размера, и запись, которую Nomad отверг бы на проде, в тестах проходила. Теперь хранилище объявляет свой потолок полем `max_bytes`, а превышение поднимает `TooLarge` с ключом, размером и пределом, причём вызывающий добавляет к этому человеческое объяснение:
 
-Дальше два варианта, и они не исключают друг друга:
+```1221:1227:vmsserver/w2cplatform/spec.py
+            except TooLarge as e:
+                # The store refuses with bytes; the caller knows what those bytes WERE. A shard is one
+                # worker's assignment, so an oversized shard is not a shape problem any more — it is a
+                # store too small to hold what a single worker carries, and `OBJECTS` is what names it.
+                raise TooLarge(e.key, e.size, e.limit,
+                               f"{len(shard[self.spec.rows])} units on {name}; the snapshot is already one "
+                               f"object per worker, so the store is the thing to change (OBJECTS=…)") from e
+```
 
-- **резать на страницы** — `objects/vms/snapshot/page-0`, `page-1`, … по ~250 камер плюс манифест, с тем же `publish-then-point`: сначала страницы, потом указатель. Домен читает манифест и страницы;
-- **сменить объектное хранилище** — `OBJECTS` выбирается URL-ом (`variables://objects` против `s3+https://…`), то есть это решение на установке, а не переписывание кода. В полноценном объектном хранилище снапшот на 2.4 МБ — один обычный объект без всяких лимитов, и вся эта арифметика исчезает.
+Сообщение и подсказывает ответ. Если `CAPACITY` на установке большой, то чинить надо не форму снапшота — она уже нарезана предельно мелко, — а само хранилище: `OBJECTS` выбирается URL-ом (`variables://objects` против `s3+https://…`), то есть это решение при установке, а не переписывание кода. В полноценном объектном хранилище лимита нет, и вся арифметика исчезает.
 
-Третье, о чём стоит помнить: если строки уже лежат в кэше контроллера (предыдущий раздел), публикация снапшота становится сериализацией того, что есть, а не новым полным чтением хранилища. Тогда резать его на страницы дёшево — данные уже под рукой.
+Третье, о чём стоит помнить: если строки уже лежат в кэше контроллера (предыдущий раздел), публикация шардов становится сериализацией того, что есть, а не новым полным чтением хранилища.
 
 ### Осторожно с «дай камеры сразу с таким-то полем»
 
 Требование к списку обычно звучит как «мне нужны камеры, и сразу с именем» или «сразу с тем, на каком сервере она живёт». Выглядит как один вопрос, а на самом деле это **три разных вопроса с ценой, различающейся в тысячи раз**, и разница зависит от того, где поле лежит.
 
-У камеры **восемь полей оператора** (`OPERATOR_FIELDS = tuple(SPEC.fields)` в [config.py](./vmsserver/vms/config.py), то есть ровно блок `fields:` из YAML). И приятная новость: **в снапшот уезжают все восемь**:
+У камеры **восемь полей оператора** (`OPERATOR_FIELDS = tuple(SPEC.fields)` в [config.py](../vmsserver/vms/config.py), то есть ровно блок `fields:` из YAML). И приятная новость: **в снапшот уезжают все восемь**:
 
-```101:101:vmsserver/vms/vms.subsystem.yaml
+```111:111:vmsserver/vms/vms.subsystem.yaml
 snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
 ```
 
@@ -1368,7 +1411,7 @@ snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, 
 
 Контроллер — это цикл раз в 5 секунд без порта и без состояния: он читает обстановку и делает четыре действия, каждое из которых можно расписать запросами.
 
-```186:198:vmsserver/vms/__main__.py
+```187:195:vmsserver/vms/__main__.py
 def _controller_loop(ctl) -> None:
     """One controller process per subsystem, the same loop: unplace what was deleted, place what is new onto the
     workers it sees, move what a released slot left, bring one unit home if its server came back, publish the
@@ -1378,10 +1421,6 @@ def _controller_loop(ctl) -> None:
             ctl.ensure_placed()                       # deleted rows unplaced; new units onto the workers it sees
             ctl.redistribute()                        # units of a RELEASED slot (scale-in) onto the rest
             ctl.ensure_home(1)                        # ONE unit a pass back to the server its row names, if it is back
-            ctl.publish_snapshot()
-        except Exception:                             # noqa: BLE001
-            logging.exception("placement pass failed")
-        stop.wait(5)
 ```
 
 ### Шаг 1 — читает обстановку
@@ -1389,10 +1428,10 @@ def _controller_loop(ctl) -> None:
 Ничего не пишет. Просто узнаёт, что есть:
 
 ```
-GET /v1/vars?prefix=objects/vms/           какие воркеры отчитывались
-GET /v1/var/objects/vms/w-1/heartbeat      → {ts, status, capacity: 50, headroom: 47,
+GET /v1/vars?prefix=objects/vms/heartbeats/   какие воркеры отчитывались
+GET /v1/var/objects/vms/heartbeats/w-1     → {ts, status, capacity: 50, headroom: 47,
                                               server: "srv-1", labels: "vlan:cctv-a"}
-GET /v1/var/objects/vms/w-2/heartbeat
+GET /v1/var/objects/vms/heartbeats/w-2
 GET /v1/var/objects/platform/resources/srv-1/heartbeat    жив ли resource на сервере
 
 GET /v1/vars?prefix=vms/cameras/           какие камеры есть
@@ -1459,12 +1498,17 @@ PUT /v1/var/vms/workers/w-2?cas=…      {units: ["3","7","11"], rev: 13}
 
 ### Шаг 5 — публикует снапшот
 
-Единственная безусловная запись за весь проход:
+Единственная безусловная запись за весь проход — и теперь их столько, сколько воркеров:
 
 ```
-PUT /v1/var/objects/vms/snapshot
-    {"Items": {"data": "{\"cluster\":\"cluster-a\",\"ts\":1757500000.0,\"cameras\":[…]}"}}
+GET /v1/vars?prefix=objects/vms/snapshot/      какие шарды уже есть
+PUT /v1/var/objects/vms/snapshot/w-1
+    {"Items": {"data": "{\"cluster\":\"cluster-a\",\"worker\":\"w-1\",\"ts\":1757500000.0,\"cameras\":[…]}"}}
+PUT /v1/var/objects/vms/snapshot/w-2
+PUT /v1/var/objects/vms/snapshot/unplaced      камеры, которых никто не держит
 ```
+
+Листинг перед записью нужен, чтобы **обнулить шард ушедшего воркера**: удалять объекты платформа не умеет, поэтому шард, который этот проход не заполнил, переписывается пустым.
 
 Это копия для домена. Сами строки из raft кластера не уезжают никогда — уезжает снапшот с отметкой времени, и домен печатает её возраст на каждой строке.
 
@@ -1517,7 +1561,7 @@ PUT /v1/var/objects/vms/snapshot
 
 > Failover of the controller itself is not measured anywhere: while it is being rescheduled, workers keep recording from their last assignment and the console keeps writing rows; **only new placements wait.**
 >
-> — [`vmscontroller.nomad.hcl.md`](./М11_ClusterVMS/clustervms/deploy/vmscontroller.nomad.hcl.md)
+> — [`vmscontroller.nomad.hcl.md`](../М11_ClusterVMS/clustervms/deploy/vmscontroller.nomad.hcl.md)
 
 **Что произойдёт само.** Nomad заметит пропавшего клиента, пометит аллокацию потерянной и запустит контроллер на другом сервере — обычное перепланирование `service`-job с `count = 1`, десятки секунд, без участия человека. Новый экземпляр ничего не помнит и начинает с чтения store с нуля, поэтому на первом же проходе разместит всё накопившееся.
 
@@ -1552,41 +1596,49 @@ PUT /v1/var/objects/vms/snapshot
 
 | Что вызывается | Что читает | Чтений |
 |---|---|---|
-| `unplace_deleted()` — **дважды за проход** (из `ensure_placed` и из `redistribute`) | листинг размещений + строка размещения и строка камеры на каждую | ~2 400 |
-| `ensure_placed()` | `units()` (601) + `placement/<id>` на каждую | ~1 200 |
-| `ensure_home(1)` | `units()` (601) + `placement/<id>` на каждую | ~1 200 |
-| **`publish_snapshot()`** | `units()` (601) + `placement` на каждую + **`server_of()` на каждую** | **~9 000** |
-| | | **≈ 13 800 за проход, то есть ~2 800 чтений в секунду** |
+| `ensure_placed()` | снятие размещения с удалённых и завершённых, потом `units()` и `placement/<id>` на каждую | ~3 000 |
+| `redistribute()` | снова снятие удалённых, слоты, ресурсы серверов, `draining` | ~1 700 |
+| `ensure_home(1)` | `_pool()`, `units()`, и на каждую камеру `home_for` + `placement` + `server_of` | **~10 700** |
+| `publish_snapshot()` | `units()` + `placement` на каждую + **`server_of()` на каждую** | **~9 000** |
+| | | **≈ 24 000 за проход, то есть ~4 800 чтений в секунду** |
 
-**Больше половины этого — одна строка.** `snapshot()` заполняет колонку `server` вызовом `server_of()` на каждую камеру:
+Самая дорогая строка — `ensure_home`, и это неожиданно. Спека VMS объявляет `home: near`, то есть камера должна жить рядом со своей записью. Поэтому контроллер каждые пять секунд перебирает все шестьсот камер и проверяет, на месте ли они, — даже когда бюджет переездов равен одному и переезжать некому.
 
-```878:881:vmsserver/w2cplatform/spec.py
-        for r in self.units():
-            w = self.where(r["id"])
-            units.append({**{k: r[k] for k in keep if k in r}, "worker": w, "server": self.server_of(w or "")})
-        return {"cluster": self.cluster, "ts": self.wall(), self.spec.rows: units}
+**Но под всеми четырьмя вызовами лежит одна и та же функция.** `workers_seen()` стоит тринадцать чтений: листинг объектов плюс `get` на каждый из двенадцати heartbeat'ов. Состояния она не держит принципиально, и это записано прямо в докстроке:
+
+```422:429:vmsserver/w2cplatform/contract.py
+    def workers_seen(self, max_age: float = 45.0) -> dict[str, Heartbeat]:
+        """Which workers exist: those that heartbeat recently. Never a list
+        the controller keeps — a fact it reads."""
+        out = {}
+        now = self.wall()
+        # One prefix, no filter: `<name>/heartbeats/` holds heartbeats and nothing else.
+        for key in self.objects.list(self.sub.heartbeats_prefix()):
+            raw = self.objects.get(key)
 ```
 
-А `server_of()` — это `workers_seen()`, то есть **листинг объектов и чтение heartbeat'а каждого воркера, заново**:
+Беда в том, что зовут её не раз за проход, а на каждую камеру — через `server_of`, который целиком состоит из одного обращения к `workers_seen`:
 
-```350:352:vmsserver/w2cplatform/spec.py
+```464:466:vmsserver/w2cplatform/spec.py
     def server_of(self, worker: str) -> str:
         hb = self.workers_seen(max_age=1e12).get(worker)
         return hb.extra.get("server", "?") if hb else "?"
 ```
 
-Кэша в `workers_seen()` нет. Значит, при 600 камерах и 12 воркерах публикация снапшота стоит 600 × 13 = **7 800 чтений на каждый проход**, каждые пять секунд, только чтобы двенадцать раз выяснить одно и то же. Сложность — камеры × воркеры, то есть растёт быстрее линейной: и камеры, и воркеры увеличиваются вместе.
+`server_of` стоит в цикле по камерам **дважды** — в `ensure_home` и в сборке шардов снапшота. Это 1 200 вызовов по тринадцать чтений, то есть **около 15 600 из 24 000**. Ещё сотни набегают на пер-воркерных проверках внутри `_pool`, `without_resource` и `on_draining`. Получается, что две трети прохода контроллер тратит на перечитывание одних и тех же двенадцати heartbeat'ов.
 
-**И чинится это не диффами, а одной строкой** — поднять `workers_seen()` из цикла и построить карту `воркер → сервер` один раз на снапшот. Это снимает ~56 % всей работы контроллера и не требует ни новых контрактов, ни правок в `list()`. **Из всего, что предлагает документ, это самое дешёвое действие с самым большим эффектом**, и сделать его можно сегодня, независимо от остальных вопросов.
+**Чинится это не диффами, а кэшем в одном месте.** Не «вынести `server_of` из одного цикла», как говорила прежняя редакция этого раздела, а запомнить сам `workers_seen()` на время прохода: тогда выигрыш получат все её вызывающие сразу — и `server_of`, и `labels_of`, и пер-воркерные проверки. Контракта это не касается вовсе. **Из всего, что предлагает документ, это самое дешёвое действие с самым большим эффектом.**
 
-Остальное лечится тем, что описано в части 2, — диффом по `ModifyIndex`. Контроллер и так ничего не должен делать в покое; с диффом он в покое и *читать* будет один листинг вместо трёх полных обходов. Заодно публикация снапшота станет сериализацией того, что уже в кэше, а не новым полным чтением.
+Риск ровно один, и его стоит назвать. Сейчас каждый вызов видит свежие heartbeat'ы, а с кэшем контроллер весь проход работает со снимком возрастом в секунды. Для размещения это безопасно: воркер считается живым 45 секунд, так что несколько секунд задержки внутри одного прохода ничего не решают.
 
-| | Сейчас | Убрать `server_of` из цикла | Плюс дифф по `ModifyIndex` |
+Остальное лечится тем, что описано в части 2, — диффом по `ModifyIndex`.
+
+| | Сейчас | Кэш `workers_seen()` на проход | Плюс дифф по `ModifyIndex` |
 |---|---|---|---|
-| 600 камер, проход | ~13 800 | **~6 000** | **~2 400**, а если кэшировать и `placement/*` — десятки |
-| 600 камер, в секунду | ~2 800 | ~1 200 | **~480**, соответственно единицы |
+| 600 камер, проход | ~24 000 | **~8 000** | **~5 000**, а если кэшировать и `placement/*` — ~1 500 |
+| 600 камер, в секунду | ~4 800 | ~1 600 | **~1 000**, соответственно ~300 |
 
-Вторая колонка — одна строка кода. Третья — правка контракта `list()` и кэш; причём чтения `placement/<id>` на каждую камеру остаются, пока тем же диффом не накрыть и префикс размещений.
+Вторая колонка — правка в одной функции. Третья — изменение контракта `list()` и кэш строк; причём чтения `placement/<id>` на каждую камеру остаются, пока тем же диффом не накрыть и префикс размещений.
 
 Оговорка про точность: это оценка по чтению кода, а не замер. Порядок величины надёжен, конкретные числа — нет, и именно поэтому в списке вопросов стоит «нужен замер».
 
@@ -1697,7 +1749,7 @@ vms/cameras/7/mask       только маска, своя ревизия, св�
 
 А доступ к нему — не через общее хранилище, а **через того, кто им владеет**:
 
-```98:101:vmsserver/vms/config.py
+```100:103:vmsserver/vms/config.py
 def playback_url(server: str, cid) -> str:
     """Where a camera's OWN archive is served from — the holder's playback surface.
     HTTP, not the RTSP fan-out: a browser has to seek inside it, and the recorder
@@ -1756,7 +1808,7 @@ def playback_url(server: str, cid) -> str:
 
 ### Что говорит сам дизайн
 
-Около **600**: двенадцать воркеров максимум по `scaling { max = 12 }` — [`vmsworker.nomad.hcl`](./М11_ClusterVMS/clustervms/deploy/vmsworker.nomad.hcl), строка 20 — по ~50 камер на воркера ([`spec.py`](./vmsserver/w2cplatform/spec.py), строка 166: `capacity_fallback: int = 50`).
+Около **600**: двенадцать воркеров максимум по `scaling { max = 12 }` — [`vmsworker.nomad.hcl`](../М11_ClusterVMS/clustervms/deploy/vmsworker.nomad.hcl), строка 20 — по ~50 камер на воркера ([`spec.py`](../vmsserver/w2cplatform/spec.py), строка 166: `capacity_fallback: int = 50`).
 
 ```17:20:М11_ClusterVMS/clustervms/deploy/vmsworker.nomad.hcl
     scaling {
@@ -1767,7 +1819,7 @@ def playback_url(server: str, cid) -> str:
 
 Оговорка, без которой число обманывает. Из двух множителей в jobspec'е записан только один: **`max = 12` — граница, а 50 — дефолт.** Ёмкость воркера приходит из переменной окружения, и вообще-то это *слово самого воркера*, которое контроллер принимает из heartbeat'а:
 
-```290:290:vmsserver/vms/worker.py
+```303:303:vmsserver/vms/worker.py
         self.capacity = capacity if capacity is not None else int(env.get("CAPACITY", "50"))   # М9 Lesson 7's B + n·I, measured on ITS server
 ```
 
@@ -1836,7 +1888,7 @@ def playback_url(server: str, cid) -> str:
 
 А если хранить её только в домене, то при недоступном домене оператор на площадке остаётся без своих экранов. Это ровно то напряжение, которое дизайн уже один раз разрешил для личностей: `DomainAgent` синхронизирует ключи и гранты вниз, в `domain/*` каждого кластера, и кластер продолжает работать на том, что успел получить.
 
-То есть решение, скорее всего, уже спроектировано — только для другого типа данных. **Раскладки просто ещё не названы**, и это пятый тип данных к тем, что перечислены в §1.5, наравне с аудитом из [`АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md`](./АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md).
+То есть решение, скорее всего, уже спроектировано — только для другого типа данных. **Раскладки просто ещё не названы**, и это пятый тип данных к тем, что перечислены в §1.5, наравне с аудитом из [`settings-audit.md`](./settings-audit.md).
 
 И ещё одно, чисто про счёт. **В нашей архитектуре рабочие места вообще не попадают в число серверов** — их не надо ни покупать в кластер, ни включать в raft, ни лицензировать как узлы: это браузеры. Так что сравнивать «207 у них» с «сколько у нас» напрямую нельзя ни в ту, ни в другую сторону.
 
@@ -1855,7 +1907,7 @@ def playback_url(server: str, cid) -> str:
 
 Ниже выяснится, что есть и вариант **C — площадка как кластер М11 из одной машины**: то же железо, что у A, но домен видит её как обычный кластер. Он и оказывается самым интересным.
 
-**А вот дыра, и она не зависит от точного числа площадок.** Если площадку делать кластером М11, то в [`server.hcl`](./М11_ClusterVMS/clustervms/deploy/server.hcl) стоит `bootstrap_expect = 3` — три сервера на кворум. На площадку с двумя-тремя десятками камер, которая умещается на одной машине. Сто площадок превращаются в триста серверов там, где вендор ставит сто.
+**А вот дыра, и она не зависит от точного числа площадок.** Если площадку делать кластером М11, то в [`server.hcl`](../М11_ClusterVMS/clustervms/deploy/server.hcl) стоит `bootstrap_expect = 3` — три сервера на кворум. На площадку с двумя-тремя десятками камер, которая умещается на одной машине. Сто площадок превращаются в триста серверов там, где вендор ставит сто.
 
 **Но сразу оговорка, иначе вывод получится неверным: тройка ничем не «требуется».** Это число в примере развёртывания, и ни одна строка кода его не читает. Nomad принимает и единицу — с честным предупреждением в собственной документации: *«A value of `1` does not provide any fault tolerance and is not recommended for production use cases»*. А комментарий в нашем же `server.hcl.md` объясняет тройку иначе, чем «кворум нужен»: она *«prevents a lone first server from bootstrapping a one-node raft that later splits»* — то есть защищает от случайного односерверного raft при установке на три коробки, а не запрещает односерверный намеренно.
 
@@ -1872,7 +1924,7 @@ def playback_url(server: str, cid) -> str:
 
 **То есть действительная цена единицы — не доступность записи, а единственная копия конфигурации.** Видео при смерти сервера продолжает писаться в обоих случаях; разница в том, что три сервера реплицируют строки камер, а один держит их на одном диске.
 
-**И у единицы есть неожиданное достоинство, ради которого её стоит рассмотреть всерьёз.** М12 федерирует кластеры как **регионы Nomad**, связанные WAN-gossip'ом ([`federation.hcl`](./М12_DomainVMS/domainvms/deploy/federation.hcl)). Бокс М9 — не регион, и **механизма агрегировать боксы, а не регионы, домен не описывает** — это дыра. А односерверный кластер — регион. То есть `bootstrap_expect = 1` — самый дешёвый способ закрыть эту дыру: одна машина на площадке, но домен видит её ровно так же, как любой другой кластер, теми же жёстко прошитыми путями.
+**И у единицы есть неожиданное достоинство, ради которого её стоит рассмотреть всерьёз.** М12 федерирует кластеры как **регионы Nomad**, связанные WAN-gossip'ом ([`federation.hcl`](../М12_DomainVMS/domainvms/deploy/federation.hcl)). Бокс М9 — не регион, и **механизма агрегировать боксы, а не регионы, домен не описывает** — это дыра. А односерверный кластер — регион. То есть `bootstrap_expect = 1` — самый дешёвый способ закрыть эту дыру: одна машина на площадке, но домен видит её ровно так же, как любой другой кластер, теми же жёстко прошитыми путями.
 
 Остаётся один вопрос, который тройка прятала, а единица делает явным: **чем резервируется единственный raft.** Любопытно, что домен почти готов служить ответом — в его снапшоте лежат все восемь операторских полей, то есть ровно то, что оператор настраивал, — но восстановление из снапшота нигде не описано как путь.
 
@@ -1953,7 +2005,7 @@ def playback_url(server: str, cid) -> str:
 
 Выше сравнивались числа. Устройство тоже стоит сравнить, потому что на обсуждении обязательно спросят: «а почему не как у всех, не база данных». Короткий ответ — **мы строим не как Milestone, а как Kubernetes**: у Milestone и Genetec конфигурация лежит в SQL Server, а наша пара `revision` / `observed_revision` дословно повторяет их `metadata.generation` / `status.observedGeneration`.
 
-Разбор целиком вынесен в [`НА-ЧЬЕЙ-АРХИТЕКТУРЕ-МЫ-СТОИМ.md`](./НА-ЧЬЕЙ-АРХИТЕКТУРЕ-МЫ-СТОИМ.md). Оттуда сюда стоит вернуть только два вывода:
+Разбор целиком вынесен в [`whose-architecture.md`](./whose-architecture.md). Оттуда сюда стоит вернуть только два вывода:
 
 - **почти все вопросы этого документа — чужие грабли с известными решениями.** N+1, модель чтения в памяти, пагинация — в Kubernetes это информеры, `watch` и постраничные листинги. Довод в пользу вопросов 8 и 10: мы не изобретаем обход, а повторяем известный;
 - **лимит 64 KiB — единственное место, где наше хранилище строже прототипа** (у etcd около 1.5 МБ). Поэтому вопрос 3 придётся решать своей головой, а не по образцу.
@@ -1970,20 +2022,16 @@ def playback_url(server: str, cid) -> str:
 
 Здесь важно не смазать вывод. «Десять тысяч в кластере не бывает» — это не отказ от десяти тысяч, а указание, на каком уровне они живут. **Десять тысяч камер в домене архитектура выдерживает**, и доменная модель чтения ровно для этого и сделана: 10 000 строк по ~240 байт — это 2.4 МБ в памяти процесса, то есть ничто.
 
-Упирается **единственное место — интерфейс между кластером и доменом.** Домен узнаёт о камерах только из снапшотов, а снапшот кончается на ~270 камерах при проектных 600. И поскольку других дверей у него нет, потолок кластера работает как делитель: десять тысяч приходится раскладывать не на кластеры проектного размера, а на втрое более мелкие.
+Раньше здесь упиралось **одно место — интерфейс между кластером и доменом.** Домен узнаёт о камерах только из снапшотов, а единый снапшот кончался на ~270 камерах при проектных 600, поэтому потолок кластера работал делителем. **Нарезка снапшота по воркерам это сняла**, и раскладка стала такой, какой её задумывали:
 
 | | Камер на кластер | **Кластеров на 10 000** |
 |---|---|---|
-| **сейчас** | ~270 — предел снапшота | **~38** |
-| **если снапшот починен** | ~600 — предел `max = 12` в jobspec | **~17** |
+| было: единый снапшот | ~270 — предел объекта | ~38 |
+| **стало: шард на воркера** | **~600 — предел `max = 12` в jobspec** | **~17** |
 
-Здесь важно не преувеличить, иначе аргумент рассыплется на первом вопросе. **Серверов в обоих случаях примерно поровну** — их число диктует ёмкость воркеров (~50 камер), а не размер кластера, и десять тысяч камер требуют около сотни машин при любой раскладке. Удваивается **не железо, а число кластеров**, и это отдельная статья расходов: каждый кластер — свой raft и свой кворум, свой контроллер, свой bootstrap ACL, свой регион в WAN-gossip'е домена. Плюс там, где ёмкости хватило бы двух машин, кворум всё равно требует трёх — и вот эта разница уже в железе.
+Здесь важно не преувеличить в обратную сторону. **Серверов в обоих случаях примерно поровну** — их число диктует ёмкость воркеров (~50 камер), а не размер кластера, и десять тысяч камер требуют около сотни машин при любой раскладке. Нарезка сэкономила **не железо, а число кластеров**: каждый кластер — свой raft и свой кворум, свой контроллер, свой bootstrap ACL, свой регион в WAN-gossip'е домена.
 
-**Поэтому формулировать стоит так: дефект снапшота — не «десять тысяч не работают», а «десять тысяч приходится дробить вдвое мельче, чем задумано».** Спорить с «нам не нужны 10K» легко, а с удвоением числа кластеров, которые придётся администрировать, — нет.
-
-И усиливает его то, что **число не чужое, а наше собственное.** Снапшот ломается на 45 % от границы, которую проект сам себе назначил в jobspec'е воркера. То есть чинить его надо независимо от того, появятся ли когда-нибудь десять тысяч, — сегодня мы не дотягиваем до шестисот.
-
-Две оговорки, чтобы формулировка держала удар на обсуждении. Первая: **снапшот — единственное, что ломается, но не единственное, что тормозит.** На домене `rows()` пересобирает и сортирует весь список на каждый запрос, и на 10 000 строк это чувствуется на каждом нажатии клавиши. Дефект реальный, но лечится кэшем на счётчике проходов и картины не меняет. Вторая: **поиска поверх доменов нет вообще.** Если под «десять тысяч со всей страны» имеется в виду один оператор, видящий все домены сразу, то речь не о снапшоте, а о слое, которого в дизайне не существует, — об этом стоит договориться отдельно, иначе разговор съедет туда.
+Что осталось упирающимся, если десять тысяч действительно придут. Первое: **`rows()` в доменной модели чтения пересобирает и сортирует весь список на каждый запрос**, и на 10 000 строк это чувствуется на каждом нажатии клавиши. Лечится кэшем на счётчике проходов, который в классе уже есть. Второе: **поиска поверх доменов нет вообще.** Если под «десять тысяч со всей страны» имеется в виду один оператор, видящий все домены сразу, то речь о слое, которого в дизайне не существует, — об этом стоит договориться отдельно, иначе разговор съедет туда. Третье: **`CAPACITY` стал единственным числом, которое возвращает лимит 64 KiB на сцену** — и для шарда снапшота, и для heartbeat'а.
 
 ### Отсюда перестановка приоритетов
 
@@ -1991,13 +2039,14 @@ def playback_url(server: str, cid) -> str:
 
 | Проблема | На каком масштабе бьёт | Приоритет |
 |---|---|---|
-| **снапшот не влезает в 64 KiB** | **~270 камер — меньше половины проектного максимума** | **высокий: дефект в объявленных границах** |
-| **`server_of()` в цикле `snapshot()`** | ~7 800 лишних чтений на проход уже при 600 камерах | **делать не обсуждая: одна строка** |
-| полный скан контроллера (три обхода `units()` плюс размещения) | ~6 000 чтений на проход при 600 камерах даже после правки выше | **высокий** |
+| ~~снапшот не влезает в 64 KiB~~ | было: ~270 камер на кластер | **закрыто: нарезан по воркерам** |
+| **`workers_seen()` без кэша на проходе** | ~15 600 лишних чтений на проход уже при 600 камерах | **делать не обсуждая: правка в одной функции** |
+| полный скан контроллера (обходы `units()` плюс размещения) | ~8 000 чтений на проход при 600 камерах даже после правки выше | **высокий** |
+| **`ensure_home` обходит все камеры ради одного переезда** | 600 итераций каждые 5 с, чтобы в среднем не сделать ничего | **высокий: видно только после кэша выше** |
 | N+1 при чтении списка для UI | 613 чтений **каждые 10 с на каждую консоль** — ~306 чтений/с в покое | **высокий: это фон, а не пик** |
 | **список везёт в браузер все поля всех камер** | ~490 байт на камеру, то есть ~290 КБ каждые 10 с на вкладку; списку нужны ~120 | средний: лечится проекцией, независимо от кэша (вопрос 23) |
 | **воркеры перечитывают свои строки каждые 2 с** | 12 воркеров по 50 камер — ещё ~306 чтений/с, независимо от того, менялось ли что-нибудь | **высокий: столько же фона, сколько от пяти консолей** |
-| **heartbeat не влезает в 64 KiB** | ~260 камер **на воркера**: при дефолте `CAPACITY=50` не проявляется, при 400 ломается сразу | средний — но **только до первой установки с большим `CAPACITY`** |
+| **heartbeat и шард снапшота не влезают в 64 KiB** | ~260–270 камер **на воркера**: при дефолте `CAPACITY=50` не проявляется, при 400 ломается сразу и то и другое | средний — но **только до первой установки с большим `CAPACITY`** |
 | надгробия удалённых камер в каждом обходе | растёт с ротацией камер, а не с их числом | низкий, но лечится заодно с кэшем |
 | комбобокс на 10 000 камер в одном кластере | вне проектной формы установки | низкий — но решение то же самое |
 
@@ -2056,7 +2105,7 @@ sequenceDiagram
 GET /spec
 ```
 
-```268:272:vmsserver/w2cplatform/console.py
+```276:280:vmsserver/w2cplatform/console.py
     def describe(self) -> dict:
         s = self.spec
         return {"name": s.name, "rows": s.rows, "id": s.id, "media": self.media,
@@ -2078,9 +2127,9 @@ GET /cameras
    "rows":       [ …статус по каждой камере из heartbeat'ов… ]}
 ```
 
-```503:504:vmsserver/w2cplatform/console.py
+```561:562:vmsserver/w2cplatform/console.py
             if path == rows_path:
-                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": ctl.units()})
+                return h._send(200, {"rows": ctl.read_model(con.lost_after), "configured": mask_secrets(ctl.units())})
 ```
 
 Это ровно те два источника, о которых говорит часть 2: `configured` — желаемое (строки камер, поштучно из Variables), `rows` — фактическое (heartbeat'ы воркеров). Браузер их **склеивает, и порядок склейки важен**:
@@ -2091,7 +2140,7 @@ GET /cameras
   for (const r of d.rows || []) byId[r.id] = { ...byId[r.id], ...r };   // the heartbeat's word wins over the row's
 ```
 
-Сначала все настроенные камеры помечаются как `silent` и `stale`, потом сверху накладывается слово воркера. **Камера, которую никто не поднял, из списка не исчезает** — она остаётся серой строкой «настроена, но не работает». Это тот самый случай, который доменный UI теряет (третий дефект в части 2), а консоль кластера обрабатывает правильно.
+Сначала все настроенные камеры помечаются как `silent` и `stale`, потом сверху накладывается слово воркера. **Камера, которую никто не поднял, из списка не исчезает** — она остаётся серой строкой «настроена, но не работает». Доменный UI этот случай раньше терял, а теперь обрабатывает так же (часть 2), только называет состояние `configured`.
 
 ### Список отдаёт все настройки всех камер — и не должен
 
@@ -2249,21 +2298,15 @@ Idempotency-Key: 3f9c1e2a-…
 
 ## Что предлагается решить
 
-Порядок важен. Нулевым пунктом идёт то, что и не вопрос вовсе — просто дефект, который надо починить. Дальше вопросы 1 и 2 про маску: если ответ на первый «да», вся ветка с внешним хранилищем (13–15) отпадает. Вопрос 3 — главный по последствиям, вопрос 8 — предпосылка для всего, что про масштаб.
+Порядок важен. Нулевым пунктом идёт то, что и не вопрос вовсе — просто дефект, который надо починить. Дальше вопросы 1 и 2 про маску: если ответ на первый «да», вся ветка с внешним хранилищем (13–15) отпадает. Вопросы 3 и 6 с прошлой редакции закрыты в коде и оставлены зачёркнутыми — чтобы на обсуждении их не подняли заново. Главной предпосылкой для всего, что про масштаб, остаётся вопрос 8.
 
-0. **`server_of()` внутри цикла `snapshot()` — это просто дефект, и обсуждать в нём нечего (часть 3).** На каждую камеру заново вычитываются heartbeat'ы всех воркеров: при 600 камерах и 12 воркерах — 7 800 чтений на каждый проход, каждые пять секунд, ради колонки `server`. Это ~56 % всей работы контроллера. Лечится подъёмом `workers_seen()` из цикла — одна строка, без новых контрактов и без связи с остальными вопросами. **Сделать и не выносить на обсуждение.**
+0. **`workers_seen()` без кэша — это просто дефект, и обсуждать в нём нечего (часть 3).** На каждую камеру заново вычитываются heartbeat'ы всех воркеров, и происходит это в двух циклах сразу: в `ensure_home` и в сборке шардов снапшота. При 600 камерах и 12 воркерах — около 15 600 чтений на каждый проход, каждые пять секунд, ради колонки `server` и проверки «камера дома». Это две трети всей работы контроллера. Лечится кэшем на время одного прохода внутри самой `workers_seen()` — тогда выигрыш получают все её вызывающие, а не один цикл. Ни новых контрактов, ни связи с остальными вопросами. **Сделать и не выносить на обсуждение.**
 
 1. **Какая кодировка маски даёт меньше 64 KiB.** По арифметике выше 1-битный PNG или RLE укладываются с запасом в сто раз. Если так — вся ветка с внешним хранилищем не нужна. Нужно решение о формате и о том, кто его проверяет: консоль на приёме или воркер на применении.
 2. **Расщепляем ли строку камеры на главную и подчинённую** (`vms/cameras/7` + `vms/cameras/7/mask`) независимо от размера маски. За — уходит перезапись сотни полей на каждую правку. Против — второй ключ без транзакции, то есть хеш в родительской строке и порядок записи как обязательная дисциплина.
-3. **Размер снапшота (часть 2) — главный вопрос документа, и решать его надо вместе с вопросом 4.** `publish_snapshot` перестаёт работать примерно на 270 камерах, тогда как jobspec воркера объявляет максимум ~600: **снапшот ломается на 45 % от проектной границы**, и ломает он интерфейс между кластером и доменом, а не UI. **Первым делом нужен замер на трёхстах камерах.** Дальше выбрать одно из четырёх:
-    - **узкий список полей** — `id`, `name`, `worker`, `revision` дают ~80 байт на камеру и поднимают предел до ~800; закрывает проектные 600 и ничего больше;
-    - **страницы с манифестом** — `page-0`, `page-1`, … плюс указатель, записываемый последним;
-    - **сменить `OBJECTS`** на полноценное объектное хранилище — решение на установке, а не правка кода;
-    - ~~**перенести поля конфигурации в heartbeat**~~ — **этот вариант отпадает, и стоит объяснить почему, потому что сначала он выглядел лучшим.** Казалось, что лимита у heartbeat'а нет по построению: каждый несёт только свои ~50 камер, ~12 КБ. Но пятьдесят — это дефолт переменной `CAPACITY` (часть 2), а при 400 камерах на воркера heartbeat весит ~100 КБ и пробивает тот же лимит сам. То есть вариант переносит данные из объекта, который лимит уже пробил, в объект, который пробьёт его следом.
+3. **Размер снапшота — вопрос закрыт нарезкой по воркерам, но остаток стоит проговорить (часть 2).** Раньше это был главный вопрос документа: единый объект на кластер весил ~144 КБ на проектных шестистах камерах и не публиковался вовсе. Сейчас контроллер пишет объект на каждого воркера, шард растёт с назначением одного воркера, и кластер публикуется целиком. Из четырёх обсуждавшихся вариантов выбран, по сути, пятый — тот же приём, которым уже были устроены heartbeat'ы.
 
-    И ещё одна поправка к постановке: **если `CAPACITY` бывает 400, то потолок кластера — `12 × CAPACITY` = 4 800**, а снапшот на этом числе весит 1.15 МБ, то есть превышает лимит в восемнадцать раз, а не в два. Тогда из оставшихся трёх вариантов узкий список полей не спасает тоже (даже 80 байт на камеру дают 384 КБ), и реально остаются **страницы** и **смена `OBJECTS`**.
-
-    Две оговорки к постановке. **Срочность зависит от топологии** (часть 5): на площадках по 10–30 камер снапшот весит ~3 КБ и дефект не проявляется вовсе. А там, где камер много, формулировать надо так: **десять тысяч камер в домене архитектура выдерживает** — доменная модель чтения это 2.4 МБ в памяти, — но домен узнаёт о камерах только из снапшотов, поэтому потолок кластера работает делителем: ~38 кластеров вместо ~17. Не «десять тысяч не работают», а «их приходится дробить вдвое мельче, чем задумано»: серверов примерно поровну, удваивается число кворумов, контроллеров и регионов.
+    Остаток, который обсуждения ещё требует, один: **`CAPACITY` возвращает лимит на сцену сразу в двух местах.** При 400 камерах на воркера шард снапшота весит ~96 КБ, heartbeat ~100 КБ, и оба не влезают в 64 KiB. Нарезать мельче уже некуда — объект и так минимальный, — поэтому вариантов ровно два: **ограничить `CAPACITY` сверху** или **сменить `OBJECTS`** на полноценное объектное хранилище, что решается при установке, а не правкой кода. Само сообщение об отказе теперь именно на это и указывает.
 4. **Какая единица установки у нас на самом деле — кластер или бокс (часть 5).** Живая конфигурация «Интеллекта» — 2502 камеры на 207 объектах конфигурации — показывает, что число машин диктует география, а не ёмкость. Отсюда два следствия, и оба требуют решения.
     - **Три сервера на площадку — это не требование дизайна.** `bootstrap_expect = 3` стоит в примере развёртывания, кода за ним нет, и Nomad принимает единицу со своим предупреждением «no fault tolerance, not recommended for production». Выбирать надо осознанно, потому что теряется не то, что кажется: запись переживает смерть сервера в любом случае, а на одном сервере теряется **вторая копия конфигурации** и возможность менять настройки во время отказа.
     - **Боксы домен агрегировать не умеет.** М12 федерирует кластеры как **регионы Nomad** через WAN-gossip, а бокс М9 — не регион, и механизма для него никто не описал.
@@ -2271,13 +2314,13 @@ Idempotency-Key: 3f9c1e2a-…
     Эти два следствия связаны, и связь — довод в пользу одной машины: **односерверный кластер — это регион**, то есть он закрывает дыру с боксами за цену одной машины на площадку. Тогда решить остаётся одно: **чем резервируется единственный raft.** Тройка этот вопрос прятала.
 5. **Поиск камеры по названию — три разных дела на трёх уровнях, и ни на одном не нужен индекс (часть 2).**
     - **В кластере** поиска нет вовсе. При этом `GET /<rows>` держит в одной строке дешёвый `read_model()` (12 чтений heartbeat'ов, от числа камер не зависит) и дорогой `units()` (601 чтение на 600 камер). Замена второго на `vars.list()` плюс дочитывание неразмещённых превращает 613 чтений в 13. Важно, что страница опрашивает этот адрес **каждые десять секунд**: на пяти консолях это ~306 чтений в секунду фоном, а не цена одного клика.
-    - **На домене** поиск написан, но в нём два дефекта. `rows()` пересобирает и сортирует весь список на каждое нажатие клавиши — около 95 % времени уходит не на поиск, а кэш на счётчике `passes` даёт ~20×. И `Row` теряет `ref`, хотя воркер кладёт его в heartbeat, при том что проектная записка М12 утверждает, что модель чтения ключуется по `ref`.
+    - **На домене** поиск написан, и один из двух дефектов уже починен. Остался первый: `rows()` пересобирает и сортирует весь список на каждое нажатие клавиши, то есть около 95 % времени уходит не на поиск, а кэш на счётчике `passes` даёт ~20×. Второй дефект — потерянный `ref` — исправлен наполовину: поле в `Row` появилось и дедупликация по нему идёт, но `list()` по-прежнему ищет только по имени и по локальному номеру камеры. Дописать `ref` в условие поиска — одна строка.
     - **Поверх доменов** такого слоя нет вообще. Решить, нужна ли роль, видящая камеры всех заказчиков, и если да — строить отдельный индекс, а не веер запросов по доменам.
-6. **Доменный список камер не читает снапшот, хотя docstring обещает (часть 2), и дефект видим оператору.** `readview.refresh()` читает только heartbeat'ы, поэтому камера, которую никакой воркер не подхватил, **в доменном списке не появляется вообще** — ни серой строкой, ни с пометкой «не размещена». А это ровно состояние камеры, созданной при упавшем контроллере (`worker: null`, часть 4): оператор не увидит её нигде и решит, что создание не прошло. В консоли кластера этот случай обработан (`configured: ctl.units()`), на домене эквивалента нет. Лечится дешевле, чем в кластере: снапшот — один объект на кластер.
+6. ~~**Доменный список камер не читает снапшот**~~ — **починено, вопрос снят (часть 2).** `readview.refresh()` теперь в одном проходе берёт и heartbeat'ы, и снапшот кластера, а камера, которую никакой воркер не держит, приходит из снапшота с состоянием `configured`. Раньше такая камера — а это ровно состояние камеры, созданной при упавшем контроллере, — не появлялась в доменном списке вообще, и оператор решал, что создание не прошло. Оба источника читаются от одного кластера в одном проходе, поэтому недоступный кластер теряет их вместе, а не оставляет один из них устаревшим без объяснения.
 7. **Где живут раскладки экранов и рабочие места (часть 5).** В дизайне их нет вообще: хранилище знает камеры, воркеров и слоты, но не знает, что показано на стене в холле. У «Интеллекта» АРМ — такой же объект конфигурации, как видеосервер.
 
     По правилу §1.5 раскладка просится в Variables, и вопрос только в том, **на каком уровне.** Она может содержать камеры из нескольких кластеров, то есть принадлежит домену, — а при недоступном домене оператор на площадке останется без экранов. Скорее всего это решается тем же приёмом, что личности: `DomainAgent` синхронизирует вниз в `domain/*`. Но назвать это надо явно — получается пятый тип данных к §1.5, наравне с аудитом.
-8. **Диффы по `ModifyIndex` вместо полного скана (части 1, 2 и 3).** Предложение документа: делать, и это блокирует остальное по масштабу. `list()` начинает возвращать метаданные вместо путей; процесс читает всё один раз, дальше только изменившееся; поиск по подстроке обслуживается из памяти. Без этого упираются задолго до десяти тысяч **все три читателя**: контроллер уже на проектных 600 держит ~2 800 чтений в секунду (из них ~1 200 останутся и после вопроса 0), консоли дают ~306, и столько же дают воркеры, перечитывая свои строки каждые две секунды.
+8. **Диффы по `ModifyIndex` вместо полного скана (части 1, 2 и 3).** Предложение документа: делать, и это блокирует остальное по масштабу. `list()` начинает возвращать метаданные вместо путей; процесс читает всё один раз, дальше только изменившееся; поиск по подстроке обслуживается из памяти. Без этого упираются задолго до десяти тысяч **все три читателя**: контроллер уже на проектных 600 держит ~4 800 чтений в секунду (из них ~1 600 останутся и после вопроса 0), консоли дают ~306, и столько же дают воркеры, перечитывая свои строки каждые две секунды.
 9. **Где живёт модель чтения в кластере — и ответ, похоже, «в `units()`, и всё» (часть 2).** Отдельный процесс заводить не надо. В контроллер класть тоже нельзя: UI уйдёт за `count = 1` и перестанет переживать его смерть, а это ровно то свойство, которым хороша часть 4.
 
     Дорогие пути внутри кластера — опрос списка консолью каждые 10 секунд и три обхода за проход контроллера — идут через одну функцию `units()`. Кэш `{путь: ModifyIndex}` внутри неё чинит оба, не трогая ни одного места вызова. Пять консолей после этого стоят 0.5 листинга в секунду вместо ~306 чтений, поэтому и пять копий кэша перестают быть поводом для беспокойства: умножение на пять было страшно для сканов, а не для кэшей.
@@ -2290,9 +2333,7 @@ Idempotency-Key: 3f9c1e2a-…
 14. Только если 1 и 2 не сработали: **MinIO на серверах кластера** — или принимаем внешний S3 с оговоркой «камера не поднимается при обрыве uplink»?
 15. **Уборка.** В контракте объектного хранилища нет `delete`, а при content-addressed ключах каждая правка оставляет предыдущую версию.
 16. **Липкое размещение при правке `labels` (часть 3).** Оставляем и называем в документации, показываем в консоли «размещена вне своих меток», или переносим — и тогда чем оправдываем шов в записи.
-17. **Сузить ли грант воркера на объекты (часть 2).** Сейчас воркеру дан `objects/vms/*`, а снапшот лежит в `objects/vms/snapshot` — то есть **токен воркера может перезаписать снапшот контроллера**. В проекте это записано как неизбежное («путь на аллокацию требует имени слота, а оно неизвестно в момент написания политики»). Но неизбежным это выглядит только потому, что heartbeat'ы и снапшот оказались соседями под одним префиксом. Развести их почти бесплатно: `heartbeat_key()` начинает возвращать `<name>/hb/<worker>/heartbeat`, политика воркера становится `objects/vms/hb/*`, и снапшот в неё больше не попадает. Читателей при этом **два, и ведут они себя по-разному**:
-    - `workers_seen()` в кластере правки **не требует** — он фильтрует по суффиксу `/heartbeat`, а имя воркера берёт из тела (`out[hb.worker]`), не из пути;
-    - `heartbeats()` на домене фильтрует **по числу слэшей** (`key.count("/") == 2`), и новый путь с тремя в него не попадёт. Править надо, пусть и на один символ. Разумнее заодно убрать счёт слэшей и оставить суффикс, как в кластере.
+17. **Сузить ли грант воркера на объекты — осталось полдела (часть 2).** Воркеру по-прежнему дан `objects/vms/*`, который покрывает и снапшот, то есть **токен воркера может перезаписать снапшот контроллера**. Трудной эта правка была потому, что heartbeat'ы и снапшот лежали соседями под одним префиксом, а читатели разбирали пути фильтрами. **Раскладку с тех пор развели** — `objects/vms/heartbeats/<w>` против `objects/vms/snapshot/<w>` — и обоих читателей переписали на чистый листинг каталога. Значит препятствие снято, и осталось **само сужение политики до `objects/vms/heartbeats/*`**, ради которого всё и делалось.
 18. **Сколько машин держат raft (часть 3).** Сейчас в примере `bootstrap_expect = 3`, то есть кворум 2 и запас в одну машину. Число ничем не закреплено — ни кодом, ни Nomad'ом, который принимает от 1 и выше, — поэтому его в любом случае надо назначить осознанно: пять голосующих дают запас в две машины ценой более дорогой записи, один не даёт запаса вовсе. Смежно с вопросом 4, но с другого конца: там вопрос, не слишком ли трёх **много** для маленькой площадки. Это единственный отказ, который действительно останавливает правку настроек, — в отличие от падения контроллера, которое не останавливает ничего.
 19. **Форма heartbeat'а: сводка с исключениями вместо списка всех камер (часть 2).** Смежно с вопросом 3, но решается отдельно. Сейчас воркер перечисляет в `status` все свои камеры по ~250 байт, и при `CAPACITY=400` это ~100 КБ — над лимитом. Причём 398 записей из 400 в спокойном кластере говорят одно и то же.
 
@@ -2301,7 +2342,7 @@ Idempotency-Key: 3f9c1e2a-…
     - **куда девать `coverage`** — единственное наблюдение, у которого нет «нормального» значения;
     - **чем ограничить список исключений сверху**, чтобы массовая авария не раздула heartbeat ровно тогда, когда он нужнее всего.
 20. **Сборщика надгробий нет (часть 1).** `DELETE /cameras/7` помечает строку `deleted: "true"` и **не удаляет её никогда**: `prune` в системе есть только для ключей идемпотентности и для токенов. Номер тоже не переиспользуется, `next_id` только растёт. Значит каждая когда-либо удалённая камера навсегда стоит ключа в raft и **одного GET в каждом обходе `units()`** — обход платит не за живые камеры, а за все, что когда-либо были. На площадке с ротацией камер это со временем утяжеляет N+1 из вопроса 5. Выбрать надо из двух:
-    - **убирать надгробия по сроку** — и тогда договориться, чем это не противоречит аудиту из [`АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md`](./АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md): удалённая камера в отчёте остаться должна;
+    - **убирать надгробия по сроку** — и тогда договориться, чем это не противоречит аудиту из [`settings-audit.md`](./settings-audit.md): удалённая камера в отчёте остаться должна;
     - **оставить и перестать их читать**, когда появится кэш по `ModifyIndex` (вопрос 8).
 21. **Внешнее хранилище: объектное или отдельное KV, и где его запускать (часть 4).** Вопрос всплывает всякий раз, когда упирается лимит, поэтому стоит закрыть его один раз. Ответ документа: **сначала форма, потом хранилище.**
 
@@ -2322,7 +2363,7 @@ Idempotency-Key: 3f9c1e2a-…
 
     Отдельно и мимоходом: группировку в списке считаем ненужной, но если она понадобится, **поле группировки должно попасть в узкий набор**, а подходящего поля у камеры нет вовсе — это территория вопроса 7.
 24. **У кластера три имени, и они нигде не сверяются.** Различить один кластер от другого можно на трёх уровнях, и это три независимых имени:
-    - **Nomad** различает по `region` в [federation.hcl](./М12_DomainVMS/domainvms/deploy/federation.hcl) — у каждого свой raft, связь по WAN-gossip;
+    - **Nomad** различает по `region` в [federation.hcl](../М12_DomainVMS/domainvms/deploy/federation.hcl) — у каждого свой raft, связь по WAN-gossip;
     - **сам кластер** зовёт себя переменной `CLUSTER` и кладёт это имя в снапшот (`spec.py`, дефолт `cluster-a`);
     - **домен** адресует кластер по имени из строки `CLUSTERS` (`<имя>=<адрес Nomad>|<url хранилища>`), и это имя становится ключом в `Federation.clusters`.
 
@@ -2335,13 +2376,13 @@ Idempotency-Key: 3f9c1e2a-…
 
 ## Ссылки
 
-- [`АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md`](./АУДИТ-НАСТРОЕК-И-ОТЧЁТЫ.md) — продолжение этого документа: как отследить, кто и когда менял настройку, и как построить по этому отчёт по домену
-- [`НА-ЧЬЕЙ-АРХИТЕКТУРЕ-МЫ-СТОИМ.md`](./НА-ЧЬЕЙ-АРХИТЕКТУРЕ-МЫ-СТОИМ.md) — ответ на «почему не как у всех, не база данных»: сравнение механизмов с Kubernetes, Chubby, Kafka и с тем, как устроены Milestone и Genetec
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — §1.3 (слой может быть недоступен), §1.5 (какое хранилище под какую форму данных), §1.11 (`publish-then-point`), §1.12 (контроллер, воркер, консоль)
-- [`М10A_Platform/04-the-object-store.md`](./М10A_Platform/04-the-object-store.md) — признаки объекта, «целиком или никак»
-- [`М10A_Platform/19-the-page.md`](./М10A_Platform/19-the-page.md) — почему страница опрашивает, а не слушает, и где это перестанет работать
-- [`М11_ClusterVMS/02-workers-resources-and-the-controller-as-jobs.md`](./М11_ClusterVMS/02-workers-resources-and-the-controller-as-jobs.md) — 64 KiB и raft, арифметика heartbeat'ов
-- [`М12_DomainVMS/module-design.md`](./М12_DomainVMS/module-design.md) — модель чтения для UI: из снапшота и heartbeat'ов, никогда из Variables
+- [`settings-audit.md`](./settings-audit.md) — продолжение этого документа: как отследить, кто и когда менял настройку, и как построить по этому отчёт по домену
+- [`whose-architecture.md`](./whose-architecture.md) — ответ на «почему не как у всех, не база данных»: сравнение механизмов с Kubernetes, Chubby, Kafka и с тем, как устроены Milestone и Genetec
+- [`ARCHITECTURE.md`](../ARCHITECTURE.md) — §1.3 (слой может быть недоступен), §1.5 (какое хранилище под какую форму данных), §1.11 (`publish-then-point`), §1.12 (контроллер, воркер, консоль)
+- [`М10A_Platform/04-ObjectStore.md`](../М10A_Platform/04-ObjectStore.md) — признаки объекта, «целиком или никак»
+- [`М10A_Platform/16-HTML.md`](../М10A_Platform/16-HTML.md) — почему страница опрашивает, а не слушает, и где это перестанет работать
+- [`М11_ClusterVMS/02-workers-resources-and-the-controller-as-jobs.md`](../М11_ClusterVMS/02-workers-resources-and-the-controller-as-jobs.md) — 64 KiB и raft, арифметика heartbeat'ов
+- [`М12_DomainVMS/module-design.md`](../М12_DomainVMS/module-design.md) — модель чтения для UI: из снапшота и heartbeat'ов, никогда из Variables
 - [Nomad Variables HTTP API](https://developer.hashicorp.com/nomad/api-docs/variables/variables) — `cas` против `ModifyIndex`, 409, и blocking queries (`index` + `wait`), которые мы пока не используем
 - Отраслевые числа для части 5, on-prem: [Milestone Storage Architecture](https://doc.milestonesys.com/wp/pdf/en-US/XProtectStorageArchitectureAndRecommendations_2023-09.pdf) (200–300 камер на сервер записи) · [Milestone VMS Design Guide](https://doc.milestonesys.com/2024R1/en-US/wp_sysarch/vms_design_guide.htm) (проект до 300; 100 на удалённую площадку) · [Genetec System Requirements 5.14](https://techdocs.genetec.com/r/en-US/Security-Center-System-Requirements-Guide-5.14/Maximum-number-of-cameras-and-readers-per-server-type) (50/100 на Directory + Archiver) · [Genetec Federation at scale](https://techdocs.genetec.com/r/en-US/All-about-FederationTM-in-Security-Center-5.13/Requirements-for-large-Federation-systems) (~150 камер на федерируемую систему)
 - Отраслевые числа для части 5, «Интеллект» / Axxon: [технические характеристики «Интеллекта»](https://itv.securityworld.ru/products/intellect/specifications/default.htm) (до 100 000 камер **в распределённой системе**, видеосерверов не ограничено) · [FAQ по «Интеллект X»](https://docs.itvgroup.ru/confluence/download/attachments/246785789/FAQ.pdf?api=v2) и [чеклист установки](https://docs.itvgroup.ru/confluence/pages/viewpage.action?pageId=246785836) (пороги 5/30 серверов, 500 камер на сервер, **1500 камер на домен**) · [настройка Axxon-доменов](https://docs.itvgroup.ru/confluence/spaces/next46ru/pages/198800720/%D0%9D%D0%B0%D1%81%D1%82%D1%80%D0%BE%D0%B9%D0%BA%D0%B0+Axxon-%D0%B4%D0%BE%D0%BC%D0%B5%D0%BD%D0%BE%D0%B2) (домен как группа серверов с общей конфигурацией)
