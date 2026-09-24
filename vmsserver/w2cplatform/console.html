@@ -341,8 +341,16 @@ async function select(id) {
                             c.worker_state === 'stale' ? 'last known state' : null].filter(Boolean).join(' · ');
   for (const li of $('#units').children) li.classList.toggle('on', li.dataset.id === String(id));
   fillEdit(c);
-  loadDets(); loadRec();
-  if (spec.media) await loadTimeline();
+  // Watching and recording are offered for a unit that PUBLISHES A STREAM, and the test is the stream
+  // itself: the holder puts an address in its status, or it does not. Not a field of the row and not a
+  // word this page knows — some units of some subsystems have no picture (a door controller is held,
+  // takes an epoch and writes events like anything else), and the honest way to find out is to look for
+  // the address a viewer would dial.
+  const streams = !!c.live_url;
+  $('#live').style.display = spec.media && streams ? '' : 'none';
+  $('#media').style.display = spec.media && streams ? 'block' : 'none';
+  loadDets(); loadRec(streams);
+  if (spec.media && streams) await loadTimeline();
 }
 
 // -- media: only when the spec says so (the subsystem registered /timeline and /segment) ----------
@@ -649,10 +657,10 @@ $('#archadd').onsubmit = async e => {
   try { await send('POST', '/rec/volumes', body); e.target.reset(); loadArchives(); }
   catch (err) { $('#archerr').textContent = 'refused: ' + err.message; }
 };
-async function loadRec() {
+async function loadRec(streams = true) {
   if (rec === null) { try { const r = await fetch('/rec/spec'); rec = r.ok ? await r.json() : false; } catch (_) { rec = false; } }
-  $('#recbox').style.display = rec && current != null ? 'block' : 'none';
-  if (!rec || current == null) return;
+  $('#recbox').style.display = rec && current != null && streams ? 'block' : 'none';
+  if (!rec || current == null || !streams) return;
   loadArchives();
   const d = await (await fetch('/rec/recordings')).json();
   const byId = {};                                                    // this unit's recordings: configured rows first, the placed ones over them

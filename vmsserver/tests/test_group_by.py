@@ -150,3 +150,41 @@ def test_a_spec_that_asks_for_both_on_one_field_is_refused_at_load():
     d["placement"]["group_by"] = "kind"                    # different fields: not a contradiction
     assert SubsystemSpec.from_dict({**d, "unit": {**d["unit"], "fields": {**d["unit"]["fields"],
                                                                          "kind": {"type": "string"}}}}).group_by == "kind"
+
+
+def test_a_device_with_no_picture_is_a_unit_like_any_other():
+    """The row that made `kind` necessary: a door controller. It is an IP device
+    integrated the same way, so it is held (one connection), placed, given an
+    epoch and it writes events — everything a camera gets except the picture.
+
+    And the whole of its special treatment is an ABSENCE: no fan-out published.
+    Nothing else needs a branch, because everything else already asks the
+    heartbeat rather than the row — the recorder looks for a holder with a
+    `live_url` and does not find one."""
+    from w2cplatform.console import holder_of
+    from vms.worker import FakeActuator, VmsWorker
+    from vms.config import SPEC as VMS_SPEC
+
+    box = Box(); ctl, con = _ctl(box)
+    cam = con.create_camera({"name": "lobby", "source": CAM})["id"]
+    door = con.create_camera({"name": "front door", "source": "driverpack://acme/10.0.0.90/ch/1",
+                              "kind": "io"})["id"]
+    assert con.camera(cam)["kind"] == "video"              # the default keeps every older row meaning what it meant
+
+    w = VmsWorker("w-1", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
+                  server="srv-a", env={}, archive_root=box.archive)
+    _worker(box, "w-1", "srv-a")
+    ctl.ensure_placed()
+    w.reconcile_once(); w.heartbeat_once()
+
+    st = {s["id"]: s for s in w.status()}
+    assert st[cam]["live_url"] and "live_url" not in st[door]      # the absence, and it is the only difference
+    assert st[door]["kind"] == "io" and st[door]["phase"] == "running"
+    assert w.epochs[str(door)] >= 1                                 # held, fenced, its own epoch
+
+    # a subscriber looking for something to watch finds the camera and not the door — no new check anywhere
+    assert holder_of(box.objects, "vms/", cam, box.wall(), phase="running", field="live_url") is not None
+    assert holder_of(box.objects, "vms/", door, box.wall(), phase="running", field="live_url") is None
+
+    # …and it observes: an input change is an event in its own bucket, like any other event
+    assert w.observe(door, "io.input", port=1, value="closed") is not None

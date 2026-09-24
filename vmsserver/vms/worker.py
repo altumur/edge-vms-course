@@ -399,7 +399,14 @@ class VmsWorker(Worker):
 
     # What the pipeline needs beyond the row. The worker's tee: its RTSP fan-out (`live_url`) and the loopback
     # port the fan-out server listens on. `None` means "cannot start now".
+    #
+    # A device with no picture (`kind: io` — a door controller, a relay board) gets none of it, and that
+    # absence is the whole of its special treatment. There is no fan-out to publish, so nothing is
+    # published; the recorder looks for a holder with a `live_url` and does not find one, the gateway the
+    # same, the page the same. One field decided in one place, and no second branch anywhere else.
     def enrich(self, cam: dict) -> dict | None:
+        if cam.get("kind") == "io":
+            return dict(cam)
         return dict(cam, live_url=live_url(self.server, cam["id"]), live_port=live_port(cam["id"]), live_shm=live_shm(cam["id"], self.shm_dir))
 
     # Seconds since start on the monotonic clock — the reconciler's `now` for backoff.
@@ -574,6 +581,10 @@ class VmsWorker(Worker):
         """What the heartbeat says per camera beyond the platform's fields. Two kinds of output:
         `live_url`/`live_shm` — the stream now; `playback_url` + `coverage` — the archive the DEVICE
         wrote, which we did not. A subscriber needs nothing but this object, for either."""
+        if cam.get("kind") == "io":
+            # Nothing to subscribe to, and saying so is the point: a subscriber reads this object and
+            # nothing else, so an address published here would be an address somebody dials.
+            return {"kind": "io"}
         out = {"live_url": live_url(self.server, cam["id"]), "live_shm": live_shm(cam["id"], self.shm_dir)}
         dev = self.device_of_row(cam)
         cov = dev.coverage(cam["id"]) if dev is not None else None

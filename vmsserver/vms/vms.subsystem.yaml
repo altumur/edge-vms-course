@@ -65,6 +65,21 @@ unit:
     # camera as `held`. Thirty-two channels imported for their footage would otherwise be thirty-two streams
     # nobody watches.
     live:                  {type: string, default: "always"}  # always | on-demand
+    # WHAT THIS DEVICE IS, and the reason the field exists at all: not every device has a picture. A door
+    # controller, a fire panel, a relay board are IP devices integrated the same way, through the same
+    # DriverPack, and they need everything a camera needs except the one thing the subsystem is named
+    # after — they are held (one connection), they take an epoch, they are placed, and they write events.
+    #
+    # So the unit of this subsystem is a DEVICE, and a camera is the common case. `video` keeps every row
+    # ever written meaning exactly what it meant; `io` says "no stream here", and the one thing that
+    # changes is that the worker publishes no fan-out for it — see `enrich`. Nothing else in the system
+    # needs a new branch, because everything else already asks the heartbeat rather than the row: the
+    # recorder looks for `live_url` and does not find one, the gateway the same, the page the same.
+    #
+    # Deliberately NOT a list of capabilities. What a device can do — two inputs, one relay, PTZ — is a
+    # DISCOVERY and belongs in the holder's `device_status()`, beside the channels it found. The row is
+    # what the operator declared; the heartbeat is what the process saw.
+    kind:                  {type: string, default: "video"}   # video | io — a device without a picture is still a device
   # rows the platform keeps beside the unit (`SpecController._derived`).
   derived:
     - row: retention/{id}            # vms/retention/<id> {days}: what the platform's resource job retains buckets by
@@ -123,7 +138,7 @@ placement:
 # `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the
 # copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller
 # pass.
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live, kind]
 console:
   # the name of the running gauge: `metrics_text()` emits `vms_cameras_running <n>` for status entries in
   # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_running 1`); `/spec`
