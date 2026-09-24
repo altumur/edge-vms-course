@@ -1,0 +1,61 @@
+# auto.subsystem.yaml — the SIXTH subsystem: scenarios. The first one whose work is reading what the
+# others wrote.
+#
+# A unit is one scenario — `auto/scenarios/<name>` — and the operator writes it on the console: when this
+# happens (and that, within thirty seconds), do this. The worker (`vms/autoworker.py`) evaluates it against
+# the event log and, when it fires, FILES REQUESTS: `vms/requests/<id>` to pulse a relay or go to a preset,
+# `rec/requests/<id>` to record for ten minutes. It touches no device and writes no configuration — the
+# subsystem that owns the device performs the command, under its own epoch, on its own connection.
+#
+# Why a subsystem and not the platform: every word here is domain. "A sensor closed", "a detector fired",
+# "open the door" — the platform knows a unit, a row and an epoch, and learning what a door is would be the
+# end of the line it has held for twenty lessons.
+#
+# Why a UNIT and not a daemon reading a list: because then two evaluators would run the same scenario and
+# the door would open twice. A scenario placed like everything else gets `servers: distinct`-free placement,
+# an epoch and a lease — "exactly one evaluator" comes out of machinery that already exists rather than out
+# of care.
+name: auto
+unit:
+  rows: scenarios                    # auto/scenarios/<name>
+  id: name                           # the operator's name for it: "door-on-badge"
+  fields:
+    name:            {type: string, required: true}
+    # WHEN: a list of triggers, each `{sub, kind}` plus optional `unit` and `match`. JSON because a
+    # scenario's triggers are a list of shapes: flattening them into fields would cap the count at one or
+    # invent `when_1_sub`, `when_2_sub` — a schema pretending not to be one. The platform checks that it is
+    # JSON and small; what the shapes MEAN is checked in `vms/auto.py` before the row is written.
+    when:            {type: json,   required: true}
+    # The correlation window, in seconds. Required when there is more than one trigger and refused when
+    # there is one: "A and B within thirty seconds" is a question, "A within thirty seconds" is not.
+    within:          {type: int,    default: 0}
+    # THEN: a list of actions, each `{sub, action, …}` out of a catalogue `vms/auto.py` keeps. Every one of
+    # them becomes a REQUEST — never a configuration row. A request has an owner who performs it and a
+    # `valid_until` after which it is not performed at all; a row would make this subsystem the owner of
+    # something with a lifetime, and there is nowhere to keep that.
+    then:            {type: json,   required: true}
+    # The ceiling on firing, per scenario. Automation that can fire without bound is automation that can
+    # ring: a sensor bouncing at 5 Hz would file three hundred door commands a minute, and every one of
+    # them would be obeyed.
+    rate_per_minute: {type: int,    default: 6}
+    enabled:         {type: bool,   default: true}
+    labels:          {type: list}
+placement:
+  capacity:   {from: capacity, fallback: 50}       # scenarios an evaluator can carry: a window and a query each
+  headroom:   {from: headroom}
+  constraint: labels-subset
+  # The evaluator reads events, and events live on resources. On a box that is the resource on this server;
+  # in a cluster it reads the same merge the console does, which is why this is `requires: resource` and
+  # not `near`: what a scenario watches is named inside its `when`, which is JSON, and no placement rule
+  # reads JSON. A scenario whose triggers all come from one server would be better off there — that is a
+  # refinement for the day somebody measures it, not a guess to build in now.
+  requires:   resource
+  servers:    shared                               # two evaluators on one box are two places to evaluate
+  tie_break:  most-free-capacity
+  rebalance:  {dead_band: 0.10}
+# What leaves the cluster: that a scenario exists and whether it is on. Not its triggers or its actions —
+# М12's directory has never wanted to know which relay a site pulses, and a `then` carrying a preset number
+# for somebody else's camera is nobody's business up there.
+snapshot: [name, enabled]
+console:
+  running: scenarios_running         # auto_scenarios_running: scenarios an evaluator is actually watching

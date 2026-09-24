@@ -84,6 +84,9 @@ from .objects import ObjectStore
 from .variables import Variables
 
 PLATFORM_FIELDS = ("worker", "placement", "epoch", "revision", "observed_revision", "phase", "id")   # never the operator's
+# The most a single `json` field may be. Not the row's ceiling (Lesson 19) — this one keeps ONE field
+# from eating it, because a field that can hold a document will be given one.
+JSON_CEILING = 4000
 
 
 # A write the spec does not allow: a platform field, an unknown field, a missing required field, an id for a
@@ -110,7 +113,7 @@ class Placement:
 @dataclass
 class Field:
     name: str
-    type: str = "string"          # string | int | float | bool | list | url | blob
+    type: str = "string"          # string | int | float | bool | list | url | blob | json
     default: object = None
     required: bool = False
 
@@ -127,13 +130,25 @@ class Field:
             return v if isinstance(v, bool) else str(v).lower() == "true"
         if self.type == "list":
             return list(v) if isinstance(v, (list, tuple)) else [x for x in str(v).split(",") if x]
+        # A small structured value, stored as compact JSON and handed back parsed. The fifth subsystem
+        # needed it and none of the four before it did, which is the bar: a scenario's triggers are a
+        # LIST OF SHAPES, and flattening that into fields would either cap it at one trigger or invent
+        # `when_1_sub`, `when_2_sub` — a schema pretending not to be one.
+        #
+        # What the platform checks is exactly what it can: valid JSON, and small. What the shapes MEAN is
+        # the subsystem's, checked in its own controller before the row is written, the way `vms/volumes`
+        # checks a volume. A generic loader that tried to validate a trigger would be a generic loader
+        # that knows what a trigger is.
+        if self.type == "json":
+            import json as _json
+            return _json.loads(v) if isinstance(v, (str, bytes)) else v
         return str(v)
 
     # The declared default, else the type's zero (`0`, `0.0`, `False`, `[]`, `""`).
     def default_value(self):
         if self.default is not None:
             return self.default
-        return {"int": 0, "float": 0.0, "bool": False, "list": []}.get(self.type, "")
+        return {"int": 0, "float": 0.0, "bool": False, "list": [], "json": None}.get(self.type, "")
 
     # The Variables form: bools as `"true"/"false"`, lists comma-joined, else `str`.
     def to_item(self, v) -> str:
@@ -141,6 +156,9 @@ class Field:
             return "true" if v else "false"
         if self.type == "list":
             return ",".join(v)
+        if self.type == "json":
+            import json as _json
+            return _json.dumps(v, separators=(",", ":"), ensure_ascii=False) if not isinstance(v, str) else v
         return str(v)
 
 
@@ -453,6 +471,19 @@ class SubsystemSpec:
                 raise Refused(f"{name} takes a digest, not the bytes ({len(str(fields[name]))} of them): "
                               f"PUT the bytes to /{self.rows}/<id>/{name} and the row gets the digest back")
         for name, f in self.fields.items():
+            # A `json` field that is not JSON is a 400 to whoever typed it, not a 500 from the store on
+            # the next read. The ceiling is the row's own (Lesson 19's limit) — this one keeps a single
+            # field from eating it: a scenario is a handful of triggers, not a document.
+            if f.type == "json" and fields.get(name) is not None:
+                import json as _json
+                raw = fields[name]
+                try:
+                    text = raw if isinstance(raw, str) else _json.dumps(raw)
+                    _json.loads(text)
+                except (TypeError, ValueError) as e:
+                    raise Refused(f"{name} is not JSON: {e}")
+                if len(text) > JSON_CEILING:
+                    raise Refused(f"{name} is {len(text)} bytes of JSON; the ceiling is {JSON_CEILING}")
             if f.type == "url" and fields.get(name):
                 u = urlsplit(str(fields[name]))
                 if u.username or u.password or "@" in u.netloc:
