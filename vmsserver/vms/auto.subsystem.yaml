@@ -1,4 +1,4 @@
-# auto.subsystem.yaml — the SIXTH subsystem: scenarios. The first one whose work is reading what the
+# auto.subsystem.yaml — the SEVENTH subsystem: scenarios. The first one whose work is reading what the
 # others wrote.
 #
 # A unit is one scenario — `auto/scenarios/<name>` — and the operator writes it on the console: when this

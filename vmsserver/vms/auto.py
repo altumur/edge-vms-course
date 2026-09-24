@@ -3,7 +3,7 @@ and the refusal that happens at the door instead of at three in the morning."""
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
-# # auto.py — the sixth subsystem's controller, and the whole of the scenario language
+# # auto.py — the seventh subsystem's controller, and the whole of the scenario language
 #
 # **Role in the module.** `auto.subsystem.yaml` says a scenario has a `when`, a `within` and a `then`; the
 # platform checks that those are JSON and small, and stops there, because a generic loader that validated a

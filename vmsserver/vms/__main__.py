@@ -247,7 +247,7 @@ def detworker() -> None:
 
 
 def autocontroller() -> None:
-    """The sixth subsystem's controller: scenarios placed on evaluators. `AutoController` and not the
+    """The seventh subsystem's controller: scenarios placed on evaluators. `AutoController` and not the
     platform's class, because a scenario that says nothing runnable must be refused where it is written —
     and only this subsystem knows what runnable means."""
     from .auto import AutoController

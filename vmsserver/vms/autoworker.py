@@ -1,4 +1,4 @@
-"""autoworker — the sixth subsystem's worker: the one that READS.
+"""autoworker — the seventh subsystem's worker: the one that READS.
 
 Every worker before it observed the world and wrote down what it saw. This one
 reads what they wrote, decides that a scenario fired, and asks somebody else to
