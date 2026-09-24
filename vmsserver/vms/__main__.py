@@ -246,6 +246,32 @@ def detworker() -> None:
     d.run(stop=stop)
 
 
+def autocontroller() -> None:
+    """The sixth subsystem's controller: scenarios placed on evaluators. `AutoController` and not the
+    platform's class, because a scenario that says nothing runnable must be refused where it is written —
+    and only this subsystem knows what runnable means."""
+    from .auto import AutoController
+    from .config import AUTO_SPEC
+    vars_ = open_vars(CONFIG_URL, writer="autocontroller", acl={"autocontroller": AUTO_SPEC.acl_controller()})
+    _controller_loop(AutoController(vars_, FsObjectStore(os.path.join(root, "objects"))))
+
+
+def autoworker() -> None:
+    """A scenario evaluator. Its token is the only one in the course that reaches across a subsystem's
+    name — `requests_acl("vms", "rec")` — and it reaches exactly one family: bounded work, addressed to a
+    unit, performed by whoever holds it. It cannot write a camera, a recording or a placement."""
+    from w2cplatform.contract import requests_acl
+    from .autoworker import AutoWorker
+    from .config import AUTO_SPEC
+    acl = AUTO_SPEC.sub.acl_worker() + requests_acl("vms", "rec")
+    vars_ = open_vars(CONFIG_URL, writer="autoworker", acl={"autoworker": acl})
+    a = AutoWorker(None, vars_, FsObjectStore(os.path.join(root, "objects")),
+                   capacity=int(os.environ.get("CAPACITY", "50")),
+                   archive_root=os.environ.get("ARCHIVE", "/data/archive"))
+    logging.info("evaluator %s (instance %s) claimed its slot; may file: %s", a.name, a.instance, ",".join(acl[-2:]))
+    a.run(stop=stop)
+
+
 def detjobcontroller() -> None:
     """The fifth subsystem's controller: the platform's class from detjob.subsystem.yaml, placing scans
     beside the recorder holding the footage they read, and on a GPU server when it cannot. No code of its
@@ -396,11 +422,12 @@ def console() -> None:
     from .config import SPEC
     from .console import serve
     from w2cplatform.spec import SpecController
-    from .config import DET_SPEC, DETJOB_SPEC, LIVE_SPEC, REC_SPEC, SURVEY_SPEC
+    from .auto import AutoController
+    from .config import AUTO_SPEC, DET_SPEC, DETJOB_SPEC, LIVE_SPEC, REC_SPEC, SURVEY_SPEC
     vars_ = open_vars(CONFIG_URL, writer="console",
                           acl={"console": SPEC.acl_console() + LIVE_SPEC.acl_console() + DET_SPEC.acl_console()
                                + REC_SPEC.acl_console() + DETJOB_SPEC.acl_console()
-                               + SURVEY_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
+                               + SURVEY_SPEC.acl_console() + AUTO_SPEC.acl_console()})   # the operator's rows of EVERY subsystem it fronts
     objects = FsObjectStore(os.path.join(root, "objects"))
     ctl = VmsController(vars_, objects, capacity=int(os.environ.get("CAPACITY", "50")))
     archive = ArchiveResource(os.environ.get("SPOOL", "/data/spool"), os.environ.get("ARCHIVE", "/data/archive"))
@@ -408,7 +435,10 @@ def console() -> None:
                 live_ctl=SpecController(LIVE_SPEC, vars_, objects),
                 mounts={"det": SpecController(DET_SPEC, vars_, objects), "rec": SpecController(REC_SPEC, vars_, objects),
                         "detjob": SpecController(DETJOB_SPEC, vars_, objects),
-                        "survey": SpecController(SURVEY_SPEC, vars_, objects)})
+                        "survey": SpecController(SURVEY_SPEC, vars_, objects),
+                        # `AutoController` and not the platform's class: a scenario is refused where it is
+                        # written, which is here, and the refusal has to be the subsystem's own words.
+                        "auto": AutoController(vars_, objects)})
     logging.info("console on %s", srv.server_address)                     # no event database here: /events asks the resource process
     det_ctl, rec_ctl = SpecController(DET_SPEC, vars_, objects), SpecController(REC_SPEC, vars_, objects)
     job_ctl = SpecController(DETJOB_SPEC, vars_, objects)
@@ -472,4 +502,5 @@ if __name__ == "__main__":
     {"worker": worker, "controller": controller, "recorder": recorder, "reccontroller": reccontroller, "console": console, "resource": resource,
      "gateway": gateway, "livecontroller": livecontroller, "detworker": detworker, "detcontroller": detcontroller,
      "detjobworker": detjobworker, "detjobcontroller": detjobcontroller,
-     "surveyworker": surveyworker, "surveycontroller": surveycontroller}[sys.argv[1]]()
+     "surveyworker": surveyworker, "surveycontroller": surveycontroller,
+     "autoworker": autoworker, "autocontroller": autocontroller}[sys.argv[1]]()

@@ -1,0 +1,29 @@
+# /etc/containers/systemd/autoworker@.container — the scenario evaluator:
+# `systemctl start autoworker@a-1`, the instance name is the slot it claims.
+#
+# The first worker in the course that READS: it asks the resources for the events the others wrote, decides
+# that a scenario fired, and files a request for somebody else to act. It holds no device, runs no
+# pipeline, carries no media — which is why this unit has no /data/media, no /run/vms and no port.
+#
+# Its token is the only one here that reaches across a subsystem's name: `auto/epoch/*`, `auto/slots/*`,
+# `auto/holds/*` — and `vms/requests/*`, `rec/requests/*`. That grant cannot change configuration, cannot
+# place anything, and cannot outlive the row it writes; a scenario asks, the holder performs.
+[Unit]
+Description=VMS scenario evaluator %i — reads the event log, files what a scenario asks for
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms autoworker
+Environment=AUTO_NAME=%i
+# CAPACITY here is scenarios: each one is a window and a query per pass.
+EnvironmentFile=/data/config/vms.env
+# read-write: `auto/epoch/*`, `auto/slots/*` and the two request families (its token); its own events and
+# its cursor go under the archive, beside everything else written on this box.
+Volume=/data/platform:/data/platform:z
+Volume=/data/archive:/data/archive:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2

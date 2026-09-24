@@ -204,8 +204,11 @@ class Frontier:
     A scan has a plan and ticks stretches off it; a survey has no end, and what it
     keeps is a moving edge."""
 
-    def __init__(self, archive_root: str, unit):
-        self.path = os.path.join(unit_dir(archive_root, SURVEY, str(unit)), "frontier.json")
+    # `sub` because the sixth subsystem keeps the same shape of number for the same reason: how far it has
+    # READ. The survey's watched-through and the evaluator's considered-through are one idea, and one idea
+    # gets one file format — the default keeps every survey written before this call site unchanged.
+    def __init__(self, archive_root: str, unit, sub: str = SURVEY):
+        self.path = os.path.join(unit_dir(archive_root, sub, str(unit)), "frontier.json")
 
     def read(self) -> float | None:
         try:

@@ -1,0 +1,22 @@
+# /etc/containers/systemd/autocontroller.container — the auto subsystem's
+# controller: scenarios placed on evaluators, one per box (one per cluster in
+# М11). NOT the platform's SpecController as it stands: `AutoController` adds the
+# one thing the platform cannot do — refuse a scenario the evaluator could not run, at the moment the
+# operator writes it. No port; its token writes auto/workers/*, auto/placement/*, auto/slots/*.
+[Unit]
+Description=VMS auto controller — the only writer of scenario placement
+After=network.target
+
+[Container]
+Image=localhost/vmsserver:latest
+Exec=python3 -m vms autocontroller
+EnvironmentFile=/data/config/vms.env
+Volume=/data/platform:/data/platform:z
+Network=host
+
+[Service]
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

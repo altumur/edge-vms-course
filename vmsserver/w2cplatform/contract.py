@@ -314,6 +314,22 @@ class Subsystem:
 # - `units` — the subsystem's unit ids as strings; the platform does not know what they are.
 # - `rev` — bumped on every change, so a worker can tell a new assignment from the one it already applied
 #   (`assignment_rev` in the VMS heartbeat).
+# What a worker that files requests for OTHER subsystems may write, and nothing else.
+#
+# Every ACL so far has been about one prefix: a subsystem writes inside its own name. Automation is the
+# first thing that must reach across, because a scenario's whole job is to ask somebody else to act — and
+# the narrowness is the point. Not `vms/*`, which would let it edit cameras; not `vms/requests/*` by
+# accident of a wildcard, but by a grant that names the targets out loud in the process's token:
+#
+#     open_vars(url, writer="autoworker", acl={"autoworker": AUTO.acl_worker() + requests_acl("vms", "rec")})
+#
+# `requests` is the right family to open because of what it already is: bounded work, addressed to a unit,
+# performed by whoever holds it, cleared when done. A grant on it cannot change configuration, cannot
+# place anything and cannot outlive the row it writes.
+def requests_acl(*subs: str) -> list[str]:
+    return [f"{s}/{REQUESTS}/*" for s in sorted(set(subs))]
+
+
 @dataclass
 class Assignment:
     worker: str
