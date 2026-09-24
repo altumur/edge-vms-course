@@ -122,7 +122,7 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     box.clock.advance(10)
     assert r.reconcile_once() == [("start", "2")] and r.actuator.started["2"]["source"] == "shm:///run/vms/2.shm"   # held here: the tee's shared memory
     # a camera with no recording is watched, not recorded: it is held (live, detection, events), and has no rec/ tree
-    assert rec_ctl.units() == [{"id": "2", "name": "2", "cam": "2", "retention_days": 30, "enabled": True, "labels": [], "home": "", "revision": 1}]
+    assert rec_ctl.units() == [{"id": "2", "name": "2", "cam": "2", "retention_days": 30, "enabled": True, "labels": [], "home": "", "until": 0.0, "revision": 1}]
     assert [c["id"] for c in ctl.cameras()] == [1, 2] and subsystems_under(box.archive) == {}
     w.observe(1, "motion")
     assert subsystems_under(box.archive) == {"vms": ["1"]}

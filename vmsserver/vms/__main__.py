@@ -376,7 +376,9 @@ def _sweep_loop(controllers, every: float = 60.0) -> None:
 # cannot write the row (its ACL forbids configuration) and the controller must not (one row, one writer),
 # so the console — which already reads these heartbeats — is where the fact lands. See `vms/jobs.py`.
 def _reap_loop(controllers, requests=(), rec_ctl=None, det_ctl=None, survey_ctl=None, every: float = 30.0) -> None:
-    from .jobs import ask_for_footage, clear_requests, keep_what_fired, reap, scan_what_arrived
+    import time
+    from .jobs import (ask_for_footage, clear_requests, expire_recordings, keep_what_fired, reap,
+                       record_on_request, scan_what_arrived)
     while not stop.is_set():
         for c in controllers:
             try:
@@ -413,6 +415,19 @@ def _reap_loop(controllers, requests=(), rec_ctl=None, det_ctl=None, survey_ctl=
                     logging.info("%s: %d request(s) fetched and cleared", c.spec.name, gone)
             except Exception:                         # noqa: BLE001
                 logging.exception("clearing requests failed in %s — they will be asked for again", c.spec.name)
+        if rec_ctl is not None:
+            # A scenario asked for ten minutes of a camera. Turning that into a recording is a write to
+            # CONFIGURATION, and of the three processes only this one holds the token for it — a worker
+            # writes none, and the controller writes placement. Both ends here: the row that starts, and
+            # the row whose `until` has passed.
+            try:
+                started = record_on_request(rec_ctl, time.time())
+                ended = expire_recordings(rec_ctl, time.time())
+                if started or ended:
+                    logging.info("%s: %d recording(s) started on request, %d ended", rec_ctl.spec.name, started, ended)
+            except Exception:                         # noqa: BLE001
+                logging.exception("timed recordings failed — a scenario's minutes may not have started, "
+                                  "or a finished one is still recording")
         stop.wait(every)
 
 

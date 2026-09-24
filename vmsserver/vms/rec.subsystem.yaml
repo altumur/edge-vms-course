@@ -34,6 +34,16 @@ unit:
     enabled:        {type: bool,   default: true}
     labels:         {type: list}                     # where it may run: a recorder whose server has these labels
     home:           {type: string}                   # the VOLUME whose archive holds it — the operator's answer to "where does this footage live" (a storage tier, say)
+    # WHEN THIS RECORDING STOPS BEING ONE, in unix seconds; 0 — never, which is every recording an
+    # operator creates by hand. A scenario asks for ten minutes of a camera, and ten minutes is not a
+    # setting on the row: it is an END. The console's loop deletes the row when the time comes, the
+    # controller unplaces it and the recorder stops its pipeline — the ordinary path for a recording that
+    # was removed, reached by a clock instead of by a click.
+    #
+    # It is a field and not a timer because a timer lives in a process: the one that set it would have to
+    # survive ten minutes for the recording to stop, and a restart would leave a camera recording for
+    # ever with nobody remembering why.
+    until:          {type: float,  default: 0}       # unix seconds; 0 — never
 placement:
   capacity:   {from: capacity, fallback: 50}         # cameras a recorder can write — its own number, from its heartbeat: disks and NIC
   headroom:   {from: headroom}

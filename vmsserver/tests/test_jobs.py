@@ -114,7 +114,10 @@ def test_the_console_process_actually_runs_the_reaper():
     console = inspect.getsource(m.console)
     assert "_reap_loop" in console, "the console process does not start the reaper — no job will ever close"
     assert "job_ctl" in console and "detjob" in console
-    assert "import ask_for_footage, clear_requests, keep_what_fired, reap" in inspect.getsource(m._reap_loop)
+    loop = inspect.getsource(m._reap_loop)
+    for called in ("ask_for_footage", "clear_requests", "keep_what_fired", "reap",
+                   "record_on_request", "expire_recordings"):     # …and the two ends of a timed recording
+        assert f"{called}(" in loop, f"{called} is written, tested and never called"
 
 
 # -- `<name>/requests/<id>`: what an operator asked a worker for ------------------------------------

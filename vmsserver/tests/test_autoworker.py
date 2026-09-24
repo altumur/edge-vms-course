@@ -176,3 +176,63 @@ def test_a_fenced_event_is_not_evidence():
     w = _worker(box, _Log([stale]))
 
     assert w.reconcile_once() == [] and box.vars.list("vms/requests/") == []
+
+
+def test_a_scenarios_minutes_become_a_recording_and_then_stop_being_one():
+    """The other side of `rec.record`, and the division that decides where it
+    lives. "Record for ten minutes" is a write to CONFIGURATION — a row with an
+    id, a retention, a home and a placement — and of the three processes only
+    the console holds the token for one. A worker writes none; the controller
+    writes placement.
+
+    So the evaluator files a request and the console's loop turns it into a
+    recording, the way it would if the operator had pressed Record and set an
+    alarm clock."""
+    from vms.jobs import expire_recordings, record_on_request
+    from w2cplatform.spec import SpecController
+
+    box = Box()
+    t = box.wall()
+    rec = SpecController(REC_SPEC, box.vars.as_writer("console", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    log = _Log([ev(t - 20, "det", 7, "motion"), ev(t - 5, "vms", 12, "io.input", port="1", value="closed")])
+    _scenario(box); _assigned(box, "door-on-badge")
+    w = _worker(box, log)
+    w.reconcile_once()
+
+    assert record_on_request(rec, t) == 1
+    row = rec.unit("7-auto")                                  # the page's own naming rule, one field over
+    assert row["cam"] == "7" and row["until"] == t + 600      # ten minutes, as an END and not a timer
+    assert box.vars.list("rec/requests/") == []               # performed, so it has nothing left to say
+
+    # a second firing while it runs EXTENDS it: the scenario meant "keep recording", not "record twice"
+    box.wall.advance(60)
+    box.vars.put("rec/requests/again", {"action": "record", "cam": "7", "minutes": "10",
+                                        "valid_until": str(box.wall() + 30)})
+    assert record_on_request(rec, box.wall()) == 1
+    assert rec.unit("7-auto")["until"] == box.wall() + 600
+    assert len([u for u in rec.units() if u["cam"] == "7"]) == 1
+
+    # …and when the clock gets there the row goes: the controller unplaces it, the recorder stops. The
+    # ordinary path for a recording somebody removed, reached by a clock instead of by a click.
+    assert expire_recordings(rec, box.wall()) == 0            # not yet
+    box.wall.advance(601)
+    assert expire_recordings(rec, box.wall()) == 1
+    assert rec.unit("7-auto") is None
+
+    # a recording an operator made by hand has `until: 0`, and no clock ever touches it
+    rec.create({"name": "7", "cam": "7"})
+    assert expire_recordings(rec, box.wall() + 10 ** 6) == 0
+
+
+def test_a_record_request_the_recorder_sees_is_not_its_to_serve():
+    """One family, two kinds of asking. A backfill names a RANGE and the worker
+    fetches it; `record` names a DURATION and is nobody's to fetch. Before the
+    skip, the recorder tripped over `it["from"]` every pass."""
+    from vms.archive import ArchiveResource
+    from vms.recworker import RecWorker
+
+    box = Box()
+    r = RecWorker("r-1", box.vars, box.objects, archive=ArchiveResource(box.spool, box.archive, wall=box.wall),
+                  clock=box.clock, wall=box.wall, server="srv-a", env={})
+    box.vars.put("rec/requests/x", {"action": "record", "cam": "7", "minutes": "10", "unit": "7"})
+    assert r.requests() == [] and r.fetched == []             # not served, and not tripped over either

@@ -384,6 +384,12 @@ class RecWorker(VmsWorker):
             it, _ = self.vars.get(key)
             if not it or str(it.get("unit", "")) not in mine:
                 continue                                     # another recorder's recording: not ours to fetch
+            # One family, two kinds of asking. A backfill names a RANGE and this worker fetches it; a
+            # `record` names a DURATION and is not a worker's to serve at all — it becomes a row, and rows
+            # are the console's. Skipping it here is what keeps the recorder from tripping over a request
+            # that was never addressed to it (`it["from"]` would not be there).
+            if str(it.get("action", "backfill")) != "backfill":
+                continue
             src = self.device_source(it.get("cam", it["unit"]))
             rid = key.rsplit("/", 1)[1]
             if src is None:

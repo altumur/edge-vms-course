@@ -37,6 +37,71 @@ log = logging.getLogger("vms.jobs")
 # cheaper still, because a request has no state to move: once the work named in it is done the row has
 # nothing left to say, and a store that keeps every range anyone ever asked for is a store that grows
 # without anybody deciding it should.
+# "Record this camera for ten minutes" — a request turned into a row, by the one token that may write
+# rows: the CONSOLE's. Run in the console process's loop, beside the reaper that clears requests.
+#
+# The division is the same as everywhere and it is the reason this function is here rather than in the
+# recorder or in the controller. A worker writes no configuration, and a recording IS configuration — it
+# has an id, a retention, a home and a placement. The controller writes placement and not rows. What is
+# left is the console, which is the operator's agent, and a scenario asking for ten minutes of a camera is
+# the operator asking through something they wrote.
+#
+# The row is named `<cam>-auto`, which is the naming rule the page already uses one field over: a camera
+# recorded by hand and by a scenario has two recordings, two trees and two retentions, and neither
+# surprises the other. A second request while it runs EXTENDS it — ten more minutes from now — instead of
+# making `<cam>-auto-2`: the scenario meant "keep recording", not "record twice".
+def record_on_request(rec_ctl, now: float) -> int:
+    started = 0
+    for key in sorted(rec_ctl.vars.list(rec_ctl.sub.requests_prefix())):
+        it, _ = rec_ctl.vars.get(key)
+        if not it or str(it.get("action", "")) != "record":
+            continue                                        # a backfill: the recorder's, not ours
+        rid = key.rsplit("/", 1)[1]
+        until = float(it.get("valid_until", 0) or 0)
+        if until and now > until:
+            rec_ctl.vars.delete(key)                        # asked for too late to mean what it meant
+            log.warning("%s: %s expired before it was turned into a recording", rec_ctl.spec.name, rid)
+            continue
+        cam = str(it.get("cam") or it.get("unit") or "")
+        minutes = float(it.get("minutes", 0) or 0)
+        if not cam or minutes <= 0:
+            rec_ctl.vars.delete(key)
+            log.warning("%s: %s asks to record nothing: %s", rec_ctl.spec.name, rid, it)
+            continue
+        name, ends = f"{cam}-auto", now + minutes * 60
+        row = rec_ctl.unit(name)
+        try:
+            if row is None:
+                fields = {"name": name, "cam": cam, "until": ends}
+                if it.get("archive"):
+                    fields["home"] = str(it["archive"])
+                rec_ctl.create(fields)
+                started += 1
+            elif float(row.get("until") or 0) < ends:
+                rec_ctl.update(name, {"until": ends})       # keep recording, not record twice
+                started += 1
+        except Exception as e:                              # noqa: BLE001 — a refusal is an answer, and it is ours to log
+            log.warning("%s: %s could not start %s: %s", rec_ctl.spec.name, rid, name, e)
+        rec_ctl.vars.delete(key)                            # performed or refused, it has nothing left to say
+    return started
+
+
+# …and the other end of it. A recording with an `until` in the past is over: the row goes, the controller
+# unplaces it, the recorder stops the pipeline. The ordinary path for a recording somebody removed,
+# reached by a clock instead of by a click.
+#
+# `until: 0` is every recording an operator made by hand, and this function never touches one.
+def expire_recordings(rec_ctl, now: float) -> int:
+    gone = 0
+    for row in rec_ctl.units():
+        until = float(row.get("until") or 0)
+        if until and now > until:
+            rec_ctl.delete(row["id"])
+            gone += 1
+            log.info("%s: %s reached its end", rec_ctl.spec.name, row["id"])
+    return gone
+
+
 def clear_requests(ctl) -> int:
     from w2cplatform.console import heartbeats
     fetched: set[str] = set()
