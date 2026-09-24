@@ -140,3 +140,108 @@ def test_a_torn_last_line_loses_the_line_not_the_bucket():
     db.rebuild()
     assert len(db.query(0, 1e12, cam=None, kind=None, subsystem="vms", unit="8123",
                         current_epochs={("vms", "8123"): 7})["events"]) == 5
+
+
+def _events(box, n, cam=7):
+    """`n` observations a second apart in one bucket, numbered so a test can say WHICH ones came back."""
+    from vms.archive import event_log
+    log = event_log(box.archive, cam, 1)
+    for i in range(n):
+        log.append(1000.0 + i, "motion", n=i)
+    db = EventDatabase(box.archive, "srv-1", wall=box.wall); db.rebuild()
+    return db
+
+
+def test_an_overflowing_window_keeps_the_newest_end_and_says_it_was_cut():
+    """`LIMIT` with no direction is a question nobody asked: "a thousand of the five
+    thousand" means nothing until somebody says WHICH thousand. The database answered
+    `ORDER BY t LIMIT ?`, so the rows it dropped were the NEWEST — the end a timeline
+    and a scenario are both looking at, and it dropped them without a word.
+
+    Both halves are the fix. The default end is the newest, because nearly everything
+    asked of an event log is a form of "what just happened"; and the answer says
+    `truncated`, because a decision taken on part of a window must not look like one
+    taken on all of it."""
+    box = Box()
+    db = _events(box, 10)
+
+    rep = db.query(0, 1e12, limit=4)
+    assert [e["n"] for e in rep["events"]] == [6, 7, 8, 9]        # the newest four…
+    assert [e["t"] for e in rep["events"]] == sorted(e["t"] for e in rep["events"])   # …still ascending by time
+    assert rep["truncated"] is True
+
+    whole = db.query(0, 1e12, limit=10)                            # exactly `limit` rows is a WHOLE window:
+    assert [e["n"] for e in whole["events"]] == list(range(10))    # the fact is read one row past the limit,
+    assert whole["truncated"] is False                             # so "cut" is never a guess from a count
+
+
+def test_which_end_survives_is_the_callers_and_an_unknown_end_is_refused():
+    """The reader that wants the other end — paging forward through an archive from a
+    cursor — knows that about itself and says so. It is a choice, so it is refused at the
+    door like any other field: an unknown `keep` must not quietly mean the opposite end,
+    because that failure is invisible and permanent."""
+    box = Box()
+    db = _events(box, 10)
+
+    assert [e["n"] for e in db.query(0, 1e12, limit=4, keep="oldest")["events"]] == [0, 1, 2, 3]
+
+    try:
+        db.query(0, 1e12, keep="middle"); assert False, "an unknown end was accepted"
+    except ValueError as e:
+        assert "'newest' or 'oldest'" in str(e) and "middle" in str(e)
+
+
+def test_the_merge_does_not_cut_the_newest_end_twice():
+    """The console's index asks every resource for a window and then cuts the union to
+    `limit` again. A limit with no direction therefore dropped the newest end TWICE —
+    once per resource, once over the merge — and the second cut is the one no single
+    resource could have warned about.
+
+    `truncated` is the union's too: any resource that cut its answer makes the merged
+    window partial, and the reader is told that, not which server did it."""
+    from w2cplatform.resource import RESOURCES
+    box = Box()
+    rows = [{"subsystem": "vms", "unit": "7", "cam": 7, "epoch": 1, "t": 1000.0 + i, "kind": "motion",
+             "server": f"srv-{i % 2 + 1}", "bucket": f"b-{i % 2 + 1}", "n": i} for i in range(8)]
+    for s in ("srv-1", "srv-2"):
+        box.objects.put(f"{RESOURCES}/{s}/heartbeat",
+                        json.dumps({"server": s, "ts": box.wall(), "url": f"http://{s}"}).encode())
+
+    def fetch(url, p):
+        mine = sorted([e for e in rows if e["server"] == url.rsplit("/", 1)[1]], key=lambda e: e["t"])
+        lim, keep = int(p["limit"]), p.get("keep", "newest")
+        cut = len(mine) > lim
+        return {"events": (mine[-lim:] if keep == "newest" else mine[:lim]) if cut else mine,
+                "state": "live", "truncated": cut}
+
+    m = MergedIndex(box.objects, fetch=fetch, wall=box.wall)
+    rep = m.query(0, 1e12, limit=4)                                # four each, eight merged, four kept
+    assert [e["n"] for e in rep["events"]] == [4, 5, 6, 7]         # the newest of the UNION, not of one server
+    assert rep["truncated"] is True                                # cut by the merge, though neither resource cut
+
+    assert [e["n"] for e in m.query(0, 1e12, limit=4, keep="oldest")["events"]] == [0, 1, 2, 3]
+    assert m.query(0, 1e12, limit=8)["truncated"] is False         # room for both servers' windows
+
+
+def test_the_operators_timeline_can_ask_for_its_own_window():
+    """The sharpest form of the defect was the operator's: `/events` on the console took
+    no `limit` at all, so a busy hour came back as its first thousand rows with nothing
+    saying so. The timeline now sets its own window, gets the newest end of it, and is
+    told when the hour did not fit."""
+    box = Box()
+    _events(box, 10)
+    res, rsrv = _resource_process(box)
+    con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
+    srv = serve(con, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        st, rep = call(base, "GET", "/events?from=0&to=1e12&limit=3")
+        assert st == 200 and [e["n"] for e in rep["events"]] == [7, 8, 9] and rep["truncated"] is True
+        st, rep = call(base, "GET", "/events?from=0&to=1e12&limit=3&keep=oldest")
+        assert st == 200 and [e["n"] for e in rep["events"]] == [0, 1, 2]
+        st, rep = call(base, "GET", "/events?from=0&to=1e12&keep=middle")   # refused at the door, not read as an end
+        assert st == 400 and "middle" in rep["error"]
+        st, rep = call(f"{res.url}", "GET", "/events?from=0&to=1e12&keep=middle")
+        assert st == 400 and "middle" in rep["error"]               # the resource's door says the same thing
+    finally:
+        srv.shutdown(); rsrv.shutdown()

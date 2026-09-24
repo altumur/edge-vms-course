@@ -146,29 +146,48 @@ class EventDatabase:
     def query(self, t0: float, t1: float, cam: int | None = None, kind: str | None = None,
               subsystem: str | None = None, unit: str | None = None,
               current_epochs: dict[tuple[str, str], int] | None = None, limit: int = 1000,
-              epoch_policy: dict[str, str] | None = None) -> dict:
+              epoch_policy: dict[str, str] | None = None, keep: str = "newest") -> dict:
         """`current_epochs` is {(subsystem, unit): epoch} — fencing is per unit, and only the
         unit's own subsystem knows its current epoch; the database just compares.
 
         `epoch_policy` is {subsystem: "fenced" | "earlier-run"} — what an older epoch MEANS
         there. Same comparison, two meanings: a writer that lost the race, or a finished
-        earlier run of work that ends. The database is told; it does not decide."""
+        earlier run of work that ends. The database is told; it does not decide.
+
+        `keep` is which END of an overflowing window survives `limit` — and it is the CALLER's
+        to choose, because "a thousand of the five thousand" means nothing without it. The
+        default is "newest": nearly everything asked of an event log is a form of "what just
+        happened", and the reader that wants the other end — paging forward through an archive
+        from a cursor — knows that about itself and says so. `LIMIT` with no direction was this
+        method dropping the newest end silently, which is the end a timeline and an automation
+        scenario are both looking at.
+
+        The answer is ascending by time whichever end was kept, and it carries `truncated`, so a
+        decision taken on part of a window cannot look like one taken on all of it."""
+        if keep not in ("newest", "oldest"):
+            raise ValueError(f"keep is 'newest' or 'oldest', not {keep!r}")
         sql, args = "SELECT subsystem, unit, cam, epoch, t, kind, server, path, fields FROM events WHERE t >= ? AND t < ?", [t0, t1]
         if cam is not None: sql += " AND cam = ?"; args.append(cam)
         if kind is not None: sql += " AND kind = ?"; args.append(kind)
         if subsystem is not None: sql += " AND subsystem = ?"; args.append(subsystem)
         if unit is not None: sql += " AND unit = ?"; args.append(str(unit))
-        sql += " ORDER BY t LIMIT ?"; args.append(limit)
+        # One row PAST the limit, so `truncated` is a fact and not a guess: a window holding exactly
+        # `limit` rows is whole, and calling it cut would be the same lie pointing the other way.
+        sql += " ORDER BY t DESC LIMIT ?" if keep == "newest" else " ORDER BY t LIMIT ?"
+        args.append(limit + 1)
         out = []
         with self._lock:
             rows = self.db.execute(sql, args).fetchall()
+        truncated = len(rows) > limit
+        rows = rows[:limit]
+        if keep == "newest": rows.reverse()
         for sub, u, c, ep, t, k, server, path, fields in rows:
             cur = (current_epochs or {}).get((sub, u))
             older = cur is not None and ep < cur
             was = (epoch_policy or {}).get(sub, "fenced") if older else "current"
             out.append({"subsystem": sub, "unit": u, "cam": c, "epoch": ep, "t": t, "kind": k, "server": server, "bucket": path,
                         "epoch_is": was, "fenced": was == "fenced", **json.loads(fields)})
-        return {"events": out, "state": self.state}
+        return {"events": out, "state": self.state, "truncated": truncated}
 
     # Retention removed a bucket: delete its rows and its `seen` row, so a re-mirrored copy is not refused.
     def forget(self, server: str, paths: list[str]) -> int:
@@ -218,17 +237,32 @@ class MergedIndex:
             return json.loads(r.read())
 
     def query(self, t0: float, t1: float, cam=None, kind=None, subsystem=None, unit=None, current_epochs=None,
-              limit: int = 1000, epoch_policy: dict[str, str] | None = None) -> dict:
+              limit: int = 1000, epoch_policy: dict[str, str] | None = None, keep: str = "newest") -> dict:
+        """`keep` as in `EventDatabase.query`, and it has to be carried BOTH ways: the merge asks
+        each resource for a window and then cuts the union to `limit` again, so a limit with no
+        direction dropped the newest end twice — once per resource, once more over the merge.
+
+        `truncated` is true if ANY resource cut its answer or the merge cut theirs: the reader is
+        told the window is partial, not which server made it partial.
+
+        The check below is the SAME refusal the database makes, and it has to be here too rather
+        than left to the resources: this method reads any failure from a resource as "unreachable"
+        (live by heartbeat, not answering), so a caller's bad `keep` would come back as an empty
+        window and an infrastructure fault that never happened."""
+        if keep not in ("newest", "oldest"):
+            raise ValueError(f"keep is 'newest' or 'oldest', not {keep!r}")
         now = self.wall(); seen = resources_seen(self.objects)
         live = {s for s, hb in seen.items() if now - float(hb["ts"]) <= self.lost_after}
         params = {k: v for k, v in (("from", t0), ("to", t1), ("cam", cam), ("kind", kind), ("subsystem", subsystem),
-                                    ("unit", unit), ("limit", limit)) if v is not None}
+                                    ("unit", unit), ("limit", limit), ("keep", keep)) if v is not None}
         events, unreachable, from_mirror, have = [], [], set(), set()
+        truncated = False
         for server in sorted(live):
             try:
                 rep = self.fetch(seen[server]["url"], params)
             except Exception:                                   # noqa: BLE001 — live by heartbeat, not answering
                 unreachable.append(server); continue
+            truncated = truncated or bool(rep.get("truncated"))
             for e in rep["events"]:
                 if e["server"] != server:                         # a copy this resource holds for a peer
                     if e["server"] in live:
@@ -241,7 +275,10 @@ class MergedIndex:
         for server in sorted(seen):
             if server not in live and server not in from_mirror:
                 unreachable.append(server)                        # silent, and nobody holds its copies
-        events.sort(key=lambda e: e["t"]); events = events[:limit]
+        events.sort(key=lambda e: e["t"])
+        if len(events) > limit:
+            truncated = True
+            events = events[-limit:] if keep == "newest" else events[:limit]
         cur = current_epochs or {}
         for e in events:                                          # each resource fenced its own; re-decide over the merge
             c = cur.get((e["subsystem"], e["unit"]))
@@ -251,4 +288,4 @@ class MergedIndex:
         unreachable = sorted(set(unreachable))
         self.state = "live" + (f"; {', '.join(unreachable)} unreachable" if unreachable else "") \
                             + (f"; {', '.join(sorted(from_mirror))} from mirror" if from_mirror else "")
-        return {"events": events, "state": self.state}
+        return {"events": events, "state": self.state, "truncated": truncated}

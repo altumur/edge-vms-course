@@ -5,6 +5,7 @@ the language — but everything around a decision taken from a log that is
 at-least-once, replayed after a restart and shared with five other subsystems.
 """
 import json
+import logging
 
 from w2cplatform.contract import requests_acl
 from w2cplatform.variables import Forbidden
@@ -18,17 +19,21 @@ class _Log:
     """The merged event index, as a list — and as unkind as the real one.
 
     Two properties matter and both were missing from the first version of this
-    fake, which is why two defects lived through seven green tests: the merge
-    answers `ORDER BY t LIMIT ?` (a full window drops the NEWEST rows), and an
-    event becomes visible some seconds AFTER its own timestamp, because a
-    resource tails its files on a timer."""
+    fake, which is why two defects lived through seven green tests: a window
+    that overflows comes back CUT, and an event becomes visible some seconds
+    AFTER its own timestamp, because a resource tails its files on a timer.
+
+    Which end a cut window keeps is `keep`, and the fake obeys it the way the
+    index does — newest by default — and says `truncated` when it had to cut.
+    A fake that answered whole windows only is what let the evaluator infer
+    fullness from a row count for as long as it did."""
     def __init__(self, events=(), lag=0.0, wall=None):
         self.events = list(events)
         self.lag, self.wall = lag, wall
         self.asked: list[dict] = []
 
-    def query(self, t0, t1, subsystem=None, kind=None, limit=1000, **kw):
-        self.asked.append({"t0": t0, "t1": t1, "subsystem": subsystem, "kind": kind, "limit": limit})
+    def query(self, t0, t1, subsystem=None, kind=None, limit=1000, keep="newest", **kw):
+        self.asked.append({"t0": t0, "t1": t1, "subsystem": subsystem, "kind": kind, "limit": limit, "keep": keep})
         now = self.wall() if self.wall else t1
         rows = [e for e in self.events
                 if t0 <= e["t"] <= t1
@@ -36,7 +41,9 @@ class _Log:
                 and (subsystem is None or e["subsystem"] == subsystem)
                 and (kind is None or e["kind"] == kind)]
         rows.sort(key=lambda e: e["t"])
-        return {"events": rows[:limit], "state": "live"}          # the oldest survive, as in SQL
+        cut = len(rows) > limit
+        rows = (rows[-limit:] if keep == "newest" else rows[:limit]) if cut else rows
+        return {"events": rows, "state": "live", "truncated": cut}
 
 
 def ev(t, sub, unit, kind, **fields):
@@ -299,3 +306,37 @@ def test_a_noisy_log_does_not_hide_the_event_the_scenario_watches():
     assert len(box.vars.list("vms/requests/")) == 1
     # one query per kind the scenario watches, each naming what it wants
     assert [(q["subsystem"], q["kind"]) for q in log.asked] == [("vms", "io.input")]
+
+
+def test_a_cut_window_is_reported_even_when_fencing_hides_the_count():
+    """The evaluator warns when a window came back cut, because a decision taken on
+    part of one must not look like a decision taken on all of it. It used to work
+    that out by comparing the row count to its own limit — but it counts AFTER
+    dropping fenced events, so a cut window whose dropped rows included fenced ones
+    comes back SHORT of the limit and the warning never fires. Silence then means
+    both "nothing happened" and "I did not see what happened".
+
+    The index is the one that cut; it says so, and the evaluator reads the fact
+    instead of re-deriving it from a number that no longer means what it did."""
+    box = Box()
+    t = box.wall()
+    watched = "io.input"
+    rows = [ev(t - 300 + i * 0.1, "vms", 12, watched, port="1", value="open", fenced=(i % 2 == 0))
+            for i in range(AutoWorker.PER_KIND * 2)]
+    log = _Log(rows, wall=box.wall)
+    _scenario(box, name="one", when=[DOOR["when"][0]], within=0, then=[DOOR["then"][0]])
+    _assigned(box, "one")
+    w = _worker(box, log)
+
+    seen = []
+    handler = logging.Handler(); handler.emit = lambda r: seen.append(r.getMessage())
+    logging.getLogger("autoworker").addHandler(handler)
+    try:
+        w.reconcile_once()
+    finally:
+        logging.getLogger("autoworker").removeHandler(handler)
+
+    cut = log.asked[-1]
+    assert cut["limit"] == AutoWorker.PER_KIND and cut["keep"] == "newest"   # it asks for the newest end…
+    assert any("came back full" in m and "vms.io.input" in m for m in seen), \
+        "the window was cut and the evaluator said nothing: fencing put the count below the limit"

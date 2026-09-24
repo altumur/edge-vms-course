@@ -67,8 +67,9 @@ class AutoWorker(Worker):
     # deterministic and the ones just filed are still remembered), running ahead costs a firing. Five
     # seconds is comfortably more than the tail period.
     SETTLE = 5.0
-    # Rows per (subsystem, kind) query. The merge answers `ORDER BY t LIMIT ?`, so a full window drops the
-    # NEWEST events — exactly the ones a scenario exists for.
+    # Rows per (subsystem, kind) query. The index now keeps the NEWEST end of an overflowing window and
+    # says `truncated` when it had to cut, so this is a budget rather than a trap — but a scenario still
+    # wants its window whole, and one query per kind is what keeps it that way.
     PER_KIND = 500
 
     def __init__(self, name: str | None, vars_: Variables, objects, index=None, capacity: int | None = None,
@@ -151,16 +152,17 @@ class AutoWorker(Worker):
 
     # The events to decide on — ONE QUERY PER KIND THE SCENARIO WATCHES, and that is not an optimisation.
     #
-    # A single "everything in the last five minutes" comes back `ORDER BY t LIMIT n`: when it overflows,
-    # what is dropped is the NEWEST end, which is the end a scenario cares about. Three cameras writing a
-    # statistics line every few seconds fill a thousand rows in a five-minute window, and from that moment
-    # the evaluator sees the beginning of the window and never the end. No refusal, no log line — the
-    # language gets blamed.
+    # A single "everything in the last five minutes" overflows on a busy box: three cameras writing a
+    # statistics line every few seconds fill a thousand rows in a five-minute window. The index used to
+    # answer such a window `ORDER BY t LIMIT n` and drop the NEWEST end — the end a scenario cares about —
+    # with no refusal and no log line, so the language got blamed. It keeps the newest end now, but that
+    # only changes WHICH events are lost: a scenario asking a broad window on a loud box would still be
+    # deciding on part of one.
     #
     # The trigger already names the subsystem and the kind. Letting the query name them too means the
     # window holds only what this scenario is looking at, and there are at most `MAX_TRIGGERS` of them.
     #
-    # And when a window still comes back full, SAY SO: a decision taken on truncated data must not look
+    # And when a window still comes back cut, SAY SO: a decision taken on truncated data must not look
     # like a decision taken on all of it.
     def window(self, row: dict, t0: float, t1: float) -> list[dict]:
         kinds = sorted({(str(t.get("sub", "")), str(t.get("kind", ""))) for t in row["when"]})
@@ -168,8 +170,9 @@ class AutoWorker(Worker):
         for sub, kind in kinds:
             rep = self.index.query(max(0.0, t0), t1, subsystem=sub, kind=kind, limit=self.PER_KIND)
             evs = [e for e in rep.get("events", []) if not e.get("fenced")]
-            if len(evs) >= self.PER_KIND:
-                full.append(f"{sub}.{kind}")
+            if rep.get("truncated"):                              # the index's own answer, not a guess from the count:
+                full.append(f"{sub}.{kind}")                      # fencing drops rows AFTER the cut, so a window that
+                                                                  # WAS cut can still come back short of the limit
             out += evs
         if full:
             log.warning("%s: %s — the window came back full for %s; a firing may have been cut off its "

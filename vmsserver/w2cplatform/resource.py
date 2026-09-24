@@ -542,8 +542,10 @@ class Resource:
 # - `do_GET`:
 #   - `GET /buckets/<sub>/<unit>` — `buckets_under` for that unit, one `Bucket.line()` per line, 200.
 #   - `GET /mirrored/<server>` — `mirrored_buckets` for that server, same format.
-#   - `GET /events?from&to&cam&kind&subsystem&unit&limit` — `resource.database.query(...)` as JSON
-#     (`{events, state}`, unfenced: the console fences); 503 if the job runs no database.
+#   - `GET /events?from&to&cam&kind&subsystem&unit&limit&keep` — `resource.database.query(...)` as JSON
+#     (`{events, state, truncated}`, unfenced: the console fences); `keep` is "newest" (default) or
+#     "oldest" — which end of an overflowing window survives; 400 if it is neither; 503 if the job
+#     runs no database.
 #         - `GET /events/<path>` — the raw bytes of one bucket; `path` may begin with `.mirror/<server>/`.
 #       404 if it contains `..`, does not end in `.events.jsonl`, or is not a file.
 #   - anything else — `extra(path, headers)` if given and it answers; otherwise 404.
@@ -576,9 +578,12 @@ def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=Non
                 if resource.database is None:
                     return self._raw(503, b'{"error": "this resource runs no event database"}', [("Content-Type", "application/json")])
                 q = {k: v[0] for k, v in urllib.parse.parse_qs(self.path.partition("?")[2]).items()}
-                rep = resource.database.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
-                                           int(q["cam"]) if q.get("cam") else None, q.get("kind"), q.get("subsystem"), q.get("unit"),
-                                           limit=int(q.get("limit", 1000)))
+                try:
+                    rep = resource.database.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
+                                               int(q["cam"]) if q.get("cam") else None, q.get("kind"), q.get("subsystem"), q.get("unit"),
+                                               limit=int(q.get("limit", 1000)), keep=q.get("keep", "newest"))
+                except ValueError as e:                           # an unknown `keep` is refused, not read as the other end
+                    return self._raw(400, json.dumps({"error": str(e)}).encode(), [("Content-Type", "application/json")])
                 return self._raw(200, json.dumps(rep).encode(), [("Content-Type", "application/json")])
             if self.path.startswith("/events/"):
                 rel = self.path[len("/events/"):]; p = os.path.join(root, rel)

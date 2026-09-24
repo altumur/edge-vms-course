@@ -510,9 +510,10 @@ class SpecConsole:
     #   - `GET /servers` — `servers()`: per server, `archive` (what its workers record into — Nomad's `meta.archive`
     #     on a cluster), `resource` (`live | silent | unknown`), `workers`, `placeable` and `why`.
     #   - `GET /unplaceable` — `ctl.unplaceable()`.
-    #         - `GET /events?from&to&cam|unit&kind&subsystem` — 503 if no index; else builds
+    #         - `GET /events?from&to&cam|unit&kind&subsystem&limit&keep` — 503 if no index; else builds
     #       `current_epochs` from every `<sub>/epoch/*` row and calls `index.query`. A numeric `unit` is
-    #       treated as `cam`; a non-numeric one is passed as `unit`.
+    #       treated as `cam`; a non-numeric one is passed as `unit`. `keep` is "newest" (default) or
+    #       "oldest", 400 if it is neither; the reply carries `truncated` when the window did not fit.
     #   - `GET /metrics` — `metrics_text()` as `text/plain`.
     #   - otherwise `_extra("GET", …)`; then 404 `{detail, error}`.
     # - `_idem() -> key | None` — for POST: 400 if `Idempotency-Key` is missing or malformed; if `claim`
@@ -597,10 +598,15 @@ class SpecConsole:
                     return h._send(503, {"error": "no event database behind this console"})
                 cur = {(p.split("/")[0], p.rsplit("/", 1)[1]): current_epoch(ctl.vars, p) for p in ctl.vars.list("") if "/epoch/" in p}   # every subsystem's epochs: the timeline shows them all
                 cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
-                return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
-                                                    int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
-                                                    q.get("unit") if not cam else None, cur,
-                                                    epoch_policy=con.epoch_policy))
+                try:                                          # the operator's timeline: `limit` is theirs to set, and
+                                                              # `keep` says which end of a busy hour they get
+                    return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
+                                                        int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
+                                                        q.get("unit") if not cam else None, cur,
+                                                        limit=int(q.get("limit", 1000)),
+                                                        epoch_policy=con.epoch_policy, keep=q.get("keep", "newest")))
+                except ValueError as e:
+                    return h._send(400, {"error": str(e)})
             if path == "/metrics":
                 return h._send(200, con.metrics_text(), raw=True)
             if self._extra(h, "GET", path, q):
