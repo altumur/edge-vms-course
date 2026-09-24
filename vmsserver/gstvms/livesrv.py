@@ -29,16 +29,20 @@ FACTORY = "( udpsrc port={port} caps=\"{caps}\" ! rtpjitterbuffer latency=100 ! 
 
 
 class FanOut:
+    # `port=0` — let the OS choose, and then ASK which one it chose (`get_bound_port`, available once the
+    # server is attached). A number baked into a unit template is a door only the first instance on the
+    # box can open; the address is published in the heartbeat anyway, so it never needed to be a constant.
     def __init__(self, port: int = 8554):
         self.server = GstRtspServer.RTSPServer()
         self.server.set_service(str(port))
         self.mounts = self.server.get_mount_points()
         self.published: dict[str, GstRtspServer.RTSPMediaFactory] = {}
         self.server.attach(None)
+        self.port = int(self.server.get_bound_port()) if port == 0 else port
         self.loop = GLib.MainLoop()
         import threading
         threading.Thread(target=self.loop.run, daemon=True).start()
-        log.info("RTSP fan-out on :%d", port)
+        log.info("RTSP fan-out on :%d", self.port)
 
     def publish(self, name: str, live_port: int) -> None:
         if name in self.published:

@@ -45,6 +45,13 @@ Exec=python3 -m vms worker
 Environment=WORKER_NAME=%i
 # `PLATFORM_DIR`, `SPOOL`, `ARCHIVE`, `MEDIA_DIR`, `CAPACITY`, `SEGMENT_SECONDS`, `LOG_LEVEL` (see
 # `vms.env.example`); on the data partition, never a rootfs slot.
+# The worker's TWO doors, and neither may be a constant in a template: the RTSP fan-out and the playback
+# surface. A second `vmsworker@w-2` on the same box is the ordinary way to use capacity (the autoscaler
+# does exactly that), and a fixed 8554 turns it into a crash loop. `auto` asks the OS; both addresses are
+# published per camera in the heartbeat (`live_url`, `playback_url`) and read from there by the recorder,
+# the gateway, the detectors and the console — which is what the heartbeat has been for since Lesson 4.
+Environment=RTSP_PORT=auto
+Environment=PLAYBACK_PORT=auto
 EnvironmentFile=/data/config/vms.env
 # the two stores, read-write: the worker writes `vms/epoch/*`, `vms/slots/*` (its token) and its heartbeat
 # object. `:z` relabels for SELinux, shared.

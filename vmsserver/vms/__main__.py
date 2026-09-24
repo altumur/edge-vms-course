@@ -9,7 +9,10 @@
     CONSOLE_PORT=8080                the console (its own process, its own token: the operator's rows, never placement)
     RESOURCE_PORT=8090  RESOURCE_URL the resource process: heartbeat, the policy pass, the event database served as /events
     EVENTDB=:memory:                 where the resource keeps its event database — a cache, rebuilt on every start
-    GATEWAY_PORT=8082  GATEWAY_URL   a live gateway (the second subsystem's worker): WHEP on this port; the URL the console proxies to
+    GATEWAY_PORT=8082  GATEWAY_URL   a live gateway: WHEP on this port (`auto` — ask the OS, which is what a
+                                     SECOND gateway on one box needs); the URL the console proxies to
+    RTSP_PORT=8554  PLAYBACK_PORT=8083   the worker's two doors, `auto` likewise: a template that fixes a
+                                     number is a door only the first instance on the box can open
     GATEWAY_NAME=g-1                 its slot (systemd: %i); CAPACITY here is viewers
     DET_NAME=d-1                     a detector worker's slot; CAPACITY here is streams; NOMAD_META_labels=gpu says where it is
 """
@@ -113,7 +116,8 @@ def worker() -> None:
     archive = os.environ.get("ARCHIVE", "/data/archive")
     try:
         from gstvms.actuator import GstActuator
-        act = GstActuator()
+        from .config import port_of, RTSP_PORT
+        act = GstActuator(rtsp_port=port_of(os.environ.get("RTSP_PORT"), RTSP_PORT))
     except ImportError:
         logging.warning("no GStreamer: the fake actuator holds nothing")
         act = FakeActuator()
@@ -126,7 +130,9 @@ def worker() -> None:
         device_factory = None
     w = VmsWorker(name, vars_, objects, act, capacity=int(os.environ.get("CAPACITY", "50")), archive_root=archive,
                   device_factory=device_factory)
-    srv = w.serve_playback(os.environ.get("PLAYBACK_HOST", "0.0.0.0"), int(os.environ.get("PLAYBACK_PORT", "8083")))
+    # The port is the worker's own (`$PLAYBACK_PORT`, `auto` for "ask the OS"), read in its constructor and
+    # written back here by whatever the socket actually got.
+    srv = w.serve_playback(os.environ.get("PLAYBACK_HOST", "0.0.0.0"))
     logging.info("worker %s (instance %s) claimed its slot; playback on %s", w.name, w.instance, srv.server_address)
     try:
         w.run(stop=stop)
@@ -328,7 +334,10 @@ def gateway() -> None:
     vars_ = open_vars(CONFIG_URL, writer="liveworker",
                           acl={"liveworker": ["live/epoch/*", "live/slots/*", "live/streams/*"]})
     objects = FsObjectStore(os.path.join(root, "objects"))
-    host, port = os.environ.get("GATEWAY_HOST", "127.0.0.1"), int(os.environ.get("GATEWAY_PORT", "8082"))
+    from .config import port_of
+    # `auto` is what lets a second gateway run on this box: it publishes the address it bound (`serve`
+    # reads it back into `self.url`), and every viewer reaches it through that, never through a number.
+    host, port = os.environ.get("GATEWAY_HOST", "127.0.0.1"), port_of(os.environ.get("GATEWAY_PORT"), 8082)
     peer = None
     try:
         from gstvms.webrtc import GstPeer

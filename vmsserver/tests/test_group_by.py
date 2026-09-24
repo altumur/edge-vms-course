@@ -294,3 +294,47 @@ def test_the_console_files_a_command_and_refuses_the_ones_it_cannot():
                      ({"unit": door, "action": "reboot"}, "unknown action")):
         st, b = route(_Body(json.dumps(bad).encode()), "POST", "/requests", {})
         assert st in (400, 404) and b["error"] == why
+
+
+def test_two_workers_on_one_box_open_their_own_doors():
+    """The defect this exists for is not subtle once seen: a port in a TEMPLATE
+    is a door only the first instance can open. `vmsworker@w-2` on the same box
+    binds a taken socket, dies, and `Restart=always` raises it every two seconds
+    until morning.
+
+    Nothing ever needed the number: every subscriber reads the address out of
+    the heartbeat. So the number may be zero, and what is published is what the
+    OS gave."""
+    from vms.config import port_of
+    from vms.worker import FakeActuator, VmsWorker
+
+    assert (port_of("auto", 8554), port_of("", 8554), port_of("9000", 8554)) == (0, 8554, 9000)
+
+    box = Box(); ctl, con = _ctl(box)
+    cam = con.create_camera({"name": "lobby", "source": CAM})["id"]
+    _worker(box, "w-1", "srv-a"); ctl.ensure_placed()
+
+    doors = []
+    for name in ("w-1", "w-2"):
+        w = VmsWorker(name, box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
+                      server="srv-a", archive_root=box.archive,
+                      env={"PLAYBACK_PORT": "auto", "RTSP_PORT": "auto"})
+        srv = w.serve_playback("127.0.0.1")               # both bind: neither was told a number
+        doors.append((w, srv))
+    (w1, s1), (w2, s2) = doors
+    try:
+        assert w1.playback_port and w2.playback_port and w1.playback_port != w2.playback_port
+        assert w1.playback_port == s1.server_address[1]   # …and what it published is what it bound
+
+        # the fan-out is the actuator's door, so the actuator is asked for its number rather than assumed
+        w1.actuator.rtsp_port = 41111
+        w1.reconcile_once()
+        st = {x["id"]: x for x in w1.status()}
+        assert st[cam]["live_url"] == f"rtsp://srv-a:41111/{cam}"
+    finally:
+        s1.shutdown(); s2.shutdown()
+
+    # the default is untouched: a box with one worker publishes exactly what it always did
+    plain = VmsWorker("w-3", box.vars, box.objects, FakeActuator(), clock=box.clock, wall=box.wall,
+                      server="srv-a", archive_root=box.archive, env={})
+    assert (plain.rtsp_port, plain.playback_port) == (8554, 8083)

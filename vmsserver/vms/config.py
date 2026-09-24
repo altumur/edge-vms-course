@@ -98,17 +98,32 @@ def channel_of(source: str) -> str | None:
     return parts[2] if u.netloc != "file" and len(parts) >= 3 and parts[1] == "ch" else None
 
 
-def playback_url(server: str, cid) -> str:
+# A port an instance was told, where `auto` (or `0`) means "ask the operating system for a free one".
+#
+# A door with a number baked into a TEMPLATE is a door only one instance can open. `vmsworker@w-1` and
+# `vmsworker@w-2` on one box are the ordinary way to use capacity — and the second one binds the same
+# 8554, dies, and `Restart=always` raises it every two seconds until morning. Nothing in the system needs
+# the number to be 8554: every subscriber reads the address out of the heartbeat, which is what the
+# heartbeat is for. So the number may be zero, and what gets published is what the OS gave.
+def port_of(value, default: int) -> int:
+    v = str(value if value is not None else "").strip().lower()
+    if v in ("auto", "0"):
+        return 0
+    return int(v) if v else int(default)
+
+
+def playback_url(server: str, cid, port: int = PLAYBACK_PORT) -> str:
     """Where a camera's OWN archive is served from — the holder's playback surface.
     HTTP, not the RTSP fan-out: a browser has to seek inside it, and the recorder
-    fetches ranges from the same door."""
-    return f"http://{server}:{PLAYBACK_PORT}/playback/{cid}"
+    fetches ranges from the same door. The port is the one this holder BOUND."""
+    return f"http://{server}:{port}/playback/{cid}"
 
 
-def live_url(server: str, cid) -> str:
+def live_url(server: str, cid, port: int = RTSP_PORT) -> str:
     """Where a camera's stream is served from: the worker's RTSP fan-out. In the
-    heartbeat, so a subscriber needs only the heartbeat — on any server."""
-    return f"rtsp://{server}:{RTSP_PORT}/{cid}"
+    heartbeat, so a subscriber needs only the heartbeat — on any server, at
+    whatever port this worker's fan-out ended up on."""
+    return f"rtsp://{server}:{port}/{cid}"
 
 
 # `REC_SPEC.row(items)` with `id` as the camera number: the recorder's reconciler wants an int id like the

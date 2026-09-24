@@ -15,7 +15,13 @@ Image=localhost/vmsserver:latest
 Exec=python3 -m vms gateway
 Environment=GATEWAY_NAME=%i
 Environment=GATEWAY_HOST=0.0.0.0
-Environment=GATEWAY_PORT=8082
+# NOT a port number in a template. `liveworker@g-1` and `liveworker@g-2` on one box are the ordinary way
+# to use capacity — and with a fixed 8082 the second one binds a taken socket, dies, and `Restart=always`
+# raises it every two seconds until somebody looks. `auto` asks the OS; the gateway publishes the address
+# it got (`url` in its heartbeat), and the console proxies to THAT, as it always did. A box that wants a
+# known number overrides it per instance:
+# `/etc/containers/systemd/liveworker@g-1.container.d/port.conf` with `Environment=GATEWAY_PORT=8082`.
+Environment=GATEWAY_PORT=auto
 EnvironmentFile=/data/config/vms.env
 Volume=/data/platform:/data/platform:z
 Network=host

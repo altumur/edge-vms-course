@@ -102,7 +102,8 @@ from w2cplatform.variables import Variables
 
 from w2cplatform.events import EventLog
 
-from .config import PLAYBACK_PORT, SHM_DIR, channel_of, device_of, live_shm, live_url, playback_url, row
+from .config import (PLAYBACK_PORT, RTSP_PORT, SHM_DIR, channel_of, device_of, live_shm, live_url,
+                     playback_url, port_of, row)
 from .reconciler import CONVERGED, Reconciler
 
 log = logging.getLogger("vmsworker")
@@ -318,6 +319,12 @@ class VmsWorker(Worker):
         self.claim_slot(prefer=name if name is not None else slot_from_environment(env, self.NAME_ENV, self.SLOT_PREFIX))
         self.archive_root = archive_root or env.get("ARCHIVE", "/data/archive")   # this server's resource: where its events go
         self.shm_dir = env.get("SHM_DIR", SHM_DIR)                                 # the tee's shared-memory branch, for subscribers on this server
+        # THIS instance's two doors. Defaults are what they always were, so a box with one worker is
+        # unchanged; `auto` asks the OS, which is what makes a SECOND worker on the same box possible at
+        # all. Both numbers are published, never assumed: a subscriber reads the address out of the
+        # heartbeat (`live_url`, `playback_url`), and it has done since Lesson 4.
+        self.rtsp_port = port_of(env.get("RTSP_PORT"), RTSP_PORT)
+        self.playback_port = port_of(env.get("PLAYBACK_PORT"), PLAYBACK_PORT)
         self.bucket_seconds = bucket_seconds
         self.observed: list[tuple[int, float, str]] = []
         # Request ids this worker has served — performed, refused or expired, all three being answers.
@@ -431,7 +438,8 @@ class VmsWorker(Worker):
     def enrich(self, cam: dict) -> dict | None:
         if cam.get("kind") == "io":
             return dict(cam)
-        return dict(cam, live_url=live_url(self.server, cam["id"]), live_port=live_port(cam["id"]), live_shm=live_shm(cam["id"], self.shm_dir))
+        return dict(cam, live_url=live_url(self.server, cam["id"], self.fanout_port()), live_port=live_port(cam["id"]),
+                    live_shm=live_shm(cam["id"], self.shm_dir))
 
     # Seconds since start on the monotonic clock — the reconciler's `now` for backoff.
     def now(self) -> float:
@@ -668,6 +676,12 @@ class VmsWorker(Worker):
 
     # What the heartbeat says per unit beyond the platform's fields: the worker publishes `live_url` — where a
     # recorder, a gateway or a detector subscribes; never a viewer.
+    # Which port the fan-out is really on. The actuator owns that server, so the actuator is asked; a fake
+    # one has no door and the configured number stands. Asking rather than assuming is the same rule as
+    # everywhere here: the process that opened the thing is the one that knows.
+    def fanout_port(self) -> int:
+        return int(getattr(self.actuator, "rtsp_port", 0) or self.rtsp_port)
+
     def status_extra(self, cam: dict) -> dict:
         """What the heartbeat says per camera beyond the platform's fields. Two kinds of output:
         `live_url`/`live_shm` — the stream now; `playback_url` + `coverage` — the archive the DEVICE
@@ -676,16 +690,17 @@ class VmsWorker(Worker):
             # Nothing to subscribe to, and saying so is the point: a subscriber reads this object and
             # nothing else, so an address published here would be an address somebody dials.
             return {"kind": "io"}
-        out = {"live_url": live_url(self.server, cam["id"]), "live_shm": live_shm(cam["id"], self.shm_dir)}
+        out = {"live_url": live_url(self.server, cam["id"], self.fanout_port()),
+               "live_shm": live_shm(cam["id"], self.shm_dir)}
         dev = self.device_of_row(cam)
         cov = dev.coverage(cam["id"]) if dev is not None else None
         if cov is not None:
-            out["playback_url"] = playback_url(self.server, cam["id"])
+            out["playback_url"] = playback_url(self.server, cam["id"], self.playback_port)
             out["coverage"] = cov                         # the SUMMARY: from, to, fragments — never the index
             # …and WHERE to ask for the index, which is not the same thing as carrying it. The heartbeat is
             # one object under a ceiling; thirty days of motion recording is thousands of spans. A door,
             # not a field (М10A Lesson 26 made the same choice for a mask).
-            out["index_url"] = playback_url(self.server, cam["id"]).replace("/playback/", "/recordings/")
+            out["index_url"] = playback_url(self.server, cam["id"], self.playback_port).replace("/playback/", "/recordings/")
         return out
 
     # `max(0, capacity − len(rows))`: cameras this worker could still take. "Not CPU — a worker at 40 % CPU
@@ -761,9 +776,15 @@ class VmsWorker(Worker):
 
         return H
 
-    def serve_playback(self, host: str = "127.0.0.1", port: int = PLAYBACK_PORT) -> ThreadingHTTPServer:
-        srv = ThreadingHTTPServer((host, port), self.playback_handler())
+    # …and the door is opened here, which is the only place that knows what the OS actually gave. With
+    # `port=0` the number is invented by the kernel, so it is read back and kept: from this moment
+    # `playback_url` says the truth, and a second worker on the same box is an ordinary thing rather than
+    # a crash loop every two seconds.
+    def serve_playback(self, host: str = "127.0.0.1", port: int | None = None) -> ThreadingHTTPServer:
+        srv = ThreadingHTTPServer((host, self.playback_port if port is None else port), self.playback_handler())
+        self.playback_port = srv.server_address[1]
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+        log.info("%s: playback door on %s:%d", self.name, host, self.playback_port)
         return srv
 
     # The loop as a process. Every `poll` seconds: `reconcile_once`, `pump_once`, `lease_pass` every `max(1,

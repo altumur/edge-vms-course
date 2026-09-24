@@ -87,7 +87,8 @@ class GstActuator:
     def __init__(self, watchdog_ms: int = 8000, rtsp_port: int = 8554):
         self.watchdog = watchdog_ms
         from .livesrv import FanOut
-        self.fanout = FanOut(rtsp_port)                  # rtsp://<server>:8554/<cam>: one shared factory per camera over its loopback port
+        self.fanout = FanOut(rtsp_port)
+        self.rtsp_port = self.fanout.port                # what the OS gave, when `rtsp_port` was 0                  # rtsp://<server>:8554/<cam>: one shared factory per camera over its loopback port
         self.pipelines: dict[int, Gst.Pipeline] = {}
         self.dead: list[int] = []
         self.posted: list[tuple[int, str, dict]] = []   # what elements posted on the bus: (camera, kind, fields)
