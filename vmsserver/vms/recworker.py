@@ -303,6 +303,12 @@ class RecWorker(VmsWorker):
         # holds stays in the spool, marked for it. And it is left alone for REFUSED_FOR, or the next pass
         # would take it straight back: opening may succeed and the first write fail again.
         now = self.wall()
+        # …and an archive that is only AWAY becomes a wrong one when waiting stops being free: the local spool
+        # running out. Until then every minute of outage is footage kept; after it, every minute is the
+        # recordings that COULD be delivered losing their room to a queue for a place that is not answering.
+        if self.hold is not None and self.archive_failure == "transient" and self.spool_full():
+            self.archive_error = f"the spool is full: stopped waiting for {self.hold} ({self.archive_error})"
+            self.archive_failure = "permanent"
         if self.hold is not None and self.archive_failure == "permanent":
             why = self.archive_error
             self.refused[self.hold] = (now + self.REFUSED_FOR, why)
@@ -642,6 +648,13 @@ class RecWorker(VmsWorker):
             return False
         total, free = self.space_probe(self.archive.root)
         return bool(total) and (total - free) > total * knob["high"]
+
+    # The spool's disk is past the high mark — the watermark's own number (Lesson 18), read whether or not the
+    # watermark is switched on. Switching it on means DELETING footage to make room; this only decides that
+    # waiting for an away archive has stopped being free, and giving up a wait deletes nothing.
+    def spool_full(self) -> bool:
+        total, free = self.space_probe(self.archive.spool)
+        return bool(total) and (total - free) > total * space_settings(self.vars)["high"]
 
     # Local time, and the one place in the course where that is right: "at night" is night where the camera
     # is, not where the server is. `(22, 6)` wraps midnight — without that branch it would never arrive.

@@ -756,3 +756,51 @@ def test_a_full_archive_is_kept_so_the_one_process_that_can_free_it_still_holds_
     r.promote_closed()
     assert r.heartbeat_extra()["archive_failure"] == "transient"
     assert r.volume_pass() == "vol-a", "a full archive was handed back — and nobody is left to empty it"
+
+
+def test_an_archive_that_is_away_until_the_spool_is_full_is_handed_back():
+    """An archive that is AWAY is waited for — but the waiting has to end somewhere, and the honest place
+    is where waiting stops being free: the local spool running out. Until then every minute of outage is
+    footage kept; after it, every minute is the recordings that COULD be delivered losing their room to a
+    queue for a place that is not answering.
+
+    So an away archive becomes a wrong one when the spool's disk crosses the high mark — the watermark's
+    own number (Lesson 18), read even when the watermark is not switched on, because switching it on means
+    DELETING footage for room and this only means giving up the wait. The volume is handed back like any
+    wrong one; its recordings stop, the ones that can still be delivered keep their room, and what it
+    already holds stays in the spool, marked for it."""
+    import errno
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-a"
+    seg = _closed_segment(box, r)
+    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": b, "server": "srv-a", "quota_bytes": 10 ** 9})
+
+    def away(*a, **k):
+        raise OSError(errno.ETIMEDOUT, "Connection timed out")
+    r.archive.promote = away
+    r.promote_closed()
+    assert r.archive_failure == "transient"
+
+    r.space_probe = lambda path: (100, 50)                         # half full: room to wait
+    assert r.volume_pass() == "vol-a", "an away archive was given up while the spool still had room"
+
+    r.space_probe = lambda path: (100, 5) if path == box.spool else (100, 50)   # the spool is past the high mark
+    assert r.volume_pass() == "vol-b", "the spool filled up and the recorder went on waiting for an archive that is away"
+    refused = r.heartbeat_extra()["refused"]
+    assert "vol-a" in refused and "spool" in refused["vol-a"]       # why it stopped waiting is said
+    assert os.path.isfile(seg)                                     # and vol-a's footage stays, marked for vol-a
+
+
+def test_a_full_spool_with_a_healthy_archive_hands_nothing_back():
+    """The rule is about WAITING. A spool that is full while its archive is taking segments is a local
+    capacity problem — the watermark's to solve — and nothing is gained by giving up a volume that works."""
+    box = Box()
+    a = os.path.join(box.root, "vol-a")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-a"
+    r.space_probe = lambda path: (100, 1)                          # full, everywhere
+    assert r.volume_pass() == "vol-a"
