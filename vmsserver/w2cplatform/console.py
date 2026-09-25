@@ -88,7 +88,17 @@ from urllib.parse import parse_qs, urlsplit
 from .secrets import mask_secrets
 from .contract import HEARTBEATS, SCHEMA, Assignment, DrainRefused, Heartbeat, SchemaTooNew, builds, schema_version
 from .epoch import current_epoch
-from .events import EventLog
+from .events import ALARM, EventLog
+
+
+# The default flow one operator is expected to read, in events a minute. Past it a timeline of separate
+# lines is not information any more: a storm makes every alarm look like the last one, and the operator
+# stops reading — which is the failure the whole event path was built to avoid, arriving through the
+# front door instead of through a lost write.
+#
+# Sixty is one a second, and it is a starting number rather than a discovery: the point of having it at
+# all is that SOMETHING happens when it is crossed. A norm with nothing acting on it is a comment.
+PER_MINUTE = 60.0
 from .resource import resources_seen
 from .limits import TooLarge
 from .spec import Refused, SpecController
@@ -259,7 +269,8 @@ class SpecConsole:
     play (the subsystem's `extra` serves /timeline and /segment)."""
 
     def __init__(self, ctl: SpecController, marks_root: str | None = None, index=None, worst_failover: float = 0.0,
-                 wall=None, extra=None, media: bool = False, lost_after: float = 45.0, metrics_extra=None):
+                 wall=None, extra=None, media: bool = False, lost_after: float = 45.0, metrics_extra=None,
+                 per_minute: float = 0.0):
         self.ctl, self.spec, self.index = ctl, ctl.spec, index
         self.worst_failover, self.wall, self.extra, self.media, self.lost_after = worst_failover, wall or ctl.wall, extra, media, lost_after
         self.instance = f"{socket.gethostname()}:{os.getpid()}"
@@ -269,11 +280,53 @@ class SpecConsole:
         # is where a scaling policy can see it. Called with no arguments, returns Prometheus lines; the
         # platform never learns what it counted.
         self.metrics_extra = metrics_extra
+        # How many events a minute one operator is expected to read. Past it the timeline stops showing
+        # lines and starts showing counts — see `timeline`. The number belongs to the CONSOLE and not to a
+        # subsystem's policy, because the screen merges every subsystem and the attention it competes for
+        # is one person's; and it is a number rather than a constant because a control room with four
+        # screens and a guard with a phone are not the same reader.
+        self.per_minute = float(os.environ.get("EVENTS_PER_MINUTE", per_minute) or PER_MINUTE)
         self.marks = EventLog(marks_root, "console", self.instance, 1) if marks_root else None   # the console's own log: one writer, so epoch 1
         self.seen = IdempotencyKeys(ctl.vars, f"{self.spec.name}/idem/", self.wall)   # in the store: any instance answers a retry
         self.epoch_policy: dict[str, str] = {self.spec.name: self.spec.older_epochs}   # replaced by the Mount's shared one
         self._scan: tuple[float, dict] = (-1e9, {})
         self.scans = 0
+
+    # The operator's view of a window, which is NOT the index's view of it.
+    #
+    # `per_minute` is the norm; past it the screen stops showing lines and starts showing counts. This is
+    # the half without which the number is a comment in a file: a norm nobody acts on changes nothing, and
+    # the thing it is supposed to prevent — a storm turning alarms into wallpaper until the operator stops
+    # reading — happens exactly the same with the number written down.
+    #
+    # It lives HERE and not in the index, and the line is worth naming: the index answers processes, and a
+    # process reads a thousand lines as easily as ten. The evaluator (М10B, Lesson 25) asks the same merge
+    # and must keep getting every line, because a scenario missing its event is the failure this whole
+    # path exists to avoid. Only the reader who tires gets counts instead.
+    #
+    # An aggregate is `(subsystem, unit, kind, class)` with a count and the bounds it spans — the same
+    # three numbers a suppressed window reports (Lesson 12), because it is the same question asked one
+    # layer up: what happened, how many times, between when and when. Alarms keep their own groups rather
+    # than being folded in with the noise, so a screen in aggregate mode still puts them first.
+    def timeline(self, rep: dict, t0: float, t1: float) -> dict:
+        events = rep.get("events", [])
+        minutes = max((min(t1, self.wall()) - t0) / 60.0, 1 / 60.0)
+        rate = len(events) / minutes
+        out = {**rep, "rate_per_minute": round(rate, 1), "per_minute": self.per_minute, "aggregated": False}
+        if rate <= self.per_minute or not events:
+            return out
+        groups: dict[tuple, dict] = {}
+        for e in events:
+            k = (e.get("subsystem"), str(e.get("unit")), e.get("kind"), e.get("class"))
+            g = groups.get(k)
+            if g is None:
+                groups[k] = {"subsystem": k[0], "unit": k[1], "kind": k[2], "class": k[3],
+                             "count": 1, "since": e["t"], "until": e["t"]}
+            else:
+                g["count"] += 1
+                g["since"], g["until"] = min(g["since"], e["t"]), max(g["until"], e["t"])
+        ordered = sorted(groups.values(), key=lambda g: (g["class"] != ALARM, -g["count"], g["since"]))
+        return {**out, "aggregated": True, "events": [], "groups": ordered}
 
     # -- what the page reads first ------------------------------------------------------------
     # `/spec`'s body: `{name, rows, id, media, fields: [{name, type, default, required}], metrics: {prefix,
@@ -600,12 +653,14 @@ class SpecConsole:
                 cam = q.get("cam") or (q.get("unit") if (q.get("unit") or "").isdigit() else None)
                 try:                                          # the operator's timeline: `limit` is theirs to set, and
                                                               # `keep` says which end of a busy hour they get
-                    return h._send(200, con.index.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
-                                                        int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
-                                                        q.get("unit") if not cam else None, cur,
-                                                        limit=int(q.get("limit", 1000)),
-                                                        epoch_policy=con.epoch_policy, keep=q.get("keep", "newest"),
-                                                        cls=q.get("class")))
+                    t0, t1 = float(q.get("from", 0)), float(q.get("to", 1e12))
+                    rep = con.index.query(t0, t1,
+                                          int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
+                                          q.get("unit") if not cam else None, cur,
+                                          limit=int(q.get("limit", 1000)),
+                                          epoch_policy=con.epoch_policy, keep=q.get("keep", "newest"),
+                                          cls=q.get("class"))
+                    return h._send(200, con.timeline(rep, t0, t1))
                 except ValueError as e:
                     return h._send(400, {"error": str(e)})
             if path == "/metrics":

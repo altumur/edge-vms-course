@@ -32,6 +32,14 @@ def call(base, method, path, body=None, headers=None):
         return e.code, json.loads(e.read() or b"null")
 
 
+def _console_over(box, db, per_minute: float = 0.0):
+    """A console whose index is this one database — enough to ask it what an
+    operator would be shown, without a second process."""
+    from w2cplatform.console import SpecConsole
+    ctl = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
+    return SpecConsole(ctl, index=db, wall=box.wall, per_minute=per_minute)
+
+
 def _resource_process(box):
     """What `python3 -m vms resource` does: the platform's Resource with the VMS registered,
     served over HTTP, heartbeating so the console can find it, its database rebuilt from the tree."""
@@ -361,3 +369,59 @@ def test_a_traffic_class_is_a_declared_value_and_not_a_convention_on_kind():
     from w2cplatform.events import read_bucket
     p = log.append(1000.0, "silent")
     assert "class" not in read_bucket(p)[0], "an observation says nothing: it is nearly every line"
+
+
+def test_past_the_norm_the_timeline_counts_instead_of_listing():
+    """A norm nobody acts on is a comment. Written down and never consulted, it
+    prevents nothing: the storm still turns every alarm into wallpaper until the
+    operator stops reading, which is the failure the whole event path exists to
+    avoid, arriving through the front door instead of through a lost write.
+
+    So the number does something. Past it the screen stops showing lines and
+    starts showing counts — `(subsystem, unit, kind, class)` with how many and
+    between when and when, the same three numbers a suppressed window reports one
+    layer down, and alarms in their own groups so they still come first."""
+    from w2cplatform.events import ALARM
+    from vms.archive import event_log
+    box = Box(); t = box.wall() - 60
+    log = event_log(box.archive, 7, 1)
+    for i in range(90):
+        log.append(t + i * 0.5, "stats", n=i)
+    for i in range(3):
+        log.append(t + 10 + i, "io.input", ALARM, port="1", value="open")
+    db = EventDatabase(box.archive, "srv-1", wall=box.wall); db.rebuild()
+    con = _console_over(box, db)
+
+    quiet = con.timeline(db.query(0, t + 5), 0, t + 5)             # a handful over a long window
+    assert quiet["aggregated"] is False and quiet["events"] and "groups" not in quiet
+
+    busy = con.timeline(db.query(t, t + 60), t, t + 60)            # ninety-three in a minute, norm sixty
+    assert busy["aggregated"] is True and busy["events"] == []
+    assert busy["rate_per_minute"] > busy["per_minute"]
+    assert [g["kind"] for g in busy["groups"]] == ["io.input", "stats"], "the alarm group is not first"
+    assert busy["groups"][0]["count"] == 3 and busy["groups"][1]["count"] == 90
+    assert busy["groups"][0]["until"] - busy["groups"][0]["since"] == 2.0
+
+
+def test_the_norm_is_the_operators_and_a_process_still_gets_every_line():
+    """The line worth naming: the index answers processes, and a process reads a
+    thousand lines as easily as ten. The evaluator asks the same merge and must
+    keep getting every one of them — a scenario that missed its event is the
+    failure this path exists to prevent, and it would be a strange way to fail, by
+    protecting a machine's attention.
+
+    Only the reader who tires gets counts. So the aggregation lives on the console
+    and not in the index, and the norm is a number rather than a constant: a
+    control room with four screens and a guard with a phone are not one reader."""
+    from vms.archive import event_log
+    box = Box(); t = box.wall() - 60
+    log = event_log(box.archive, 7, 1)
+    for i in range(90):
+        log.append(t + i * 0.5, "stats", n=i)
+    db = EventDatabase(box.archive, "srv-1", wall=box.wall); db.rebuild()
+
+    assert len(db.query(t, t + 60)["events"]) == 90                # the index never aggregates
+    assert "aggregated" not in db.query(t, t + 60)
+
+    patient = _console_over(box, db, per_minute=1000)
+    assert patient.timeline(db.query(t, t + 60), t, t + 60)["aggregated"] is False
