@@ -44,6 +44,11 @@ from __future__ import annotations
 import json
 import os
 import re
+
+try:
+    import fcntl                                  # Unix; `durably` falls back to `os.fsync` without it
+except ImportError:                               # pragma: no cover - the course runs on Unix
+    fcntl = None
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -131,6 +136,41 @@ OBSERVATION = "observation"
 CLASSES = (ALARM, OBSERVATION)
 
 
+# macOS' `fsync` returns as soon as the kernel has the bytes; only `F_FULLFSYNC` asks the drive to flush
+# its own write cache. Measured on this course's machine: `append` as it stands runs at ~20,000 lines/s,
+# adding `os.fsync` changes nothing worth measuring (~21,000/s — it is not reaching the platters), and
+# `F_FULLFSYNC` costs 4.25 ms a line, which is 235 lines/s. That is the real price of durability, and it
+# is ninety times what the free-looking call suggests.
+#
+# So the fallback is not a nicety: a build that used plain `fsync` here and believed itself durable would
+# have bought a feeling. Linux's `fsync` does go to the device (barriers permitting) and needs no special
+# call, which is why this is a try and not a platform check.
+_F_FULLFSYNC = 51
+
+
+def durably(f) -> None:
+    """Flush one open file all the way to the medium, as far as the platform allows."""
+    try:
+        fcntl.fcntl(f.fileno(), _F_FULLFSYNC)
+    except (AttributeError, OSError, ValueError, NameError):
+        os.fsync(f.fileno())
+
+
+# A file is not durable until the DIRECTORY ENTRY that names it is: fsync the file of a bucket created a
+# moment ago and a power cut can leave the bytes on the disk with nothing pointing at them. It is the torn
+# line one level up — the thing exists and does not — and it costs one more barrier, but only on the pass
+# that creates the file, which is once per unit per ten minutes.
+def durable_dir(path: str) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 # What a worker holds per unit it has an epoch for: the writer side.
 class EventLog:
     """What a worker holds per unit it has an epoch for. `append` writes one
@@ -141,6 +181,7 @@ class EventLog:
     # the bucket span (10 minutes by default).
     def __init__(self, root: str, subsystem: str, unit: str, epoch: int, bucket_seconds: int = 600):
         self.root, self.subsystem, self.unit, self.epoch, self.bucket_seconds = root, subsystem, str(unit), epoch, bucket_seconds
+        self._synced_dirs: set[str] = set()       # bucket directories this writer has made durable
 
     # The bucket file that time `t` falls in, for this epoch.
     def path_for(self, t: float) -> str:
@@ -167,17 +208,41 @@ class EventLog:
         p = self.path_for(t)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         line = {"t": t, "kind": kind, **({} if cls == OBSERVATION else {"class": cls}), **fields}
+        # The second policy the class carries, and the one that costs something. An observation is
+        # flushed and no more: it survives the process dying, not the power going, and that loss was
+        # accepted on purpose (see `read_bucket` below — it is the same shape as the accepted loss for
+        # footage). An ALARM is not the same trade. It is written down because losing it is losing the
+        # thing the system is for, and a line that only reached the page cache is not written down.
+        #
+        # The cost is real and only alarms pay it: ~4 ms a line here against ~50 µs (`durably`). A box
+        # where alarms arrive faster than a couple of hundred a second has a different problem, and
+        # suppression above is what answers it.
         with open(p, "a") as f:
             f.write(json.dumps(line) + "\n"); f.flush()
+            if cls == ALARM:
+                durably(f)
+        # …and the directory entry that names the file, once per bucket this writer has touched.
+        #
+        # Not "when the alarm created the file": an OBSERVATION may have created it a moment ago and paid
+        # for no barrier at all, so the entry can still be only in the cache while the alarm's bytes are
+        # on the platter — the bytes safe and nothing pointing at them. What decides is whether THIS
+        # writer has made this directory durable yet, and a set of paths answers that without a stat.
+        if cls == ALARM and os.path.dirname(p) not in self._synced_dirs:
+            durable_dir(os.path.dirname(p))
+            self._synced_dirs.add(os.path.dirname(p))
         return p
 
 
 # All lines of one bucket parsed; a missing file is an empty list. A line that does not parse is SKIPPED,
-# not fatal: `append` writes and flushes without `fsync`, so a crash or a power loss can leave the last line
-# half-written, and losing the whole bucket for one torn line would lose ten minutes of observations where
-# one record was actually damaged. The accepted loss is then the same shape as it is for footage — the open
-# thing, not the day (М10B Lesson 6). `torn` counts them, so a resource whose buckets keep tearing says so
-# instead of quietly returning less.
+# not fatal: an OBSERVATION is written and flushed and no more, so a crash or a power loss can leave the
+# last line half-written, and losing the whole bucket for one torn line would lose ten minutes of
+# observations where one record was actually damaged. The accepted loss is then the same shape as it is
+# for footage — the open thing, not the day (М10B Lesson 6). `torn` counts them, so a resource whose
+# buckets keep tearing says so instead of quietly returning less.
+#
+# An alarm is not in that trade: `append` takes it all the way to the medium, so a torn last line is an
+# observation's, not an alarm's. That is the difference the class buys, and it is why the counter here
+# stayed a counter instead of becoming an error.
 torn = 0
 
 

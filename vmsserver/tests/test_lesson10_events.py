@@ -425,3 +425,61 @@ def test_the_norm_is_the_operators_and_a_process_still_gets_every_line():
 
     patient = _console_over(box, db, per_minute=1000)
     assert patient.timeline(db.query(t, t + 60), t, t + 60)["aggregated"] is False
+
+
+def test_an_alarm_is_written_down_and_an_observation_is_only_flushed():
+    """The trade the course made for observations — flushed, not synced: survives
+    the process dying, not the power going — was made on purpose, and it is the
+    same shape as the accepted loss for footage. It is not the right trade for an
+    alarm: a line that only reached the page cache is not written down, and losing
+    it is losing the thing the system is for.
+
+    Two things this test pins that "just add fsync" misses. `os.fsync` on macOS
+    returns without the drive flushing its own cache, so the durable path has to
+    ask for `F_FULLFSYNC` and fall back rather than assume. And a file is not
+    durable until the DIRECTORY ENTRY naming it is — otherwise a power cut leaves
+    the bytes with nothing pointing at them, which is the torn line one level up."""
+    import w2cplatform.events as ev
+    from w2cplatform.events import ALARM, EventLog
+    box = Box()
+    log = EventLog(box.archive, "vms", "7", 1)
+    synced, dirs = [], []
+    real_durably, real_dir = ev.durably, ev.durable_dir
+    ev.durably = lambda f: synced.append(f.name)
+    ev.durable_dir = lambda d: dirs.append(d)
+    try:
+        p = log.append(1000.0, "stats", n=1)                       # an observation pays nothing…
+        assert synced == [] and dirs == []                         # …including for the file it just created
+        log.append(1001.0, "io.input", ALARM, port="1")
+        assert synced == [p] and dirs == [os.path.dirname(p)]      # the alarm pays for both, the entry included:
+        log.append(1002.0, "io.input", ALARM, port="1")            # the unsynced observation left it in the cache
+        assert synced == [p, p] and dirs == [os.path.dirname(p)]   # …and once per bucket is enough
+    finally:
+        ev.durably, ev.durable_dir = real_durably, real_dir
+
+    from w2cplatform.events import read_bucket
+    assert [r["kind"] for r in read_bucket(p)] == ["stats", "io.input", "io.input"]
+
+
+def test_the_durable_write_reaches_the_medium_or_says_it_could_not():
+    """`durably` is one line only if you do not look at it. Plain `fsync` is the
+    call everybody reaches for and the one that, on this platform, returns before
+    the drive has flushed anything — so the strongest available barrier is asked
+    for first and the fallback is what makes the code portable, not what makes it
+    correct."""
+    import w2cplatform.events as ev
+    box = Box()
+    p = os.path.join(box.archive, "sync-probe")
+    os.makedirs(box.archive, exist_ok=True)
+    with open(p, "w") as f:
+        f.write("x"); f.flush()
+        ev.durably(f)                                              # whichever path, it must not raise
+    assert open(p).read() == "x"
+
+    class _NoFcntl:
+        def fileno(self): raise ValueError("closed")
+    try:
+        ev.durably(_NoFcntl())                                     # a fallback that cannot work is not silent
+        raise AssertionError("a file that cannot be synced was reported as synced")
+    except ValueError:
+        pass
