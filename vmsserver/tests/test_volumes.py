@@ -531,3 +531,132 @@ def test_a_recorder_that_holds_an_archive_is_not_a_spare():
     r.heartbeat_once()
     assert rec.place_of("r-1") == ""                                   # the heartbeat alone would say "spare"
     assert spare_workers(rec) == ["r-2"]                               # the hold says otherwise, and it wins
+
+
+# -- every segment knows its volume -------------------------------------------------------------------------
+#
+# A segment's path in the spool is `rec/<unit>/e<epoch>/<start>` — it does not name the volume it was recorded
+# for. That knowledge lived in the process (`self.hold`), and a process that dies takes it along. So the epoch
+# directory says it: `rec/<unit>/e<epoch>/.volume`. Not the spool — every recorder on a box shares one — but
+# the epoch, which exactly one recorder holds, for exactly one volume. Nothing is promoted anywhere else.
+
+def _closed_segment(box, r, cam="7", age=600, epoch=1):
+    """A segment the pipeline closed `age` seconds ago and nobody promoted — what a spool holds after an
+    outage, or after a process died with its last segment still in it. Its epoch directory is marked for
+    the volume `r` holds, the way starting the pipeline marks it."""
+    from datetime import datetime, timezone
+    from vms.archive import segment_path
+    r.mark_epoch(cam, epoch)
+    t = box.wall()
+    p = segment_path(r.archive.spool, cam, epoch, datetime.fromtimestamp(t - age, timezone.utc))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(b"footage")
+    os.utime(p, (t - age, t - age))
+    return p
+
+
+def test_a_restart_does_not_pour_the_spool_into_the_wrong_archive():
+    """The constructor promoted "what the last instance closed but did not promote" — into `self.archive`,
+    which in a constructor is the LOCAL default, because no volume has been looked at yet. So every restart
+    of a recorder writing to a network archive filed its last segment, the last ten minutes, in the local
+    one; during an outage, the whole queue. Healthy network or not: the constructor runs before anything
+    asks where the recorder writes. And the first pass of the loop promoted before its first `volume_pass`,
+    which is the same door opened a second time."""
+    box = Box()
+    cloud = os.path.join(box.root, "cloud")
+    volumes.write(box.vars, {"name": "cloud", "kind": "local", "url": cloud, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "cloud"
+    seg = _closed_segment(box, r)                                  # …and then the process died with it in the spool
+
+    box.wall.advance(60); box.clock.advance(60)                    # its hold and its slot lapse
+    r2 = _recorder(box, "r-1", "srv-a")                            # a new process, which has looked at no volume
+    local = os.path.join(box.archive, "rec", "7")
+    assert not os.path.exists(local), "the constructor promoted a segment recorded for `cloud` into the local archive"
+    assert os.path.isfile(seg)
+
+    r2.pump_once()                                                 # the loop reaches promotion before volume_pass
+    assert not os.path.exists(local), "the first pass promoted it into the local archive before looking at volumes"
+
+    assert r2.volume_pass() == "cloud"                             # the volume the spool was recorded for
+    r2.promote_closed()
+    assert os.path.isfile(os.path.join(cloud, "rec", "7", "e1", os.path.basename(seg)))
+    assert not os.path.exists(local)
+
+
+def test_a_recorder_that_moves_on_leaves_the_old_volumes_footage_where_it_is():
+    """Mid-run, the same mistake by a different road. The recorder holds `vol-z`, the archive stops
+    answering with a segment still in the spool, and `vol-z` is taken from it. Looking for somewhere to
+    write, it finds `vol-a` — and the next promote moved `vol-z`'s footage into `vol-a`, with nothing to
+    say it happened, because nothing failed.
+
+    Forbidding the move would have cost a recorder: a process pinned by a queue it cannot send is a spare
+    doing nothing. So the recorder moves, and the footage does not: each segment says which volume it
+    belongs to, and one for `vol-z` waits for whoever holds `vol-z` next. Right even if nobody ever does —
+    footage in the wrong archive is found by nobody, footage waiting in a spool is found by the next
+    person who reads the heartbeat."""
+    box = Box()
+    z = os.path.join(box.root, "vol-z")
+    volumes.write(box.vars, {"name": "vol-z", "kind": "local", "url": z, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-z"
+    seg = _closed_segment(box, r)
+
+    def away(*a, **k):
+        raise OSError("network is unreachable")
+    r.archive.promote = away                                       # vol-z stops answering: the segment cannot go
+    a = os.path.join(box.root, "vol-a")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    volumes.delete(box.vars, "vol-z")                              # …and vol-z is taken away with its queue unsent
+
+    assert r.volume_pass() == "vol-a"                              # the recorder is free to move on…
+    r.pump_once()
+    assert not os.path.exists(os.path.join(a, "rec", "7")), "vol-z's footage was promoted into vol-a"
+    assert os.path.isfile(seg)                                     # …and the footage is not: it waits for vol-z
+    hb = r.heartbeat_extra()
+    assert hb["spool_for"] == {"vol-z": 1} and hb["spool"] == 1   # whose footage is waiting, and how much
+
+
+def test_a_drained_spool_lets_the_recorder_go_anywhere():
+    """The pin is a queue's, not a volume's. Once what the spool held has gone where it belonged, the
+    recorder is as free as it ever was — the rule must not outlive the reason for it."""
+    box = Box()
+    z = os.path.join(box.root, "vol-z")
+    volumes.write(box.vars, {"name": "vol-z", "kind": "local", "url": z, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-z"
+    _closed_segment(box, r)
+    r.promote_closed()                                             # it went across
+    assert r.heartbeat_extra()["spool_for"] == {}
+
+    a = os.path.join(box.root, "vol-a")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    volumes.delete(box.vars, "vol-z")
+    assert r.volume_pass() == "vol-a"
+
+
+def test_recorders_sharing_a_spool_each_promote_only_their_own():
+    """The spool is the BOX's, not a process's: the unit file is a template, and every recorder on a box
+    mounts the same `/data/spool` — three disks, three recorders, one spool. So `closed_in_spool` lists
+    every recorder's segments, and whichever recorder promoted first carried its neighbours' footage into
+    its own archive. With GStreamer running, `archivesink` promotes on its own as each segment closes and
+    this path only sweeps up stragglers — which is exactly the queue an outage leaves behind: when the link
+    came back, a box with three disks shuffled its backlog across the wrong ones.
+
+    This was true before any of the outage work; it is the same fix. Each segment knows its volume, and a
+    recorder promotes only what is its own."""
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    for n, url in (("vol-a", a), ("vol-b", b)):
+        volumes.write(box.vars, {"name": n, "kind": "local", "url": url, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r1, r2 = _recorder(box, "r-1", "srv-a"), _recorder(box, "r-2", "srv-a")      # one box, one spool
+    assert (r1.volume_pass(), r2.volume_pass()) == ("vol-a", "vol-b")
+    one = _closed_segment(box, r1, cam="1")
+    two = _closed_segment(box, r2, cam="2")
+
+    r1.promote_closed()
+    assert os.path.isfile(os.path.join(a, "rec", "1", "e1", os.path.basename(one)))
+    assert os.path.isfile(two) and not os.path.exists(os.path.join(a, "rec", "2")), \
+        "r-1 promoted its neighbour's footage into its own archive"
+    r2.promote_closed()
+    assert os.path.isfile(os.path.join(b, "rec", "2", "e1", os.path.basename(two)))

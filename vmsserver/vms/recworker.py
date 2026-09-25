@@ -121,8 +121,12 @@ class RecWorker(VmsWorker):
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
-        for p in self.archive.closed_in_spool(grace_seconds, self.wall()):     # what the last instance closed but did not promote
-            self.archive.promote(p); self.promoted += 1
+        # What the last instance closed and did not promote — but ONLY into the archive it was recorded for.
+        # This used to be a plain loop into `self.archive`, which in a constructor is the local default: no
+        # volume has been looked at yet. So a recorder writing to a network archive filed its last segment
+        # in the local one on every restart, and during an outage its whole queue. `promote_closed` asks each
+        # segment whose footage it is, and one marked for another volume waits for whoever holds that volume.
+        self.promote_closed()
 
     # -- where a camera's stream is: the VMS heartbeat, never a call to the worker ------------------
     def source(self, cam) -> tuple[str, str] | None:
@@ -152,6 +156,9 @@ class RecWorker(VmsWorker):
             return None
         self.waiting.discard(cam["id"])
         self.sources[cam["id"]] = src[1]
+        # The pipeline is about to record this unit under this epoch, for the volume held now: say so in the
+        # epoch's own directory before the first segment lands there.
+        self.mark_epoch(cam["id"], cam.get("epoch", 0))
         return dict(cam, source=src[1], source_server=src[0], via="shm" if src[1].startswith("shm://") else "rtsp",
                     spool=self.archive.spool, archive=self.archive.root)
 
@@ -220,6 +227,9 @@ class RecWorker(VmsWorker):
                 "archive_error": self.archive_error,
                 "archive_away_since": self.archive_away_since,
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
+                # …and whose footage those are, by volume. A volume here that no recorder holds is footage
+                # that is waiting — not lost and not misfiled — until somebody takes it.
+                "spool_for": self.spool_by_volume(),
                 "closed": ",".join(self.closed)}
 
     # -- which archive this recorder writes into ------------------------------------------------------
@@ -344,10 +354,14 @@ class RecWorker(VmsWorker):
     # In ORDER, stopping at the first failure: segments are promoted oldest first, and one that could not
     # go makes the next wait behind it rather than jump the queue. Only `OSError` is an outage — a path
     # that does not parse is a bug, and swallowing it here would hide it for as long as the box ran.
-    def promote_closed(self, archive: ArchiveResource | None = None) -> int:
+    def promote_closed(self, archive: ArchiveResource | None = None, volume: str | None = None) -> int:
         archive = archive or self.archive
+        volume = self.volume if volume is None else volume
         n, failed = 0, False
         for p in archive.closed_in_spool(self.grace_seconds, self.wall()):
+            owner = self.volume_of(p)
+            if owner and owner != volume:
+                continue                                 # another volume's footage: it waits for whoever holds that one
             try:
                 archive.promote(p)
             except OSError as e:
@@ -366,6 +380,55 @@ class RecWorker(VmsWorker):
             self.archive_error, self.archive_away_since = "", 0.0
         self.promoted += n
         return n
+
+    # -- whose footage a segment is ----------------------------------------------------------------------
+    #
+    # A segment's path is `rec/<unit>/e<epoch>/<start>`: it does not name the volume it was recorded for.
+    # That lived in the process (`self.hold`), and a process that dies takes it along. So the directory says
+    # it, in one line beside the segments: `rec/<unit>/e<epoch>/.volume`.
+    #
+    # The EPOCH directory, and not the spool, because the spool is not one process's. The unit file is a
+    # template and every recorder on a box mounts the same `/data/spool` — three disks, three recorders, one
+    # spool. What IS one writer's is a unit's epoch: exactly one recorder holds it, for exactly one volume,
+    # and the fence already guarantees nobody else writes there. Ownership follows the thing that is
+    # already exclusive.
+    #
+    # With it, promotion asks each segment where it belongs, and nobody promotes footage into an archive it
+    # was not recorded for — not a process that restarted and has not looked at a volume yet, not one that
+    # moved to another volume, not a neighbour on the same box. A recorder stays free to take any volume;
+    # what it can no longer do is carry someone else's footage there.
+    EPOCH_MARK = ".volume"
+
+    def mark_epoch(self, unit, epoch) -> None:
+        if not self.volume:
+            return
+        d = os.path.join(self.archive.spool, "rec", str(unit), f"e{epoch}")
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, self.EPOCH_MARK), "w") as f:
+                f.write(self.volume + "\n")
+        except OSError as e:                             # a spool we cannot write to has bigger news than this
+            logging.warning("%s: could not mark %s for %s: %s", self.name, d, self.volume, e)
+
+    # The volume a segment was recorded for, or "" for one from before the mark existed — whose that is, is
+    # unknown, as it always was, and it is promoted the way it always was.
+    def volume_of(self, segment_path: str) -> str:
+        try:
+            with open(os.path.join(os.path.dirname(segment_path), self.EPOCH_MARK)) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    # What is waiting in the spool, by the volume it belongs to: `{volume: segments}`. The spool is the
+    # box's, so this is the box's picture as this recorder sees it — a neighbour's segment shows here for
+    # the pass it takes the neighbour to promote it, and footage for a volume nobody holds shows here until
+    # somebody does. That last is the one to act on: it is not lost and not misfiled, it is waiting.
+    def spool_by_volume(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for p in self.archive.closed_in_spool(0.0, self.wall()):
+            v = self.volume_of(p) or "?"
+            out[v] = out.get(v, 0) + 1
+        return out
 
     # The same promotion, off the loop's thread — because an archive can fail by NOT RETURNING.
     #
@@ -386,11 +449,11 @@ class RecWorker(VmsWorker):
     def promote_in_background(self) -> None:
         if self._promoter is not None and self._promoter.is_alive():
             return
-        archive = self.archive
+        archive, volume = self.archive, self.volume
 
         def promote():
             try:
-                self.promote_closed(archive)
+                self.promote_closed(archive, volume)
             except Exception:                                  # noqa: BLE001 — a thread has nobody to raise to
                 logging.exception("%s: promotion failed", self.name)
             finally:

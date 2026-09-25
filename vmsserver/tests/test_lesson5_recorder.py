@@ -129,3 +129,17 @@ def test_a_recording_waits_while_nobody_holds_the_camera_and_records_when_someon
     # stop recording: the row goes, the placement is taken back on the next pass, the footage stays until retention
     rec_con.delete("2"); rec_ctl.unplace_deleted()
     assert rec_ctl.assignment("r-1").units == [] and r.reconcile_once() == [("stop", "2")]
+
+
+def test_starting_a_recording_marks_its_epoch_with_the_volume_it_records_for():
+    """The volume tests mark the epoch directory through the recorder's own `mark_epoch`; this is the proof
+    that the real start does it too — the pass that builds the pipeline, before the first segment lands.
+    Without it every one of those tests would be testing a helper, and a recorder in the field would write
+    unmarked segments that promote wherever they happen to be, which is the bug the mark exists to end."""
+    box, ctl, con, rec_con, rec_ctl, w = _box()
+    r = _recorder(box)
+    rec_con.create({"name": "1", "cam": "1", "retention_days": 7})
+    rec_ctl.ensure_placed()
+    assert r.reconcile_once() == [("start", "1")]
+    mark = os.path.join(box.spool, "rec", "1", "e1", RecWorker.EPOCH_MARK)
+    assert open(mark).read().strip() == r.volume == "srv-1"
