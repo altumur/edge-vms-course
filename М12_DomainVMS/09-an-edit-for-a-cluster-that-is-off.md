@@ -6,11 +6,13 @@
 
 ## Why this lesson exists
 
-Lesson 3's write API forwards an edit to the owning cluster and, when that cluster does not answer, says `503`: *could not look*. That was honest, and for a server room it is also enough. A cluster is several servers; for the whole of it to be unreachable is an incident, rare and noticed, and an operator who gets `503` is looking at a real outage.
+Lesson 3's write API forwards an edit to the owning cluster and, when that cluster does not answer, says `503`: *could not look*. That was honest, and for a server room in your own building it is also enough. A cluster is several servers on a LAN; for the whole of it to be unreachable is an incident, rare and noticed, and an operator who gets `503` is looking at a real outage.
 
-Now count a cluster that is **one device**. A camera running the platform is a cluster of its own — one store on its flash, one writer, nothing to fail over to — and a camera is off often, for reasons that are not incidents: its power, the PoE switch it hangs from, a maintenance window, a remote site on a link that sleeps. And cameras are edited in bulk: *retention thirty days for everything in the Perimeter folder*. Fifty cameras, three of them off, and the edit is `503` three times, which means an operator who has to remember three names and come back.
+Not every cluster is a server room in your own building. A retail chain runs one small cluster per shop — a box or two behind a VPN over whatever link the shop has — and a fuel-station network, a bank's branches and a logistics company's depots look the same. For them a cluster that does not answer is not an incident; it is Tuesday night, a flapping LTE modem, a shop whose router is rebooted by the cleaner. Lesson 8's rented cluster is another: the link to the customer's cloud account is a link like any other. And the edits that matter to such a customer are made in bulk: *retention thirty days for every shop in the North region*. Forty shops, three of them unreachable, and the edit is `503` three times, which means an operator who has to remember three names and come back — tomorrow, when two of them are up and a different one is not.
 
-So the domain keeps the edit. The rest of the lesson is what "keep" has to mean for that to be safe, because the cheap versions of it are wrong in ways that do not show up until somebody asks why a camera has the setting it has.
+The extreme of the same shape is Part two's member: a cluster that is **one device**. A camera running the platform is a cluster of its own (Lesson 10), and it is off often for reasons that are not incidents at all — its power, the PoE switch it hangs from, a maintenance window. What the branch has sometimes, the camera has as its normal state.
+
+So the domain keeps the edit. Nothing in this lesson knows whether the silent cluster is a shop or a camera — the tests happen to use a camera, because that is where it is most often needed. The rest of the lesson is what "keep" has to mean for that to be safe, because the cheap versions of it are wrong in ways that do not show up until somebody asks why a shop, or a camera, has the setting it has.
 
 > **What you can verify without hardware.** Everything, in `tests/test_lesson9_pending.py`: a camera that goes off, an edit kept for it, the camera coming back and taking it from its own agent, a field changed on site meanwhile, a grant revoked meanwhile, the same edit carried home twice, and an edit made before the previous one was confirmed. The clusters are Lesson 1's fakes with a link you can pull.
 
@@ -23,7 +25,7 @@ So the domain keeps the edit. The rest of the lesson is what "keep" has to mean 
 
 ## Learning objectives
 
-1. Say why `503` is right for a server room and wrong for a camera, without changing who owns anything.
+1. Say why `503` is right for a server room and wrong for a branch on a weak link — or a camera — without changing who owns anything.
 2. Keep an edit where the domain keeps everything a cluster needs from it — with no database.
 3. Keep it **per field**, against the value last seen, merged rather than queued.
 4. Apply it in the cluster, by the cluster's console, as the operator, with that operator's grant checked *then*.
@@ -164,9 +166,9 @@ A kept edit returns `202`, not `200`, and the response says `pending: true` and 
 1. Replace the per-field comparison with *last writer wins* and write the support call that follows a month later: which setting, who set it, and why nobody can tell.
 2. Match outcomes by the agent's `at` instead of `rev`. Put the camera's clock ten minutes behind the domain's and find the edit that is lost.
 3. Remove `via` and run the race test. Then describe, in one sentence, what an operator sees and why they would conclude the site staff are interfering.
-4. The domain cluster is itself a camera (Lesson 14). Say where the kept edits live, what is lost if that camera dies, and what the domain must therefore publish beyond itself — then compare with how it already publishes the identity set.
+4. The domain cluster is itself a camera (Lesson 15). Say where the kept edits live, what is lost if that camera dies, and what the domain must therefore publish beyond itself — then compare with how it already publishes the identity set.
 5. An edit waits for a camera that is never coming back. Should it expire? Argue both ways, and say which failure each choice makes silent.
 
 ## Where this is going
 
-This is the first of the lessons that treat a device as a member of the domain. [**Lesson 10**](10-a-cluster-of-one.md) builds that member: a camera as a cluster of one, with a unit pinned to its hardware, no orchestrator, and the domain agent as its only link upward. The lessons after it take the domain to hundreds of such members, give it shared settings without a database, let a server's recorder read a stream from a camera's cluster, and host the domain itself on a camera — where the kept edits of this lesson become one more thing the domain must not keep only on itself.
+This lesson closes Part one: every piece of it — the directory, the read view that keeps a silent cluster's last copy, the agent, the grants — was already there, and it holds for any member that is often away. [**Part two**](10-a-cluster-of-one.md) takes that member to its extreme. Lesson 10 builds a camera as a cluster of one, with a unit pinned to its hardware and the domain agent as its only link upward; the lessons after it take the domain to hundreds of such members, give it shared settings without a database, let a server's recorder read a stream from a camera's cluster, merge alarms from every member, and host the domain itself on a camera — where the kept edits of this lesson become one more thing the domain must not keep only on itself.
