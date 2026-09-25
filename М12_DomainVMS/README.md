@@ -32,6 +32,17 @@ The full design brief is in [`module-design.md`](module-design.md); the decision
 | 6 | [Secure Introduction: A Box Joins the Domain](06-secure-introduction-a-box-joins-the-domain.md) | The ladder from defect to hardware; BRSKI's parts and whose each is; enroll zero-touch with a voucher, or with approval done properly; delete the hand-provisioned credential and show nothing stops; say what a TPM proves. |
 | 7 | [Lifetimes, Rotation, and Revocation That Works Offline](07-lifetimes-rotation-and-revocation-that-works-offline.md) | Split certificates by job and state *tolerable outage = lifetime − margin*; renew with overlap; rotate a live domain's root with a cross-cert and a retirement date; revoke by expiry; name clock skew; back up and restore the two pieces of state. |
 | 8 | [A Cluster You Rent, and a Worker That Does Not Know Where It Is](08-a-cluster-you-rent-and-a-worker-that-does-not-know-where-it-is.md) | Provision a cluster from the customer's cloud account; do the bandwidth and cost arithmetic first; name the three shapes; deploy a worker three ways and diff it identical; say what differs by placement and what never does. |
+| 9 | [An Edit for a Cluster That Is Off](09-an-edit-for-a-cluster-that-is-off.md) | Keep an edit for a cluster that does not answer instead of refusing it — per field, beside the grants, with no database; have the cluster's agent carry it home and its console apply it as the operator, with the grant checked then; tell applied, already there and conflict apart; match outcomes by version, never by clock. |
+
+**Part two — cameras as members of the domain.** Lesson 9 opens it. A camera that runs the platform is a cluster of its own, and the domain is what joins cameras and a server cluster into one system — the same domain, with members that are small, many, and often off. Planned, not yet written:
+
+| # | Lesson | What it adds |
+|---|---|---|
+| 10 | A Cluster of One | A camera as a cluster: a unit pinned to its hardware, no orchestrator, its own epoch, the domain agent as its only link upward. |
+| 11 | Hundreds of Small Members | The directory and the read view at the edge of the stated limit — low hundreds of clusters — measured, not assumed. |
+| 12 | Shared Settings Without a Database | Defaults, the folder tree, scenarios between cameras: published once, signed, carried to every member. |
+| 13 | A Stream From Another Cluster | A server's recorder recording, and backfilling, a camera in a camera's cluster — found through the directory; work does not move, data crosses. |
+| 14 | A Domain Cluster of One Node | Only cameras: the domain hosted on one of them, a term so a returning old host steps down, re-hosting as a routine operation. |
 
 ## The demo the module is built backwards from
 

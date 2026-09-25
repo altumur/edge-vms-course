@@ -47,25 +47,47 @@ class DomainPublisher:
 
 
 class DomainAgent:
-    def __init__(self, cluster: str, domain_vars: Variables, cluster_vars: Variables, now=time.time):
+    def __init__(self, cluster: str, domain_vars: Variables, cluster_vars: Variables, now=time.time,
+                 console=None, current=None):
+        """`console` and `current` are Lesson 9: this cluster's console, which writes its rows, and
+        `current(ref) -> (id, row)` for a camera by the domain's name. Given them, the agent also applies
+        the edits the domain kept while this cluster was off. Without them it only carries them home."""
         self.cluster, self.domain_vars, self.cluster_vars, self.now = cluster, domain_vars, cluster_vars, now
+        self.console, self.current = console, current
         self.last_synced: float | None = None
         self.syncs = 0
 
+    def _carry(self, path: str, items: dict | None, clear: bool = False) -> None:
+        have, idx = self.cluster_vars.get(path)
+        if items is None and not clear:
+            return
+        items = items or {}
+        if have != items and not (have is None and not items):
+            self.cluster_vars.put(path, items, cas=idx)
+
     def sync(self) -> bool:
         """One pass. False (and nothing written) if the domain did not answer."""
+        from .pending import OUTCOMES_PATH, PENDING_PATH, apply_pending
         try:
             keys, _ = self.domain_vars.get(KEYS_PATH)
             revoked, _ = self.domain_vars.get(REVOKED_PATH)
             grants, _ = self.domain_vars.get(f"{GRANTS_PATH}/{self.cluster}")
+            pending, _ = self.domain_vars.get(f"{PENDING_PATH}/{self.cluster}")
         except Unreachable:
             return False
         for path, items in ((KEYS_PATH, keys), (REVOKED_PATH, revoked), (GRANTS_PATH, grants)):
-            if items is None:
-                continue
-            have, idx = self.cluster_vars.get(path)
-            if have != items:
-                self.cluster_vars.put(path, items, cas=idx)
+            self._carry(path, items)
+        # Edits the domain kept while this cluster was off (Lesson 9) — carried home even when there are
+        # none left, because an edit the domain has cleared must stop being applied here. Then applied, by
+        # this cluster's console and as the operator who made each one, and what happened written where the
+        # domain reads it. The agent writes `domain/*` and nothing else; the row is the console's.
+        self._carry(PENDING_PATH, pending, clear=True)
+        if self.console is not None and self.current is not None:
+            import json
+            entries = {k: json.loads(v) for k, v in (pending or {}).items()}
+            outcomes = apply_pending(entries, self.current, self.console, self.now())
+            self._carry(OUTCOMES_PATH, {k: json.dumps(v, ensure_ascii=False, sort_keys=True)
+                                        for k, v in outcomes.items()}, clear=True)
         self.last_synced = self.now()
         self.syncs += 1
         return True

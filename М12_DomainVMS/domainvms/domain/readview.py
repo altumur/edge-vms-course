@@ -122,6 +122,16 @@ class ReadView:
         self.passes += 1
 
     # -- reads, from memory ----------------------------------------------------
+    # The cluster that last reported the camera the domain calls `camera`, and the row it reported — kept when
+    # that cluster stops answering, which is the point: an edit for a camera that is off is measured against
+    # what the domain last SAW of it (Lesson 9). `refresh` leaves a silent cluster's copy where it was.
+    def last_known(self, camera) -> tuple[str, dict] | None:
+        for cluster, rows in self.configured.items():
+            for row in rows:
+                if str(row.get("ref", "")) == str(camera):
+                    return cluster, row
+        return None
+
     def rows(self) -> list[Row]:
         now = self.wall()
         out = []

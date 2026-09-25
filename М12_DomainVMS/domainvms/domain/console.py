@@ -82,7 +82,8 @@ class Console:
                 n = int(self.headers.get("Content-Length", 0))
                 fields = json.loads(self.rfile.read(n) or b"{}")
                 try:
-                    self._send(200, console.api.update_camera(u.path.rsplit("/", 1)[1], fields, key, self._token()))
+                    resp = console.api.update_camera(u.path.rsplit("/", 1)[1], fields, key, self._token())
+                    self._send(202 if resp.get("pending") else 200, resp)    # kept for a cluster that is off: accepted, not applied
                 except ApiError as e:
                     self._send(e.status, {"detail": e.detail})
 

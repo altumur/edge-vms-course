@@ -42,11 +42,17 @@ class ApiError(Exception):
 
 class ConsoleAPI:
     def __init__(self, directory: DomainDirectory, consoles: Callable[[str], ClusterConsole],
-                 verifier: Callable[[str], str] | None = None):
+                 verifier: Callable[[str], str] | None = None, pending=None, last_known=None):
         """`consoles(cluster)` finds that cluster's console — its Nomad service,
         in production; a dict in tests. `verifier(token) -> subject` is Lesson 4;
-        None means unauthenticated, and the API says so on every response."""
+        None means unauthenticated, and the API says so on every response.
+
+        `pending` and `last_known` are Lesson 9: somewhere to keep an edit for a cluster
+        that is off (`PendingEdits`), and what the domain last saw of the camera
+        (`ReadView.last_known`). Without them the API answers as Lesson 3 did — 503,
+        could not look — rather than pretend to keep an edit it has nowhere to put."""
         self.directory, self.consoles, self.verifier = directory, consoles, verifier
+        self.pending, self.last_known = pending, last_known
         self._seen: dict[str, dict] = {}                      # idempotency key -> response
 
     def _subject(self, token: str | None) -> str | None:
@@ -70,12 +76,32 @@ class ConsoleAPI:
         subject = self._subject(token)
         ans = self.directory.where(camera)
         if not ans.found:
+            kept = self._keep(camera, fields, subject, ans)
+            if kept is not None:
+                self._seen[idempotency_key] = kept
+                return kept
             raise ApiError(404 if ans.complete else 503, ans.sentence())
         result = self.consoles(ans.cluster).update_camera(camera, fields, subject)
         resp = {"camera": camera, "cluster": ans.cluster, "worker": ans.worker, "result": result,
                 "authenticated": self.verifier is not None}
         self._seen[idempotency_key] = resp
         return resp
+
+    # Lesson 9. The camera was not found because its cluster did not answer — and the domain knows which cluster
+    # that was, from what it last saw. Keep the edit for it instead of refusing: per field, against the value
+    # last seen. Only then, though: a camera missing from a cluster that DID answer is gone, not waiting, and
+    # a complete answer that found nothing is a 404. Accepted is not applied, and the response says which.
+    def _keep(self, camera, fields: dict, subject: str | None, ans) -> dict | None:
+        if self.pending is None or self.last_known is None or ans.complete:
+            return None
+        known = self.last_known(camera)
+        if known is None or known[0] not in ans.unreachable:
+            return None
+        cluster, row = known
+        entry = self.pending.add(cluster, camera, fields, row, subject)
+        return {"camera": camera, "cluster": cluster, "pending": True, "fields": entry["fields"],
+                "detail": f"{cluster} is not answering; the edit is kept and will be applied when it is back",
+                "authenticated": self.verifier is not None}
 
     def create_camera(self, fields: dict, cluster: str, idempotency_key: str, token: str | None = None) -> dict:
         """`cluster` comes from the placement service's stored decision, which
