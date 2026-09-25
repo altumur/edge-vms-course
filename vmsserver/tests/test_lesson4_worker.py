@@ -1,5 +1,6 @@
 """Lesson 4 — vmsworker: М9's loop over an assignment; the epoch and the
 lease; the restart with the controller stopped; the zombie on one box."""
+import json
 import os
 from vms.controller import VmsController
 from vms.reconciler import CONVERGED, LAGGING, STALLED, Reconciler
@@ -331,3 +332,41 @@ def test_the_same_kind_is_an_alarm_on_one_device_and_noise_on_the_next():
     assert w.class_of(1, "silent") == "observation"               # only the kinds the row named
     ctl.update(1, {"alarms": "io.input,silent"}); w.reconcile_once()
     assert w.class_of(1, "silent") == "alarm"                      # …and the operator may change their mind
+
+
+def test_a_folder_is_the_operators_and_placement_never_reads_it():
+    """Why folders got a key of their own instead of riding in `labels`.
+
+    `labels` are MATCHED: a worker is eligible for a camera only if the camera's
+    labels are a subset of what its server declared, and a server declares two
+    different kinds of fact there — which segments it reaches (`vlan:cctv-a`)
+    and what it has (`gpu`, which is how a detector is placed). A folder in that
+    set makes the camera unplaceable until some server claims to reach
+    «Подъезд»: an absurdity that arrives dressed as a placement failure, which
+    is the most expensive kind of wrong.
+
+    So the test is about what does NOT happen: the folder is stored, comes back,
+    and changes nothing about where the camera goes."""
+    box = Box()
+    ctl = VmsController(box.vars, box.objects, capacity=50, wall=box.wall)
+    ctl.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4",
+                       "labels": "vlan:cctv-a", "folders": "Подъезд,Улица"})
+    ctl.create_camera({"name": "hall", "source": "driverpack://file/hall.mp4", "folders": "Подъезд"})
+
+    row = ctl.units()[0]
+    assert row["folders"] == ["Подъезд", "Улица"] and row["labels"] == ["vlan:cctv-a"]
+
+    from w2cplatform.contract import Heartbeat
+    from vms.config import SPEC
+    box.objects.put(SPEC.sub.heartbeat_key("w-1"),
+                    Heartbeat("w-1", box.wall(), [], {"server": "srv-a", "capacity": 50,
+                                                      "headroom": 50, "labels": "vlan:cctv-a"}).to_bytes())
+    box.objects.put("platform/resources/srv-a/heartbeat",                 # `requires: resource`
+                    json.dumps({"server": "srv-a", "ts": box.wall(), "url": "http://srv-a", "units": {}}).encode())
+    placed = {p.unit: p.worker for p in ctl.ensure_placed()}
+    assert placed == {1: "w-1", 2: "w-1"}, "a folder was read as something a server must reach"
+    assert ctl.unplaceable() == []
+
+    # …and the reason names the labels that matched, never the folders
+    assert "Подъезд" not in ctl.placement(1).reason
+    assert "vlan:cctv-a" in ctl.placement(1).reason

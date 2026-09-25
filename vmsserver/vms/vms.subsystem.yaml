@@ -17,7 +17,7 @@ unit:
   # carrying `id` is refused (it is a platform field). `parse_id` turns the URL's last segment into an
   # `int`; sort order is numeric.
   id: numeric                        # vms/next_id
-  # the operator's ten fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
+  # the operator's eleven fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
   # `PLATFORM_FIELDS`; `new_row` applies the defaults; `row()`/`items()` convert by type; `/spec` sends
   # `{name, type, default, required}` for each so the page builds its forms without knowing the VMS.
   fields:
@@ -48,6 +48,28 @@ unit:
     # against the worker's server labels. Accepts a JSON list or a comma-separated string; stored
     # comma-joined.
     labels:                {type: list}                       # where the camera is reachable from: "vlan:cctv-a"
+    # The operator's grouping — «Подъезд», «Улица», «Объект А». A separate key from `labels`, and not
+    # because it is tidier: `labels` are MATCHED by placement (`labels-subset` below) against what a server
+    # declares about itself, and a server declares two kinds of fact there — which segments it reaches
+    # (`vlan:cctv-a`) and what it has (`gpu`). Put a folder in that set and the camera becomes unplaceable
+    # until some server claims to reach «Подъезд»: an absurdity that arrives looking like a placement
+    # failure, which is the most expensive kind of wrong.
+    #
+    # And no `loc:` prefix. A prefix would exist only to smuggle folders past a field that is matched;
+    # with a key of their own it carries no information, and a prefix carrying no information is a thing
+    # to get wrong (`Loc:`, `loc :`) with no one to refuse it.
+    #
+    # Nothing in М10 reads it — like `priority`. Stored, and shown by the console because the page builds
+    # its form from `/spec`. Flat list: whether folders nest is not decided here, and a separator would be
+    # the decision.
+    #
+    # NOT in the snapshot below, and that was measured rather than chosen: the snapshot is one object per
+    # worker under a 64 KiB ceiling, `test_the_shard_fits_where_the_one_object_did_not` holds it to a third
+    # of that, and this field pushed the biggest shard from 20.9 to 21.7 KiB — past the line. The margin is
+    # there so the shape survives the next field; spending it on a field nothing reads, to loosen a test
+    # written to measure exactly this, would be the wrong trade. When М12's directory wants folders, put it
+    # in and re-measure — that is a decision with a number attached, which is what the test is for.
+    folders:               {type: list}                       # the operator's grouping: "Подъезд,Улица"
     # Which of this device's event kinds are ALARMS (`w2cplatform/events.py`: the platform fixes the
     # vocabulary, the unit says which of its lines belong to which class). A list of kinds, empty by
     # default — a camera observes, and observing is not alarming.
