@@ -63,6 +63,12 @@ class RecWorker(VmsWorker):
     # silence itself. Both in seconds.
     PROMOTE_WAIT = 5.0
     PROMOTE_STUCK = 60.0
+    # How many of its own segments one promotion moves. In ordinary running a pass finds nought or one, and
+    # this is never reached; it is for the queue an outage leaves behind. It keeps each promotion SHORT —
+    # so what the heartbeat says between passes is true — and it paces the drain rather than emptying an
+    # hour of footage in one go. It is a pace and not a bandwidth cap: shaping the uplink is bytes per
+    # second, and that is not this.
+    PROMOTE_BUDGET = 8
     # How many closed ranges the heartbeat carries. A window and not a queue: the console acts on what it
     # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
     # decision has to be idempotent on its own (it is: the job's id is the range).
@@ -108,6 +114,7 @@ class RecWorker(VmsWorker):
         # all waiting on the same dead mount.
         self._promoter: threading.Thread | None = None
         self.promoting_since = 0.0
+        self.last_progress = 0.0                     # when a promotion last moved a segment — what tells moving from stuck
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -325,8 +332,11 @@ class RecWorker(VmsWorker):
             logging.warning("%s: a promotion into %s is still in flight — the spool keeps its segments",
                             self.name, self.archive.root)
         else:
+            # What we can move while we still hold it, bounded by the budget: this runs on the loop's thread,
+            # inside `lease_pass`, and it no longer has to drain everything — a segment left behind is marked
+            # for this volume and waits for whoever holds it next.
             try:
-                self.promote_closed()                # what is in the spool belongs to THAT archive, and we still hold it
+                self.promote_closed(limit=self.PROMOTE_BUDGET)
             except OSError as e:                     # a volume that went away under us: the footage is where it is
                 logging.warning("%s: could not promote the spool into %s: %s", self.name, self.archive.root, e)
         for uid in list(self.reconciler.actual):
@@ -354,14 +364,17 @@ class RecWorker(VmsWorker):
     # In ORDER, stopping at the first failure: segments are promoted oldest first, and one that could not
     # go makes the next wait behind it rather than jump the queue. Only `OSError` is an outage — a path
     # that does not parse is a bug, and swallowing it here would hide it for as long as the box ran.
-    def promote_closed(self, archive: ArchiveResource | None = None, volume: str | None = None) -> int:
+    def promote_closed(self, archive: ArchiveResource | None = None, volume: str | None = None,
+                       limit: int | None = None) -> int:
         archive = archive or self.archive
         volume = self.volume if volume is None else volume
         n, failed = 0, False
         for p in archive.closed_in_spool(self.grace_seconds, self.wall()):
+            if limit is not None and n >= limit:
+                break                                    # the budget: the rest waits for the next pass, in order
             owner = self.volume_of(p)
             if owner and owner != volume:
-                continue                                 # another volume's footage: it waits for whoever holds that one
+                continue                                 # another volume's footage — skipped, and NOT counted
             try:
                 archive.promote(p)
             except OSError as e:
@@ -372,6 +385,7 @@ class RecWorker(VmsWorker):
                 self.archive_error, failed = str(e), True
                 break
             n += 1
+            self.last_progress = self.wall()             # a segment went across: whatever this is, it is not a hang
         # Back only when a segment actually went across. An empty spool proves nothing about an archive
         # that was away: nothing was asked of it.
         if n and not failed and self.archive_error:
@@ -453,28 +467,35 @@ class RecWorker(VmsWorker):
 
         def promote():
             try:
-                self.promote_closed(archive, volume)
+                self.promote_closed(archive, volume, limit=self.PROMOTE_BUDGET)
             except Exception:                                  # noqa: BLE001 — a thread has nobody to raise to
                 logging.exception("%s: promotion failed", self.name)
             finally:
                 self.promoting_since = 0.0
 
-        self.promoting_since = self.wall()
+        self.promoting_since = self.last_progress = self.wall()
         self._promoter = threading.Thread(target=promote, name=f"{self.name}-promote", daemon=True)
         self._promoter.start()
         self._promoter.join(timeout=self.PROMOTE_WAIT)
 
-    # A hang has no exception to report it, so the recorder notices the silence itself: a promotion that
-    # has been running longer than `PROMOTE_STUCK` is written into the same field an outage that raises
-    # uses. Whatever reads the heartbeat learns the same thing either way — the archive is not taking
-    # segments, since when, and the spool count is the queue behind it.
+    # A hang has no exception to report it, so the recorder notices the silence itself — and the silence it
+    # listens for is PROGRESS, not age. The first version asked how long a promotion had been running, and
+    # a promotion was the whole queue: an hour of footage after an outage drains for minutes on a healthy
+    # link, so a minute in it said "has not returned" about a drain that was moving the whole time — the
+    # same words it uses for a dead mount. A hang and a slow drain differ in one thing: a dead mount moves
+    # nothing, a drain finishes a segment every so often. So a promotion is stuck when nothing has gone
+    # across for `PROMOTE_STUCK`, which therefore has to be longer than one segment takes on the slowest
+    # link this box will see.
+    #
+    # Written into the same field an outage that raises uses: whatever reads the heartbeat learns the same
+    # thing either way — the archive is not taking segments, since when, and the spool count behind it.
     def watch_promotion(self) -> None:
-        if not self.promoting_since or self.wall() - self.promoting_since <= self.PROMOTE_STUCK:
+        if not self.promoting_since or self.wall() - self.last_progress <= self.PROMOTE_STUCK:
             return
-        stuck = self.wall() - self.promoting_since
+        stuck = self.wall() - self.last_progress
         if not self.archive_error.startswith("promotion into"):
-            logging.warning("%s: a promotion into %s has not returned for %.0f s", self.name, self.archive.root, stuck)
-        self.archive_away_since = self.archive_away_since or self.promoting_since
+            logging.warning("%s: a promotion into %s has moved nothing for %.0f s", self.name, self.archive.root, stuck)
+        self.archive_away_since = self.archive_away_since or self.last_progress
         self.archive_error = f"promotion into {self.archive.root} has not returned for {stuck:.0f} s"
 
     # The archive is taking nothing: it said so (`archive_error`), or a promotion into it is still in

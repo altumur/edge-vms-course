@@ -9,6 +9,7 @@ archive is unreachable. A recorder that stops renewing its leases loses its epoc
 heartbeating is reassigned by its controller — either way the recording ends, and it ends because of the
 one component that was supposed to be optional for a while.
 """
+import os
 import threading
 
 from vms.archive import ArchiveResource
@@ -206,3 +207,79 @@ def test_backfill_waits_while_the_archive_is_not_taking_segments():
     r.pump_once()
     r.pump_once()
     assert tried == [], "backfill fetched into a spool whose archive is taking nothing"
+
+
+# -- draining the queue: a budget per pass, and a watchdog that can tell moving from stuck -----------------
+
+def _real_recorder(box: Box, server: str = "srv-1") -> RecWorker:
+    return RecWorker(f"r-{server}", box.vars, box.objects, archive=ArchiveResource(box.spool, box.archive, wall=box.wall),
+                     clock=box.clock, wall=box.wall, server=server, env={})
+
+
+def _backlog(box: Box, r: RecWorker, n: int, cam: str = "7") -> list[str]:
+    """`n` closed segments for the volume `r` holds, oldest first — the queue an outage leaves behind."""
+    from datetime import datetime, timezone
+    from vms.archive import segment_path
+    r.mark_epoch(cam, 1)
+    t, out = box.wall(), []
+    for i in range(n):
+        start = t - 600 * (n - i) - 60
+        p = segment_path(r.archive.spool, cam, 1, datetime.fromtimestamp(start, timezone.utc))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").write(b"x")
+        os.utime(p, (start + 600, start + 600))
+        out.append(p)
+    return out
+
+
+def test_a_long_drain_that_is_moving_is_not_called_stuck():
+    """The watchdog asked the wrong question. It called a promotion stuck when the promotion had been
+    RUNNING longer than `PROMOTE_STUCK` — and a promotion used to be the whole queue. An hour of footage
+    after an outage drains for minutes on a healthy link, so a minute in the watchdog said "has not
+    returned" about a drain that was moving the whole time: the same words it uses for a dead mount.
+
+    A hang and a slow drain differ in exactly one thing — progress. A dead mount moves nothing; a drain
+    finishes a segment every so often. So the question is "has anything gone across lately", and a
+    promotion is stuck when nothing has, for `PROMOTE_STUCK`."""
+    box = Box()
+    r = _real_recorder(box)
+    r.PROMOTE_STUCK = 60.0
+    r.promoting_since = box.wall()                                 # a drain started…
+    box.wall.advance(600)                                          # …ten minutes ago
+    r.last_progress = box.wall() - 10                              # and a segment went across ten seconds ago
+    r.watch_promotion()
+    assert "has not returned" not in r.archive_error, "a drain that is moving was reported as a hang"
+
+    box.wall.advance(120)                                          # now nothing has moved for two minutes
+    r.watch_promotion()
+    assert "has not returned" in r.archive_error
+
+
+def test_a_pass_drains_at_most_its_budget_and_the_rest_waits_in_order():
+    """After an outage the queue is long, and a pass takes a bounded bite of it: `PROMOTE_BUDGET` segments,
+    oldest first, and the rest on the next pass. It keeps each promotion short — so what the heartbeat says
+    between passes is true — and it paces the drain instead of emptying the spool in one go."""
+    box = Box()
+    r = _real_recorder(box)
+    r.PROMOTE_BUDGET = 3
+    segs = _backlog(box, r, 10)
+
+    r.pump_once()
+    assert [p for p in segs if os.path.exists(p)] == segs[3:], "the oldest three go; the rest wait, in order"
+    r.pump_once()
+    assert [p for p in segs if os.path.exists(p)] == segs[6:]
+
+
+def test_the_budget_is_spent_on_this_recorders_own_footage():
+    """The spool is the box's, so it holds neighbours' segments too, and this recorder skips them. Skipping
+    is not spending: a budget used up walking past somebody else's footage would leave this recorder's own
+    queue where it was, pass after pass, on a box where the neighbour's happens to sort first."""
+    box = Box()
+    neighbour, r = _real_recorder(box, "srv-2"), _real_recorder(box, "srv-1")
+    r.PROMOTE_BUDGET = 2
+    theirs = _backlog(box, neighbour, 2, cam="1")                  # "rec/1/…" sorts before "rec/7/…"
+    mine = _backlog(box, r, 3, cam="7")
+
+    r.pump_once()
+    assert [p for p in mine if os.path.exists(p)] == mine[2:], "two of its own should have gone"
+    assert all(os.path.exists(p) for p in theirs), "the neighbour's were skipped, and must stay"

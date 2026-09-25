@@ -166,6 +166,9 @@ def recorder() -> None:
     r = RecWorker(None, vars_, objects, act, archive=ArchiveResource(spool, archive), capacity=int(os.environ.get("CAPACITY", "50")),
                   window=window, keep_days=float(os.environ.get("RETENTION_DAYS", "30")))
     r.backfill_budget = int(os.environ.get("BACKFILL_BUDGET", "1"))
+    # How many of its own segments one pass moves out of the spool — it matters only for the queue an outage
+    # leaves behind, and it paces the drain rather than capping bandwidth.
+    r.PROMOTE_BUDGET = int(os.environ.get("PROMOTE_BUDGET", str(r.PROMOTE_BUDGET)))
     logging.info("recorder %s (instance %s) claimed its slot; promoted %d", r.name, r.instance, r.promoted)
     r.run(stop=stop)
 
