@@ -9,6 +9,8 @@ archive is unreachable. A recorder that stops renewing its leases loses its epoc
 heartbeating is reassigned by its controller — either way the recording ends, and it ends because of the
 one component that was supposed to be optional for a while.
 """
+import threading
+
 from vms.archive import ArchiveResource
 from vms.recworker import RecWorker
 from tests.conftest import Box
@@ -132,3 +134,75 @@ def test_no_failure_in_the_work_can_stop_the_recorder_living():
 
     assert calls["lease"] >= 5, f"leases renewed {calls['lease']} times: a failure in the work stopped the recorder living"
     assert calls["heartbeat"] >= 5, f"heartbeat sent {calls['heartbeat']} times: the controller will call it dead"
+
+
+# -- the worse failure: a call that does not fail, it does not RETURN --------------------------------------
+#
+# A network mount that goes quiet does not raise. `rename` and `write` into it wait in the kernel, with no
+# timeout to give them, for as long as the mount is gone. The two-`try` loop above cannot help: there is no
+# exception to catch, only a call that never comes back — and while it has not, the loop is not renewing
+# anything. So promotion runs in a thread of its own, and a pass waits on it for `PROMOTE_WAIT` and no more.
+
+def _hung_archive(box: Box) -> tuple[RecWorker, dict, threading.Event]:
+    """A recorder whose archive has stopped answering the worse way — `promote` blocks. `release` is the
+    link coming back. The wait is bounded so that a failing test cannot hang the suite."""
+    r, calls = _recorder_over_an_unreachable_archive(box)
+    release = threading.Event()
+
+    def hangs(*a, **k):
+        release.wait(10)
+    r.archive.promote = hangs
+    r.PROMOTE_WAIT = 0.05                                          # how long a pass waits on a promotion
+    r.PROMOTE_STUCK = 20.0                                         # how long before it is called stuck
+    return r, calls, release
+
+
+def _run_a_minute_in_the_background(r: RecWorker, box: Box) -> threading.Thread:
+    t = threading.Thread(target=r.run, kwargs={"poll": 2.0, "stop": _Passes(30, box)}, daemon=True)
+    t.start()
+    t.join(timeout=3)                                              # a living loop runs its minute in far less
+    return t
+
+
+def test_an_archive_that_hangs_does_not_stop_the_recorder_living():
+    """A promote that never returns, for the whole minute. A loop that waits on it is a loop that renews
+    nothing: the same thirty seconds to losing its epochs as an archive that raises, with nothing in the
+    log to say why, because nothing failed."""
+    box = Box()
+    r, calls, release = _hung_archive(box)
+    t = _run_a_minute_in_the_background(r, box)
+    seen = dict(calls)
+    release.set(); t.join(timeout=10)
+
+    assert seen["lease"] >= 5, f"leases renewed {seen['lease']} times while a promotion hung: the loop waited on it"
+    assert seen["heartbeat"] >= 5, f"heartbeat sent {seen['heartbeat']} times while a promotion hung"
+
+
+def test_a_promotion_that_does_not_return_is_reported_stuck():
+    """A hung call cannot be killed — a thread waiting in the kernel on a dead mount waits for as long as
+    the mount is dead. What CAN be done is to say so. Nothing raised, so there is no error to report
+    unless the recorder notices the silence itself: a promotion running longer than `PROMOTE_STUCK` is
+    reported, in the same field an outage that raises uses."""
+    box = Box()
+    r, _, release = _hung_archive(box)
+    t = _run_a_minute_in_the_background(r, box)
+    reported = r.heartbeat_extra()["archive_error"]
+    release.set(); t.join(timeout=10)
+
+    assert "has not returned" in reported, f"a promotion hung for a minute and the heartbeat said {reported!r}"
+
+
+def test_backfill_waits_while_the_archive_is_not_taking_segments():
+    """Backfill exists to bring MORE into the archive. While the archive is taking nothing — away, or a
+    promotion still in flight — a fetched range would only pile into the spool behind the queue, and its
+    own promote would be one more call waiting on the dead mount, on the loop's own thread. Same reasoning
+    as `under_pressure`: an archive that cannot take what it has cannot be given more."""
+    box = Box()
+    r, _ = _recorder_over_an_unreachable_archive(box)
+    tried = []
+    r.backfill_budget = 1
+    r.backfill = lambda *a, **k: tried.append(1) or []
+
+    r.pump_once()
+    r.pump_once()
+    assert tried == [], "backfill fetched into a spool whose archive is taking nothing"

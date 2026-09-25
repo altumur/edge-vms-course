@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 
 from w2cplatform.console import holder_of
@@ -55,6 +56,13 @@ class RecWorker(VmsWorker):
 
     SUB = REC
     ROWS = "recordings"
+    # How long one pass waits on a promotion before moving on, and how long a promotion may run before it
+    # is reported stuck. The first keeps a healthy archive synchronous — a local disk or a live bucket
+    # finishes well inside it, so a pass that promotes still ends with the segment in the archive. The
+    # second is the only way a hang gets said at all: nothing raises, so the recorder has to notice the
+    # silence itself. Both in seconds.
+    PROMOTE_WAIT = 5.0
+    PROMOTE_STUCK = 60.0
     # How many closed ranges the heartbeat carries. A window and not a queue: the console acts on what it
     # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
     # decision has to be idempotent on its own (it is: the job's id is the range).
@@ -95,6 +103,11 @@ class RecWorker(VmsWorker):
         # one means "will not open" and costs the volume its capacity; this one means "opened, then went
         # away", and the answer to it is a queue in the spool, not a different archive.
         self.archive_error, self.archive_away_since = "", 0.0
+        # The one promotion in flight, and since when (0: none). ONE: a mount that stopped answering keeps
+        # the call it swallowed, and starting another behind it every pass would pile up threads that are
+        # all waiting on the same dead mount.
+        self._promoter: threading.Thread | None = None
+        self.promoting_since = 0.0
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -295,10 +308,17 @@ class RecWorker(VmsWorker):
     # running, and may take another volume on the next pass.
     def leave_volume(self, why: str) -> None:
         logging.warning("%s: %s — stopping its recordings", self.name, why)
-        try:
-            self.promote_closed()                    # what is in the spool belongs to THAT archive, and we still hold it
-        except OSError as e:                         # a volume that went away under us: the footage is where it is
-            logging.warning("%s: could not promote the spool into %s: %s", self.name, self.archive.root, e)
+        if self._promoter is not None and self._promoter.is_alive():
+            # A promotion into this archive has not come back. Promoting again here, on the loop's thread,
+            # would hang the loop on the same dead mount — inside `lease_pass`, of all places. The spool
+            # keeps what it has.
+            logging.warning("%s: a promotion into %s is still in flight — the spool keeps its segments",
+                            self.name, self.archive.root)
+        else:
+            try:
+                self.promote_closed()                # what is in the spool belongs to THAT archive, and we still hold it
+            except OSError as e:                     # a volume that went away under us: the footage is where it is
+                logging.warning("%s: could not promote the spool into %s: %s", self.name, self.archive.root, e)
         for uid in list(self.reconciler.actual):
             self.actuator("stop", {"id": uid})
             self.reconciler.actual.pop(uid, None)
@@ -324,35 +344,92 @@ class RecWorker(VmsWorker):
     # In ORDER, stopping at the first failure: segments are promoted oldest first, and one that could not
     # go makes the next wait behind it rather than jump the queue. Only `OSError` is an outage — a path
     # that does not parse is a bug, and swallowing it here would hide it for as long as the box ran.
-    def promote_closed(self) -> int:
+    def promote_closed(self, archive: ArchiveResource | None = None) -> int:
+        archive = archive or self.archive
         n, failed = 0, False
-        for p in self.archive.closed_in_spool(self.grace_seconds, self.wall()):
+        for p in archive.closed_in_spool(self.grace_seconds, self.wall()):
             try:
-                self.archive.promote(p)
+                archive.promote(p)
             except OSError as e:
                 if not self.archive_error:                  # said once, when it starts — not every pass
                     self.archive_away_since = self.wall()
                     logging.warning("%s: the archive %s does not answer (%s) — keeping segments in the "
-                                    "spool until it does", self.name, self.archive.root, e)
+                                    "spool until it does", self.name, archive.root, e)
                 self.archive_error, failed = str(e), True
                 break
             n += 1
         # Back only when a segment actually went across. An empty spool proves nothing about an archive
         # that was away: nothing was asked of it.
         if n and not failed and self.archive_error:
-            logging.info("%s: the archive %s answers again after %.0f s", self.name, self.archive.root,
+            logging.info("%s: the archive %s answers again after %.0f s", self.name, archive.root,
                          self.wall() - self.archive_away_since)
             self.archive_error, self.archive_away_since = "", 0.0
         self.promoted += n
         return n
+
+    # The same promotion, off the loop's thread — because an archive can fail by NOT RETURNING.
+    #
+    # A network mount that goes quiet does not raise: `rename` and `write` into it wait in the kernel with
+    # no timeout to give them, for as long as the mount is gone. The two `try`s in `run` cannot help, there
+    # is no exception to catch; there is only a call that has not come back, and while it has not, the
+    # thread it was made on renews nothing. So the call is made on a thread of its own.
+    #
+    # The pass waits on it for `PROMOTE_WAIT` and no longer. That is what keeps a HEALTHY archive
+    # synchronous: a local disk or a live bucket finishes well inside it, and a pass that promotes still
+    # ends with the segment in the archive — everything that reads the archive after a pass sees the same
+    # thing it always did. Only a hung call outlives the wait, and then the pass moves on without it.
+    #
+    # One in flight. A hung call is not cancelled — a thread waiting in the kernel on a dead mount cannot
+    # be — so the next pass does not start another behind it; it finds the first still running and leaves
+    # it. The archive the promotion writes into is the one held when it STARTED: a volume switch meanwhile
+    # does not redirect segments recorded for the old one.
+    def promote_in_background(self) -> None:
+        if self._promoter is not None and self._promoter.is_alive():
+            return
+        archive = self.archive
+
+        def promote():
+            try:
+                self.promote_closed(archive)
+            except Exception:                                  # noqa: BLE001 — a thread has nobody to raise to
+                logging.exception("%s: promotion failed", self.name)
+            finally:
+                self.promoting_since = 0.0
+
+        self.promoting_since = self.wall()
+        self._promoter = threading.Thread(target=promote, name=f"{self.name}-promote", daemon=True)
+        self._promoter.start()
+        self._promoter.join(timeout=self.PROMOTE_WAIT)
+
+    # A hang has no exception to report it, so the recorder notices the silence itself: a promotion that
+    # has been running longer than `PROMOTE_STUCK` is written into the same field an outage that raises
+    # uses. Whatever reads the heartbeat learns the same thing either way — the archive is not taking
+    # segments, since when, and the spool count is the queue behind it.
+    def watch_promotion(self) -> None:
+        if not self.promoting_since or self.wall() - self.promoting_since <= self.PROMOTE_STUCK:
+            return
+        stuck = self.wall() - self.promoting_since
+        if not self.archive_error.startswith("promotion into"):
+            logging.warning("%s: a promotion into %s has not returned for %.0f s", self.name, self.archive.root, stuck)
+        self.archive_away_since = self.archive_away_since or self.promoting_since
+        self.archive_error = f"promotion into {self.archive.root} has not returned for {stuck:.0f} s"
+
+    # The archive is taking nothing: it said so (`archive_error`), or a promotion into it is still in
+    # flight. Either way it cannot be given more.
+    def archive_busy(self) -> bool:
+        return bool(self.archive_error) or bool(self.promoting_since)
 
     def pump_once(self) -> None:
         super().pump_once()                         # …which now includes `requests()`: the base serves the
                                                     # family for every subsystem, and this one overrides
                                                     # the method, not the call — asking twice a pass would
                                                     # spend the budget twice
-        self.promote_closed()
-        if self.backfill_budget:                    # bounded, and inside the window: it shares the device's uplink
+        self.promote_in_background()                # on its own thread: an archive can hang as well as fail
+        self.watch_promotion()
+        # Bounded, inside the window — it shares the device's uplink — and never while the archive is taking
+        # nothing: a fetched range would only pile into the spool behind the queue, and its own promote
+        # would be one more call waiting on the dead mount, made on this thread.
+        if self.backfill_budget and not self.archive_busy():
             self.backfill(self.backfill_budget)
 
     # -- backfill: closing our gaps from the device's own archive (Lesson 16) ---------------------------
