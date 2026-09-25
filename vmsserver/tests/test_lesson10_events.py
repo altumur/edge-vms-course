@@ -483,3 +483,32 @@ def test_the_durable_write_reaches_the_medium_or_says_it_could_not():
         raise AssertionError("a file that cannot be synced was reported as synced")
     except ValueError:
         pass
+
+
+def test_the_timeline_endpoint_hands_the_page_counts_and_says_why():
+    """The shape the page depends on, checked through HTTP rather than on the
+    method, because the bug this guards against was in the WIRING: a console that
+    starts returning `events: []` to a page reading `d.events` blanks the operator's
+    timeline exactly when it is busiest, which is worse than the flood it replaced.
+
+    So the reply says three things at once — the counts, the rate, and the norm —
+    and the page has something to draw and a sentence to show for why it changed
+    shape."""
+    from vms.archive import event_log
+    box = Box(); t = box.wall() - 60
+    log = event_log(box.archive, 7, 1)
+    for i in range(90):
+        log.append(t + i * 0.5, "stats", n=i)
+    res, rsrv = _resource_process(box)
+    con = VmsController(box.vars.as_writer("console", SPEC.acl_console()), box.objects, wall=box.wall)
+    srv = serve(con, ArchiveResource(box.spool, box.archive), port=0, wall=box.wall)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        st, rep = call(base, "GET", f"/events?from={t}&to={t + 60}")
+        assert st == 200 and rep["aggregated"] is True
+        assert rep["events"] == [] and [g["count"] for g in rep["groups"]] == [90]
+        assert rep["rate_per_minute"] > rep["per_minute"] == 60.0
+        st, quiet = call(base, "GET", f"/events?from=0&to={t + 60}")     # the same rows over a long window
+        assert st == 200 and quiet["aggregated"] is False and len(quiet["events"]) == 90
+    finally:
+        srv.shutdown(); rsrv.shutdown()

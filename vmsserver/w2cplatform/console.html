@@ -265,7 +265,7 @@ setInterval(loadEvents, 5000) })` — the events refresh on their own, the way t
 // the spec has a bool field named `enabled`.
 const $ = s => document.querySelector(s);
 const fmt = t => new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z';
-let spec = null, units = [], current = null, window_ = null, spans = [], queue = [], events = [], evfilter = '';
+let spec = null, units = [], current = null, window_ = null, spans = [], queue = [], events = [], groups = [], evfilter = '';
 // Colours per subsystem, assigned in order of first sight — the page does not know which subsystems exist.
 const PALETTE = ['#c58a1a', '#8e44ad', '#2a9d5c', '#d35400', '#16a085', '#7f8c8d'];
 const palette = {};
@@ -393,17 +393,27 @@ async function loadTimeline() {
 // exactly "live" — a resource that did not answer is named, and the list is honest about being short),
 // and rebuilds the subsystem filter and the legend from the subsystems seen.
 async function fetchEvents(from, to) {
-  events = [];
+  events = []; groups = [];
   try {
     const r = await fetch(`/events?from=${from}&to=${to}&cam=${encodeURIComponent(current)}`);
-    if (r.ok) { const d = await r.json(); events = d.events || []; $('#evstate').textContent = d.state || ''; $('#evstate').className = d.state === 'live' ? '' : 'bad'; }
+    if (r.ok) {
+      const d = await r.json(); events = d.events || []; groups = d.aggregated ? (d.groups || []) : [];
+      // Past the console's norm the answer is counts, not lines (М10A, урок 15). Say WHY the list
+      // changed shape: a screen that silently starts showing something else is a screen nobody trusts.
+      const norm = d.aggregated ? ` · ${d.rate_per_minute}/min over ${d.per_minute} — counts, not lines` : '';
+      const cut = d.truncated ? ' · window did not fit' : '';
+      $('#evstate').textContent = (d.state || '') + norm + cut;
+      $('#evstate').className = (d.state === 'live' && !d.aggregated && !d.truncated) ? '' : 'bad';
+    }
     else { $('#evstate').textContent = `no events: ${r.status}`; $('#evstate').className = 'bad'; }
   } catch (_) { $('#evstate').textContent = 'no events'; $('#evstate').className = 'bad'; }
-  const subs = [...new Set(events.map(e => e.subsystem))].sort();
+  const subs = [...new Set([...events, ...groups].map(e => e.subsystem))].sort();
   const sel = $('#evfilter'); const keep = evfilter;
   sel.innerHTML = '<option value="">every subsystem</option>' + subs.map(s => `<option value="${s}">${s}</option>`).join('');
   sel.value = subs.includes(keep) ? keep : ''; evfilter = sel.value;
-  $('#evlegend small').innerHTML = subs.map(s => `<span class="sw" style="background:${subColor(s)}"></span>${s} (${events.filter(e => e.subsystem === s).length})`).join(' ');
+  const count = s => groups.length ? groups.filter(g => g.subsystem === s).reduce((n, g) => n + g.count, 0)
+                                   : events.filter(e => e.subsystem === s).length;
+  $('#evlegend small').innerHTML = subs.map(s => `<span class="sw" style="background:${subColor(s)}"></span>${s} (${count(s)})`).join(' ');
 }
 // Re-fetches the events for the current window and redraws ticks and list — every 5 s while a unit is
 // selected, so a detector's line crossed a moment ago is on the timeline within one tail of the resource.
@@ -429,6 +439,20 @@ function drawEvents() {
     tl.appendChild(el);
   }
   const ul = $('#events'); ul.innerHTML = '';
+  // Aggregated: one line per (subsystem, unit, kind, class) with how many and between when and when —
+  // the counts the console sent instead of a flood nobody would read. Alarms come first, as they arrive.
+  if (groups.length) {
+    for (const g of groups.filter(g => !evfilter || g.subsystem === evfilter)) {
+      const li = document.createElement('li');
+      li.innerHTML = `<span><span class="sw" style="background:${subColor(g.subsystem)}"></span>` +
+                     `<strong>${g.count}×</strong> ${g.kind} <small>${g.subsystem}/${g.unit}</small>` +
+                     (g.class === 'alarm' ? ' <strong>alarm</strong>' : '') + `</span>` +
+                     `<small>${fmt(g.since)} – ${fmt(g.until)}</small>`;
+      li.onclick = () => seek(g.since);
+      ul.appendChild(li);
+    }
+    return;
+  }
   for (const e of [...shown].reverse()) {
     const li = document.createElement('li'); li.className = e.fenced ? 'fenced' : '';
     const extra = Object.entries(e).filter(([k]) => !['subsystem', 'unit', 'cam', 'epoch', 't', 'kind', 'server', 'bucket', 'fenced'].includes(k))

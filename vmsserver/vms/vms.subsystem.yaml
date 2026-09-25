@@ -17,7 +17,7 @@ unit:
   # carrying `id` is refused (it is a platform field). `parse_id` turns the URL's last segment into an
   # `int`; sort order is numeric.
   id: numeric                        # vms/next_id
-  # the operator's nine fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
+  # the operator's ten fields. `SubsystemSpec.refuse` rejects any key not in this list and any of
   # `PLATFORM_FIELDS`; `new_row` applies the defaults; `row()`/`items()` convert by type; `/spec` sends
   # `{name, type, default, required}` for each so the page builds its forms without knowing the VMS.
   fields:
