@@ -283,3 +283,26 @@ def test_the_budget_is_spent_on_this_recorders_own_footage():
     r.pump_once()
     assert [p for p in mine if os.path.exists(p)] == mine[2:], "two of its own should have gone"
     assert all(os.path.exists(p) for p in theirs), "the neighbour's were skipped, and must stay"
+
+
+def test_a_promotion_that_comes_back_late_does_not_speak_for_the_next_volume():
+    """A hung promotion is not cancelled, only left — and it may come back after the recorder has moved on
+    to another volume. Whatever it then reports is about the volume it started for. If it wrote that into
+    the recorder's state, a dead mount that finally answered "permission denied" would mark the NEW volume
+    wrong and have it handed back; one that finally succeeded would clear an error the new volume really
+    has. So a promotion speaks only while the volume it was promoting for is still the one held."""
+    import errno
+    box = Box()
+    r = _real_recorder(box)
+    old_archive = r.archive
+    _backlog(box, r, 1)                                            # marked for the volume held now
+
+    def refused(*a, **k):
+        raise OSError(errno.EACCES, "Permission denied")
+    old_archive.promote = refused
+    started_for = r.volume
+    r.volume = "vol-new"                                           # the recorder moved on while it hung
+
+    r.promote_closed(old_archive, started_for)                     # …and the old promotion finally answers
+    assert r.archive_error == "" and r.archive_failure == "", \
+        "a late answer about the old volume was written into the new one's state"

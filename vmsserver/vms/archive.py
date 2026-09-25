@@ -184,12 +184,17 @@ class ArchiveResource:
     """One server's archive. `promote()` is what archivesink calls on
     fragment-closed; `repair()` is what М11 called the re-index sweep."""
 
-    def __init__(self, spool_root: str, archive_root: str, bucket_seconds: int = 600, wall=None):
+    # `create=False` is a handle on an archive that is away right now: the spool is local and is made, the
+    # root is not touched. Promotion makes its own directories segment by segment, so a handle made this
+    # way starts working the moment the archive answers — which is what a recorder holding a volume through
+    # an outage needs (`RecWorker._write_into`).
+    def __init__(self, spool_root: str, archive_root: str, bucket_seconds: int = 600, wall=None, create: bool = True):
         import time
         self.spool, self.root, self.bucket_seconds = spool_root, archive_root, bucket_seconds
         self.wall = wall or time.time
         os.makedirs(self.spool, exist_ok=True)
-        os.makedirs(self.root, exist_ok=True)
+        if create:
+            os.makedirs(self.root, exist_ok=True)
 
     # 1. the file into the archive (rename, or copy-then-replace across filesystems), 2. the manifest line,
     # 3. the spool copy gone — the order that survives a crash at any point.

@@ -660,3 +660,99 @@ def test_recorders_sharing_a_spool_each_promote_only_their_own():
         "r-1 promoted its neighbour's footage into its own archive"
     r2.promote_closed()
     assert os.path.isfile(os.path.join(b, "rec", "2", "e1", os.path.basename(two)))
+
+
+# -- away, or wrong: a transient failure and a permanent one are answered differently -----------------------
+#
+# The rule from section H — "an archive that will not open is handed back, if there is somewhere else to go" —
+# is right for a wrong key or a path that is a file, and wrong for a link that dropped for a minute: the
+# recorder gives the volume up, its recordings are reshuffled, and a minute later the link is back. And
+# everything that failed mid-run was treated as an outage, so a revoked key had the spool queueing for ever
+# for a place that was never coming back. The errno says which it is.
+
+def _refusing_open(monkeypatch_target, url, err):
+    """Make opening the archive at `url` fail with `err`, the way a network volume fails at open."""
+    import vms.recworker as rw
+    real = rw.ArchiveResource
+
+    class Opening(real):
+        def __init__(self, spool, root, *a, create=True, **k):
+            if root == url and create:
+                raise err
+            super().__init__(spool, root, *a, create=create, **k)
+    rw.ArchiveResource = Opening
+    return lambda: setattr(rw, "ArchiveResource", real)
+
+
+def test_an_archive_that_is_away_at_open_is_kept_and_buffered_into():
+    """A recorder that restarts in the middle of an outage opens its archive and gets a timeout. That is
+    "away", not "wrong": handing the volume back would reshuffle its recordings for a link that is back in a
+    minute. So the recorder keeps it — as a place, at full capacity — records into the spool as it always
+    does, and promotion keeps trying. It says the archive is away; it does not say the volume is not a place."""
+    import errno
+    box = Box()
+    cloud = os.path.join(box.root, "cloud")
+    volumes.write(box.vars, {"name": "cloud", "kind": "local", "url": cloud, "server": "srv-a", "quota_bytes": 10 ** 9})
+    restore = _refusing_open(None, cloud, OSError(errno.ETIMEDOUT, "Connection timed out"))
+    try:
+        r = _recorder(box, "r-1", "srv-a")
+        assert r.volume_pass() == "cloud", "a volume that timed out at open was handed back"
+        assert r.capacity == r.full_capacity and r.volume_error == ""   # still a place: nothing moves off it
+        assert r.archive.root == cloud                                   # …and it points there, so segments go there
+        hb = r.heartbeat_extra()
+        assert hb["archive_error"] and hb["archive_failure"] == "transient"
+    finally:
+        restore()
+
+
+def test_an_archive_that_refuses_writes_mid_run_is_handed_back():
+    """The other way round. The recorder holds `vol-a`, and promotion starts failing with "permission
+    denied" — a key that was revoked, a bucket policy that changed. Nothing will fix that but a person, so
+    buffering is waiting for nothing while the spool grows. The volume is handed back, its recordings are
+    free to go somewhere that works, and what was already recorded stays in the spool marked for `vol-a`.
+
+    And it does not take `vol-a` straight back on the next pass: opening may well succeed (the directories
+    are there) and the first write fail again — a recorder flapping between taking and dropping the same
+    broken archive. It is left alone for a while, long enough for somebody to fix it."""
+    import errno
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-a"
+    seg = _closed_segment(box, r)
+    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": b, "server": "srv-a", "quota_bytes": 10 ** 9})
+
+    def refused(*a, **k):
+        raise OSError(errno.EACCES, "Permission denied")
+    r.archive.promote = refused
+    r.promote_closed()
+    assert r.heartbeat_extra()["archive_failure"] == "permanent"
+
+    assert r.volume_pass() == "vol-b", "a volume that refuses writes was kept, and the spool queues for nothing"
+    assert os.path.isfile(seg) and not os.path.exists(os.path.join(b, "rec", "7"))   # vol-a's footage waits for vol-a
+    box.wall.advance(30)
+    r.leave_volume("test: let go of vol-b")                         # free again, and vol-a sorts first…
+    assert r.volume_pass() != "vol-a", "it took the broken archive straight back"
+
+
+def test_a_full_archive_is_kept_so_the_one_process_that_can_free_it_still_holds_it():
+    """"No space" looks permanent and is not. A full archive is emptied by its own watermark (Lesson 18),
+    and that pass is run by the recorder holding it — hand a full volume back and the one process that
+    could free it stops holding it, and it stays full. So a full archive is an outage: the recorder keeps it
+    and buffers, and the watermark makes the room."""
+    import errno
+    box = Box()
+    a, b = os.path.join(box.root, "vol-a"), os.path.join(box.root, "vol-b")
+    volumes.write(box.vars, {"name": "vol-a", "kind": "local", "url": a, "server": "srv-a", "quota_bytes": 10 ** 9})
+    r = _recorder(box, "r-1", "srv-a")
+    assert r.volume_pass() == "vol-a"
+    _closed_segment(box, r)
+    volumes.write(box.vars, {"name": "vol-b", "kind": "local", "url": b, "server": "srv-a", "quota_bytes": 10 ** 9})
+
+    def full(*a, **k):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    r.archive.promote = full
+    r.promote_closed()
+    assert r.heartbeat_extra()["archive_failure"] == "transient"
+    assert r.volume_pass() == "vol-a", "a full archive was handed back — and nobody is left to empty it"

@@ -30,6 +30,7 @@ spool into the archive on every pass.
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import threading
@@ -48,6 +49,28 @@ from .worker import FakeActuator, VmsWorker
 
 log = logging.getLogger("recworker")
 REC = Subsystem("rec")
+
+
+# An archive that fails is either AWAY or WRONG, and the two are answered differently: an archive that is
+# away is kept and buffered into, one that is wrong is handed back so its recordings can go somewhere that
+# works. The errno says which.
+#
+# WRONG is only what nothing but a person will change: no permission (a key revoked, a policy changed), a
+# path component that is a file, a read-only filesystem. Everything else is AWAY — a timeout, a refused or
+# reset connection, a network that is down, an I/O error on a mount that went quiet — and so is whatever
+# nobody listed, because the cost of guessing wrong is lopsided: an away archive handed back reshuffles
+# recordings for a link that is back in a minute, while a wrong one kept is a spool that queues, visibly.
+#
+# Two that look wrong and are not. "No space" is an archive its OWN watermark empties (Lesson 18), and that
+# pass is run by the recorder holding it: hand it back and the one process that could free it stops
+# holding it. "No such file" is ambiguous at promotion — it is as likely the spool's copy that vanished as
+# the archive's directory — and a wrong guess there would hand back a working volume.
+PERMANENT = {errno.EACCES, errno.EPERM, errno.ENOTDIR, errno.EISDIR, errno.EROFS}
+
+
+def failure_kind(e: BaseException) -> str:
+    """`permanent` when only a person can fix it, else `transient`."""
+    return "permanent" if getattr(e, "errno", None) in PERMANENT else "transient"
 
 
 class RecWorker(VmsWorker):
@@ -69,6 +92,11 @@ class RecWorker(VmsWorker):
     # hour of footage in one go. It is a pace and not a bandwidth cap: shaping the uplink is bytes per
     # second, and that is not this.
     PROMOTE_BUDGET = 8
+    # How long a volume that refused writes is left alone before this recorder tries it again. Opening it
+    # may well succeed — the directories are there — and the first write fail again, so without a pause a
+    # recorder flaps between taking and dropping the same broken archive. Long enough not to flap, short
+    # enough that a key somebody fixed is picked up without a restart.
+    REFUSED_FOR = 600.0
     # How many closed ranges the heartbeat carries. A window and not a queue: the console acts on what it
     # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
     # decision has to be idempotent on its own (it is: the job's id is the range).
@@ -109,6 +137,8 @@ class RecWorker(VmsWorker):
         # one means "will not open" and costs the volume its capacity; this one means "opened, then went
         # away", and the answer to it is a queue in the spool, not a different archive.
         self.archive_error, self.archive_away_since = "", 0.0
+        self.archive_failure = ""                    # "transient" (away) or "permanent" (wrong) while archive_error is set
+        self.refused: dict[str, tuple[float, str]] = {}   # volume -> (tried again after, why) — see REFUSED_FOR
         # The one promotion in flight, and since when (0: none). ONE: a mount that stopped answering keeps
         # the call it swallowed, and starting another behind it every pass would pile up threads that are
         # all waiting on the same dead mount.
@@ -233,6 +263,11 @@ class RecWorker(VmsWorker):
                 # handed back for being away.
                 "archive_error": self.archive_error,
                 "archive_away_since": self.archive_away_since,
+                # AWAY ("transient") is kept and buffered into; WRONG ("permanent") is handed back.
+                "archive_failure": self.archive_failure,
+                # Volumes this recorder handed back for refusing writes, and why — left alone until the time
+                # given, so that a key somebody fixes is picked up without a restart.
+                "refused": {n: why for n, (_, why) in self.refused.items()},
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
                 # …and whose footage those are, by volume. A volume here that no recorder holds is footage
                 # that is waiting — not lost and not misfiled — until somebody takes it.
@@ -258,6 +293,18 @@ class RecWorker(VmsWorker):
             return self.volume
         rows = {v.name: v for v in volumes.declared(self.vars)}
         free = volumes.servable(list(rows.values()), self.server)
+        # An archive that refuses writes — WRONG, not away — is handed back: buffering into it waits for
+        # nothing while the spool grows, and its recordings should go somewhere that works. What it already
+        # holds stays in the spool, marked for it. And it is left alone for REFUSED_FOR, or the next pass
+        # would take it straight back: opening may succeed and the first write fail again.
+        now = self.wall()
+        if self.hold is not None and self.archive_failure == "permanent":
+            why = self.archive_error
+            self.refused[self.hold] = (now + self.REFUSED_FOR, why)
+            logging.error("%s: %s refuses writes (%s) — handing it back", self.name, self.hold, why)
+            self.leave_volume(f"volume {self.hold} refuses writes")
+        self.refused = {n: v for n, v in self.refused.items() if v[0] > now}
+        free = [n for n in free if n not in self.refused]
         held = self.hold
         if held is not None and (held not in free or not self.renew_hold()):
             self.leave_volume(f"volume {held} is not this recorder's any more")   # withdrawn, disabled, or taken from us
@@ -297,8 +344,8 @@ class RecWorker(VmsWorker):
                 return self.volume
             logging.warning("%s: %s will not open (%s) — looking for another", self.name, self.hold, err)
             skipped.add(self.hold)
-            broken.append((self.hold, err))
-            self.volume_error = err
+            broken.append((self.hold, str(err)))
+            self.volume_error = str(err)
             self.release_hold()                                    # so somebody who CAN write there may take it
 
     # Taking a volume means writing into ITS tree, so the archive this process promotes into follows the
@@ -308,13 +355,29 @@ class RecWorker(VmsWorker):
     # Returns None when the archive is open and writable, or the reason it is not. Opening is the only
     # honest test: a declaration can name a path that does not exist, a mount that is gone or a bucket
     # nobody can reach, and none of that is visible in the row.
-    def _write_into(self, vol) -> str | None:
+    #
+    # A failure to open is answered by its KIND (`failure_kind`). WRONG — a key, a path, a read-only mount —
+    # is returned, and `volume_pass` hands the volume back: nobody can write there until a person fixes it.
+    # AWAY — a timeout, a refused connection — is not a reason to give the volume up: the recorder keeps it,
+    # at full capacity, and points at it anyway with a handle that does not touch the root. Recording goes
+    # into the local spool as it always does, marked for this volume, and promotion keeps trying; the
+    # heartbeat says the archive is away. Handing it back instead would reshuffle every recording on it for
+    # a link that is back in a minute — the restart-during-an-outage case, which is exactly when opening
+    # fails this way.
+    def _write_into(self, vol) -> OSError | None:
         if not vol.url or vol.url == self.archive.root:
             return None
         try:
             archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall)
         except OSError as e:
-            return str(e)
+            if failure_kind(e) == "permanent":
+                return e
+            archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall, create=False)
+            if not self.archive_error:
+                self.archive_away_since = self.wall()
+                logging.warning("%s: %s is away at open (%s) — keeping it and recording into the spool",
+                                self.name, vol.name, e)
+            self.archive_error, self.archive_failure = str(e), "transient"
         self.archive, self.archive_root = archive, vol.url
         logging.info("%s: writing into %s (%s)", self.name, vol.name, vol.url)
         return None
@@ -345,6 +408,9 @@ class RecWorker(VmsWorker):
             self.release(str(uid))
         self.release_hold()
         self.volume, self.capacity = "", 0
+        # What the archive's state said was about the archive we just left. The next one starts clean — and
+        # a promotion still in flight into the old one will not write over it (`promote_closed`).
+        self.archive_error, self.archive_failure, self.archive_away_since = "", "", 0.0
 
     def lease_pass(self) -> list[str]:
         lost = super().lease_pass()
@@ -378,20 +444,23 @@ class RecWorker(VmsWorker):
             try:
                 archive.promote(p)
             except OSError as e:
-                if not self.archive_error:                  # said once, when it starts — not every pass
-                    self.archive_away_since = self.wall()
-                    logging.warning("%s: the archive %s does not answer (%s) — keeping segments in the "
-                                    "spool until it does", self.name, archive.root, e)
-                self.archive_error, failed = str(e), True
+                failed = True
+                if volume == self.volume:                   # still ours: a late answer about a volume we left says nothing now
+                    if not self.archive_error:              # said once, when it starts — not every pass
+                        self.archive_away_since = self.wall()
+                        logging.warning("%s: the archive %s does not answer (%s) — keeping segments in the "
+                                        "spool until it does", self.name, archive.root, e)
+                    self.archive_error, self.archive_failure = str(e), failure_kind(e)
                 break
             n += 1
-            self.last_progress = self.wall()             # a segment went across: whatever this is, it is not a hang
+            if volume == self.volume:
+                self.last_progress = self.wall()         # a segment went across: whatever this is, it is not a hang
         # Back only when a segment actually went across. An empty spool proves nothing about an archive
         # that was away: nothing was asked of it.
-        if n and not failed and self.archive_error:
+        if n and not failed and self.archive_error and volume == self.volume:
             logging.info("%s: the archive %s answers again after %.0f s", self.name, archive.root,
                          self.wall() - self.archive_away_since)
-            self.archive_error, self.archive_away_since = "", 0.0
+            self.archive_error, self.archive_away_since, self.archive_failure = "", 0.0, ""
         self.promoted += n
         return n
 
@@ -497,6 +566,7 @@ class RecWorker(VmsWorker):
             logging.warning("%s: a promotion into %s has moved nothing for %.0f s", self.name, self.archive.root, stuck)
         self.archive_away_since = self.archive_away_since or self.last_progress
         self.archive_error = f"promotion into {self.archive.root} has not returned for {stuck:.0f} s"
+        self.archive_failure = "transient"               # a mount gone quiet is away, not wrong
 
     # The archive is taking nothing: it said so (`archive_error`), or a promotion into it is still in
     # flight. Either way it cannot be given more.
