@@ -350,13 +350,12 @@ def test_a_folder_is_the_operators_and_placement_never_reads_it():
     box = Box()
     ctl = VmsController(box.vars, box.objects, capacity=50, wall=box.wall)
     ctl.create_camera({"name": "gate", "source": "driverpack://file/gate.mp4",
-                       "labels": "vlan:cctv-a", "folders": "Объект А/Корпус 1, этаж 2/Подъезд"})
+                       "labels": "vlan:cctv-a", "folders": "Объект А/Подъезд,Периметр"})
     ctl.create_camera({"name": "hall", "source": "driverpack://file/hall.mp4", "folders": "Объект А/Холл"})
 
     row = ctl.units()[0]
     assert row["labels"] == ["vlan:cctv-a"]
-    assert row["folders"] == "Объект А/Корпус 1, этаж 2/Подъезд", \
-        "a path is stored as written — a comma inside a level included, which a list could not hold"
+    assert row["folders"] == ["Объект А/Подъезд", "Периметр"], "one camera, filed in two folders"
 
     from w2cplatform.contract import Heartbeat
     from vms.config import SPEC
