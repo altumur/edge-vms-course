@@ -91,6 +91,10 @@ class RecWorker(VmsWorker):
         self.volume = str(env.get("VOLUME") or self.default_volume)
         self.full_capacity = self.capacity           # what it reports while it has a place to record in
         self.volume_error = ""                       # why the archive it holds will not open, if it will not
+        # Why the archive it DID open has stopped taking segments, and since when. Not `volume_error`: that
+        # one means "will not open" and costs the volume its capacity; this one means "opened, then went
+        # away", and the answer to it is a queue in the spool, not a different archive.
+        self.archive_error, self.archive_away_since = "", 0.0
         self.grace_seconds = grace_seconds
         # Backfill (Lesson 16): the hours in local time it may run in (None: any), how far back it may
         # reach, how fresh it must NOT touch, and the seam tolerance that stops 144 seams a day from
@@ -196,6 +200,12 @@ class RecWorker(VmsWorker):
                 # alternative is the failure that looks like health: a fresh hold, a green console and
                 # nothing being written. Whatever reads it must not count that volume as served.
                 "volume_error": self.volume_error,
+                # Empty while the archive takes segments. Otherwise the reason it stopped, and when — the
+                # spool count beside it is the queue that is waiting. Different from `volume_error` on
+                # purpose: an archive that went away is still this recorder's place, and it is not
+                # handed back for being away.
+                "archive_error": self.archive_error,
+                "archive_away_since": self.archive_away_since,
                 "spool": len(self.archive.closed_in_spool(0.0, self.wall())),
                 "closed": ",".join(self.closed)}
 
@@ -302,10 +312,37 @@ class RecWorker(VmsWorker):
             self.volume_pass()
         return lost
 
+    # Move what has closed from the spool into the archive — and survive the archive being away.
+    #
+    # The spool is local and the pipeline never touches the network, so an archive that stops answering
+    # costs nothing but a queue: the segment stays where it is and goes across when the link returns. What
+    # it must not cost is the rest of the pass. A promote that raised used to take the lease renewal and
+    # the heartbeat down with it — every pass, for as long as the archive was away — so in thirty seconds
+    # the recorder lost its epochs and in forty-five its controller called it dead: the recording the
+    # spool could have carried through the outage was stopped by the outage.
+    #
+    # In ORDER, stopping at the first failure: segments are promoted oldest first, and one that could not
+    # go makes the next wait behind it rather than jump the queue. Only `OSError` is an outage — a path
+    # that does not parse is a bug, and swallowing it here would hide it for as long as the box ran.
     def promote_closed(self) -> int:
-        n = 0
+        n, failed = 0, False
         for p in self.archive.closed_in_spool(self.grace_seconds, self.wall()):
-            self.archive.promote(p); n += 1
+            try:
+                self.archive.promote(p)
+            except OSError as e:
+                if not self.archive_error:                  # said once, when it starts — not every pass
+                    self.archive_away_since = self.wall()
+                    logging.warning("%s: the archive %s does not answer (%s) — keeping segments in the "
+                                    "spool until it does", self.name, self.archive.root, e)
+                self.archive_error, failed = str(e), True
+                break
+            n += 1
+        # Back only when a segment actually went across. An empty spool proves nothing about an archive
+        # that was away: nothing was asked of it.
+        if n and not failed and self.archive_error:
+            logging.info("%s: the archive %s answers again after %.0f s", self.name, self.archive.root,
+                         self.wall() - self.archive_away_since)
+            self.archive_error, self.archive_away_since = "", 0.0
         self.promoted += n
         return n
 

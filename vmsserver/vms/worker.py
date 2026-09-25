@@ -859,15 +859,25 @@ class VmsWorker(Worker):
         self.heartbeat_once()
         last_lease, last_hb = 0.0, self.clock()
         while not stop.is_set():
+            # The WORK, and whatever it raises stays in here.
             try:
                 self.reconcile_once()
                 self.pump_once()
+            except Exception:                              # noqa: BLE001
+                log.exception("%s: pass failed; will retry", self.name)
+            # STAYING ALIVE, in a try of its own and never inside the one above. These two used to share
+            # it, so anything the work raised skipped them — every pass, for as long as it kept raising.
+            # A recorder whose archive went away stopped renewing its leases (fenced at 30 s) and stopped
+            # heartbeating (called dead at 45 s), and the outage the spool was there to absorb ended the
+            # recording instead. A pass that failed is a pass to retry; the process that ran it still holds
+            # its units, and saying so is not something a failure elsewhere gets to switch off.
+            try:
                 if self.clock() - last_lease >= lease_every:
                     self.lease_pass(); last_lease = self.clock()
                 if self.clock() - last_hb >= 10.0:
                     self.heartbeat_once(); last_hb = self.clock()
             except Exception:                              # noqa: BLE001
-                log.exception("%s: pass failed; will retry", self.name)
+                log.exception("%s: lease or heartbeat failed; will retry", self.name)
             stop.wait(poll)
         self.actuator.stop_all()
         self.heartbeat_once()
