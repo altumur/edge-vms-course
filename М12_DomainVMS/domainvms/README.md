@@ -20,17 +20,24 @@ domainvms/
     entitlement.py    Lesson 5  the licence cached in the domain cluster, verified against the product's vendor key, graceful for a stated period; recording never stops
     enroll.py         Lesson 6  pledge, registrar, a simulated manufacturer CA and MASA; the voucher path and the approval queue with audit and expiry
     cloud.py          Lesson 8  the bandwidth and cost arithmetic; М11's worker job rendered three ways and diffed
+    pending.py        Lesson 9  an edit kept for a cluster that is off: per field, beside the grants, applied by the member's console, matched by rev
+    device.py         Lesson 10 a camera as a cluster of one: its row, a pinned unit, its own epoch, heartbeats in RAM, the door after the first publish
+    scale.py          Lesson 11 the Meter: calls counted and link time charged per member; what a pass, an edit and a silence cost
+    shared.py         Lesson 12 shared settings: one signed object behind a pointer, carried by agents, ordered by (term, rev), defaults resolved at read
+    crossing.py       Lesson 13 a stream from another cluster: one recording cluster per camera, the source book, backfill planned from it and fetched from the card
+    alarms.py         Lesson 14 one list of alarms from every member; closed alarm buckets mirrored on a neighbour, pulled; a stable mirror plan
+    term.py           Lesson 15 the domain on a camera: a term, a signed backup beyond the host, re-hosting, never a smaller term, what an old host alone held
     runtime.py, signer_service.py   wiring for the real processes (NomadVariables, the object store, HTTP)
   deploy/
     signer.nomad.hcl  console.nomad.hcl  gateway.nomad.hcl  agent.nomad.hcl   the four jobs; constraints, never hostnames
     signer-policy.hcl  agent-policy.hcl                                        one writer per prefix; the agent may not touch vms/*
     federation.hcl                                                             two regions, one gossip pool
     verify-bench.sh                                                            what needs a real bench, scripted
-  tests/              41 tests, no Nomad, no Postgres, no browser — milliseconds
+  tests/              93 tests, no Nomad, no Postgres, no browser — about two seconds
 ```
 
 ```bash
-python3 tests/run.py                 # 41 tests; finds ../../М11_ClusterVMS/clustervms (or CLUSTERVMS_PATH) and М10 through it
+python3 tests/run.py                 # 93 tests; finds ../../М11_ClusterVMS/clustervms (or CLUSTERVMS_PATH) and М10 through it
 python3 -m domain.console            # CLUSTERS=north=http://nomad:4646|variables://objects,...
 ```
 
@@ -47,6 +54,13 @@ python3 -m domain.console            # CLUSTERS=north=http://nomad:4646|variable
 | 6 | a box enrolls from cold with nobody typing a secret, receives an LDevID, the hand-provisioned credential is deleted, nothing stops | `test_lesson6_enrollment.py`: the voucher path and the approval path, a stranger's IDevID and a wrong-domain voucher refused, unapproved requests expiring |
 | 7 | a thirty-day outage; rotate the root under load; revoke a device on a stated schedule | `test_lesson7_lifetimes.py`: service certs dark after two days, LDevIDs fine; both leaves valid across the overlap, the old root retired on its date, a peer with only the old root served by the cross-cert; skew named |
 | 8 | two clusters, one rented; a written bandwidth-and-cost estimate | `test_lesson8_cloud.py`: 50 × 4 Mbit/s = 200 Mbit/s and 2.16 TB/day → *mixed*; `vmsworker.nomad.hcl` rendered for a rack, a rented instance and a split site differs in datacenter and object store and is byte-identical from the worker's `group` down |
+| 9 | an edit for a cluster that is off is kept, not refused, and lands when it is back — as the operator, grant checked then | `test_lesson9_pending.py`: per field against the value last seen; a field changed on site is a conflict shown, not an overwrite; a revoked grant refuses at application; carried twice applies once; an edit made before the last was confirmed is not a conflict (`via`), and an old outcome clears nothing (`rev`) |
+| 10 | a camera is a member like a server room | `test_lesson10_cluster_of_one.py`: found by serial on a worker and a server that are the camera; epoch grows every boot; a day of heartbeats costs flash nothing; no placer's keys; the door shut until the first publish, or an edit is a false 404 |
+| 11 | the stated limit, measured | `test_lesson11_hundreds.py`: 4 calls and ~575 bytes per member per pass; 50 edits through the directory are 28 550 calls and most of an hour, from memory none; 30 silent members cost 82 s in turn, 5 s in 16 lanes, 1.4 s backing off; back on the list within the ceiling |
+| 12 | settings shared without a database | `test_lesson12_shared.py`: delivery named per member; a stranger's signature refused with a matching checksum; never backwards; defaults resolved and no row touched; two editors told; a tree over 64 KiB; the domain off and a camera rebooted |
+| 13 | a server room records a camera of another cluster | `test_lesson13_crossing.py`: resolved from the carried book with nothing written into the camera; one recording cluster per camera; six hours with the domain off; a camera that moved meanwhile, found again; backfill fetches what the card still holds and drops the rest |
+| 14 | one list of alarms, and a camera that is off answered from a copy | `test_lesson14_alarms.py`: merged newest first; from the neighbour's copy up to when it knows, "none known since"; closed alarm buckets only, twice is once; one pair of 300 moves when a camera is added; a storm is truncated, not the page |
+| 15 | the domain re-hosted from one camera to another | `test_lesson15_domain_of_one.py`: the kept edit survives the host; the host record never goes backwards; the old host steps down and lists what it alone held; a forged backup ignored; the wrong key followed by nobody; the second re-host takes term 3 |
 
 ## What the design record says, as code
 
