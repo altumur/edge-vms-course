@@ -33,11 +33,11 @@ domainvms/
     signer-policy.hcl  agent-policy.hcl                                        one writer per prefix; the agent may not touch vms/*
     federation.hcl                                                             two regions, one gossip pool
     verify-bench.sh                                                            what needs a real bench, scripted
-  tests/              93 tests, no Nomad, no Postgres, no browser — about two seconds
+  tests/              96 tests, no Nomad, no Postgres, no browser — about two seconds
 ```
 
 ```bash
-python3 tests/run.py                 # 93 tests; finds ../../М11_ClusterVMS/clustervms (or CLUSTERVMS_PATH) and М10 through it
+python3 tests/run.py                 # 96 tests; finds ../../М11_ClusterVMS/clustervms (or CLUSTERVMS_PATH) and М10 through it
 python3 -m domain.console            # CLUSTERS=north=http://nomad:4646|variables://objects,...
 ```
 
@@ -60,7 +60,7 @@ python3 -m domain.console            # CLUSTERS=north=http://nomad:4646|variable
 | 12 | settings shared without a database | `test_lesson12_shared.py`: delivery named per member; a stranger's signature refused with a matching checksum; never backwards; defaults resolved and no row touched; two editors told; a tree over 64 KiB; the domain off and a camera rebooted |
 | 13 | a server room records a camera of another cluster | `test_lesson13_crossing.py`: resolved from the carried book with nothing written into the camera; one recording cluster per camera; six hours with the domain off; a camera that moved meanwhile, found again; backfill fetches what the card still holds and drops the rest |
 | 14 | one list of alarms, and a camera that is off answered from a copy | `test_lesson14_alarms.py`: merged newest first; from the neighbour's copy up to when it knows, "none known since"; closed alarm buckets only, twice is once; one pair of 300 moves when a camera is added; a storm is truncated, not the page |
-| 15 | the domain re-hosted from one camera to another | `test_lesson15_domain_of_one.py`: the kept edit survives the host; the host record never goes backwards; the old host steps down and lists what it alone held; a forged backup ignored; the wrong key followed by nobody; the second re-host takes term 3 |
+| 15 | the domain re-hosted from one camera to another | `test_lesson15_domain_of_one.py`: the kept edit survives the host; the host record never goes backwards; the old host steps down and lists what it alone held; a forged backup ignored; the wrong key followed by nobody; the second re-host takes term 3; a planned handover strands nothing, is called off cleanly when the target cannot take the backup, and reports a write that slipped past its freeze |
 
 ## What the design record says, as code
 

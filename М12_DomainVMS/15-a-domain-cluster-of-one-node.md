@@ -1,7 +1,7 @@
 # Lesson 15 — A Domain Cluster of One Node
 
 **Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** the domain's services hosted on a camera, holding a **term**; a signed backup of the domain's state kept by other members, carried by their agents; re-hosting from the signer's key and the newest backup any member holds, as an ordinary operation; members that follow the larger term and never carry a smaller one; and an old host that comes back, steps down, and lists what it alone held instead of losing it or applying it.
+**You will build:** the domain's services hosted on a camera, holding a **term**; a signed backup of the domain's state kept by other members, carried by their agents; re-hosting from the signer's key and the newest backup any member holds, as an ordinary operation — and, when the host is alive, a planned handover that strands nothing; members that follow the larger term and never carry a smaller one; and an old host that comes back, steps down, and lists what it alone held instead of losing it or applying it.
 **Time:** ~120 minutes.
 
 ## Why this lesson exists
@@ -14,7 +14,7 @@ On a server room, re-hosting the domain was a drill: done once a year, by a runb
 - **State beyond the host.** Whatever the domain alone holds dies with its camera unless it was published. Lesson 9's exercise 4 asked where the kept edits go; this is the answer.
 - **Nothing lost silently.** The brief again: an old primary's changes that did not propagate *are not silently lost: the console shows them as "not in term N+1 — apply again?"*
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson15_domain_of_one.py`: four cameras from Lesson 10, the domain on one; an edit kept for a camera that is off; a backup carried by two others; the host dying and the domain re-hosted with the edit; the old host returning; a forged backup; a host restored from the wrong key; and two re-hosts in a month.
+> **What you can verify without hardware.** Everything, in `tests/test_lesson15_domain_of_one.py`: four cameras from Lesson 10, the domain on one; an edit kept for a camera that is off; a backup carried by two others; the host dying and the domain re-hosted with the edit; the old host returning; a forged backup; a host restored from the wrong key; two re-hosts in a month; and a planned handover — clean, called off, and with a write slipping past its freeze.
 
 ## Prerequisites
 
@@ -32,6 +32,7 @@ On a server room, re-hosting the domain was a drill: done once a year, by a runb
 3. Re-host from the signer's key and the newest verified backup, with a term larger than any member has seen.
 4. Carry the host record so that it never goes backwards.
 5. Show the returning host's un-backed-up changes to a person.
+6. Hand the domain over from a live host without stranding anything, and call the handover off safely when the target cannot take it.
 
 ---
 
@@ -137,6 +138,33 @@ def stranded(old_vars, restored_state: dict) -> list[tuple[str, str, str]]:
 
 returns every exported item on the old host that differs from what the new term was restored from — here, `domain/pending/cam-SN2` with the edit's value. The console shows it as the brief asked: *not in term 2 — apply again?* A person applying it makes an ordinary edit on the new host, which Lesson 9 then keeps and delivers.
 
+## Step 7 — A planned handover
+
+Most moves are not emergencies. A camera is being replaced; a server room has arrived and should host the domain from now on. The host is alive, and the operator presses the same button with a different intent: *move the domain to SN1.*
+
+The emergency path of Step 3 would work, and would strand whatever the host changed after its last backup — Step 6's list, made on purpose for no reason. The planned path takes that loss out, and it is the same operation with two steps in front:
+
+```python
+def handover(host, to, signer_backup, domain_id, objects_of, carry_to, wall=time.time):
+    host.frozen_for = to
+    try:
+        rev = host.backup([to], objects_of(host.name))
+        carry_to()
+        ... to's copy of the pointer must name rev, at this term — or the handover is called off
+    except Exception:
+        host.frozen_for = None
+        raise
+    new, report = rehost(host.fed, to, signer_backup, domain_id, objects_of, wall)
+```
+
+**Freeze.** The host refuses writes to the domain's state for the seconds the handover takes. The kept edit of Lesson 9 is the write that matters, and `GuardedPending` puts the host's guard in front of it: an operator who edits in those seconds gets `503` — *cam-SN0 is handing the domain over to cam-SN1; edits are refused until it has — seconds, not minutes — and then go there.* Refused, with the reason, rather than accepted into the gap between the last backup and the new term.
+
+**Last backup, to the target itself.** Not to the usual keepers: to `to`, so that the new host restores from a copy that has everything. The backup is still carried by `to`'s own agent and verified like any other; a planned handover gets no shortcut around the signature.
+
+**Called off, not half-done.** If `to` did not take that backup — it went off in the middle, its agent refused it — re-hosting now would start the new term from an older copy: the emergency path's loss, taken on for no emergency. So the host unfreezes and remains the host at its term, nothing has been claimed anywhere, and the operator is told why.
+
+**Re-host, and step down.** Then Step 3's `rehost`, unchanged. The old host is reachable, reads the larger term on `to`, and is deposed on the spot. And the report ends with *nothing stranded* — which is computed, not asserted: `stranded` runs against the restored state like after any re-host. The last test writes the domain's state on a path that skips the guard during the handover, and the report says *1 item(s) stranded* and names it. The freeze is what makes the list empty; the list is what proves it was.
+
 ---
 
 ## Troubleshooting
@@ -147,6 +175,7 @@ returns every exported item on the old host that differs from what the new term 
 | An old host that came back undoes the re-host on some members | The host record is carried without the term check. Never carry it backwards. |
 | A kept edit for a camera that was off is gone after re-hosting | The backup left out `domain/pending/`, or no member kept a backup. Export it; choose at least two keepers. |
 | A second re-host produced two hosts with the same term | The new term was computed from the dead host's term, not from the largest any member carries. |
+| A planned handover left items stranded | A write path does not ask the host's guard. Put `GuardedPending` (or the guard) in front of every write to the domain's state. |
 | Edits made on the old host just before it died reappeared on their own | The returning host pushed its state into the new one. List it; a person decides. |
 
 ## Recap
@@ -158,6 +187,7 @@ returns every exported item on the old host that differs from what the new term 
 - Re-host: the key, the newest verified backup, a term larger than any member carries.
 - The host record never goes backwards on a member.
 - A returning host steps down and lists what it alone held, for a person.
+- A planned handover freezes, backs up to the target, re-hosts, and strands nothing — or is called off and changes nothing.
 
 ## Exercises
 

@@ -10,7 +10,7 @@ import json
 from cluster.variables import FakeVariables
 
 from domain.agent import DomainAgent, DomainPublisher
-from domain.api import ConsoleAPI
+from domain.api import ApiError, ConsoleAPI
 from domain.device import DeviceCluster
 from domain.federation import DomainDirectory, Federation
 from domain.grants import Grant
@@ -18,7 +18,8 @@ from domain.pending import PendingEdits
 from domain.readview import ReadView
 from domain.shared import sign
 from domain.signer import Signer
-from domain.term import BACKUP, Deposed, DomainHost, carry_host, find_host, read_host, rehost, stranded
+from domain.term import (BACKUP, Deposed, DomainHost, GuardedPending, carry_host, find_host, handover, read_host,
+                         rehost, stranded)
 from domain.tokens import TokenIssuer
 from tests.conftest import Clock
 
@@ -184,3 +185,74 @@ def test_every_rehost_takes_a_larger_term_than_any_member_has_seen():
     _agent(fed, devices, "cam-SN3", "cam-SN2", wall).sync()
     devices["cam-SN1"].boot()
     assert second.check() is False and find_host(fed, devices["cam-SN3"].flash, signer.tokens.keyset(), wall()) == "cam-SN2"
+
+
+def test_a_planned_handover_strands_nothing():
+    """SN0 is alive and being replaced; the operator moves the domain to SN1. The emergency path would work
+    and could strand whatever SN0 changed after its last backup. The planned one cannot: SN0 freezes —
+    an edit arriving in those seconds is refused with the reason, not accepted into a gap — makes its last
+    backup to SN1, SN1's agent takes it, and the re-host restores from a copy that has everything. SN0,
+    still reachable, reads the larger term and steps down, and the report says nothing was stranded."""
+    wall = Clock()
+    fed, devices, signer, offline, host, agents = _site(wall)
+    _keep_an_edit_for(fed, devices, "SN3", host.vars, wall)          # kept before the handover: must travel
+
+    view = ReadView(fed, wall=wall)
+    view.refresh()
+    devices["cam-SN2"].power_off()
+    view.refresh()
+    api = ConsoleAPI(DomainDirectory(fed, wall=wall), lambda n: devices[n], verifier=lambda t: t,
+                     pending=GuardedPending(PendingEdits(host.vars, wall), host), last_known=view.last_known)
+
+    def carry_to():
+        try:                                             # the moment an operator edits during the handover
+            api.update_camera("SN2", {"name": "late"}, idempotency_key="k-late", token="anna")
+            raise AssertionError("a frozen host must refuse the edit")
+        except ApiError as e:
+            assert e.status == 503 and "handing the domain over to cam-SN1" in e.detail
+        agents["cam-SN1"].sync()
+
+    new, report = handover(host, "cam-SN1", offline, DOMAIN, _objects(devices), carry_to, wall)
+    assert report["planned"] and report["stranded"] == [] and report["term"] == 2
+    assert report["sentence"].endswith("nothing stranded")
+    assert "SN3" in PendingEdits(new.vars, wall).of("cam-SN3")
+    assert host.deposed_by["host"] == "cam-SN1" and fed.domain_cluster.name == "cam-SN1"
+
+
+def test_a_handover_the_target_did_not_take_is_called_off_and_changes_nothing():
+    """SN1's agent could not take the last backup — SN1 went off in the middle. Re-hosting now would start
+    the new term from an older copy, which is the emergency path's loss taken on for no emergency. So the
+    handover is called off: SN0 unfreezes and is still the host at term 1, and no member carries anything
+    new."""
+    wall = Clock()
+    fed, devices, signer, offline, host, agents = _site(wall)
+
+    def carry_to():
+        devices["cam-SN1"].power_off()
+        agents["cam-SN1"].sync()
+
+    try:
+        handover(host, "cam-SN1", offline, DOMAIN, _objects(devices), carry_to, wall)
+        raise AssertionError("the handover must be called off")
+    except RuntimeError as e:
+        assert "called off" in str(e)
+    assert host.frozen_for is None and host.term == 1 and fed.domain_cluster.name == "cam-SN0"
+    host.guard()                                         # writes are accepted again
+    keys = signer.tokens.keyset()
+    assert read_host(devices["cam-SN3"].flash, keys, wall())["term"] == 1
+
+
+def test_a_write_that_slips_past_the_freeze_is_reported_not_trusted_away():
+    """"Nothing stranded" is checked, not asserted. A path that writes the domain's state without asking the
+    host's guard — a bug, a second process — is exactly what the freeze cannot stop, and the report finds it:
+    the handover says how many items were stranded, and `stranded` names them."""
+    wall = Clock()
+    fed, devices, signer, offline, host, agents = _site(wall)
+
+    def carry_to():
+        PendingEdits(host.vars, wall).add("cam-SN2", "SN2", {"name": "sneaked"}, {"name": "SN2"}, "anna")   # no guard
+        agents["cam-SN1"].sync()
+
+    new, report = handover(host, "cam-SN1", offline, DOMAIN, _objects(devices), carry_to, wall)
+    assert [(p, k) for p, k, _ in report["stranded"]] == [("domain/pending/cam-SN2", "SN2")]
+    assert "1 item(s) stranded" in report["sentence"]

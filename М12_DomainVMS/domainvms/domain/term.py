@@ -46,6 +46,10 @@ class Deposed(Exception):
     pass
 
 
+class Frozen(Exception):
+    pass
+
+
 class TwoHosts(Exception):
     pass
 
@@ -67,6 +71,7 @@ class DomainHost:
         self.fed, self.name, self.signer, self.term, self.wall = fed, name, signer, term, wall
         self.backup_rev = 0
         self.deposed_by: dict | None = None
+        self.frozen_for: str | None = None               # the member a planned handover is moving the domain to
 
     @property
     def vars(self):
@@ -89,7 +94,7 @@ class DomainHost:
     # Publish the state beyond the host: one signed document in the host's durable store, and a pointer for
     # each member chosen to keep it, which that member's agent carries home as it carries the settings.
     def backup(self, targets: list[str], objects) -> int:
-        self.guard()
+        self._not_deposed()                              # a FROZEN host still backs up: that is how it hands over
         self.backup_rev += 1
         doc = sign({"term": self.term, "rev": self.backup_rev, "host": self.name, "at": self.wall(),
                     "state": self.export()}, self.signer.tokens)
@@ -120,7 +125,16 @@ class DomainHost:
                 return False
         return True
 
+    # What every write to the domain's state asks first. Frozen: a planned handover is under way, and a write
+    # accepted now would be made after the last backup — exactly what `stranded` exists to catch, created on
+    # purpose. Refused for the seconds the handover takes, with the reason.
     def guard(self) -> None:
+        self._not_deposed()
+        if self.frozen_for:
+            raise Frozen(f"{self.name} is handing the domain over to {self.frozen_for}; edits are refused until it "
+                         f"has — seconds, not minutes — and then go there")
+
+    def _not_deposed(self) -> None:
         if self.deposed_by:
             raise Deposed(f"{self.name} held the domain at term {self.term}; {self.deposed_by['host']} holds it "
                           f"at term {self.deposed_by['term']} — edits go there")
@@ -207,6 +221,61 @@ def rehost(fed, new: str, signer_backup: bytes, domain_id: str, objects_of, wall
                            f"anything the old host changed after rev {rev} is not here" if best else
                            f"term {host.term} on {new}: no backup could be reached — the domain starts empty but for its keys")}
     return host, report
+
+
+# The domain's writes, behind the host's guard: a kept edit (Lesson 9) is refused while the host is frozen or
+# deposed, as a 503 with the reason — the API's word for "not now, and here is why".
+class GuardedPending:
+    def __init__(self, pending, host: DomainHost):
+        self.pending, self.host = pending, host
+
+    def add(self, *a, **kw):
+        from .api import ApiError
+        try:
+            self.host.guard()
+        except (Deposed, Frozen) as e:
+            raise ApiError(503, str(e))
+        return self.pending.add(*a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self.pending, name)
+
+
+# A PLANNED handover: the host is alive and the operator moves the domain to `to` — a camera being replaced,
+# a server room arriving. It is the emergency re-host with the loss taken out, in four steps:
+#
+#     freeze        the old host refuses writes, so nothing can be made after the backup that follows
+#     last backup   to `to` itself, so the new host restores from a copy that has EVERYTHING
+#     carried       `to`'s agent takes it — verified, as any backup; if it does not, the handover is called
+#                   off and the old host unfreezes: nothing was claimed, nothing moved
+#     re-host       the same `rehost`; the old host is reachable and reads the larger term on `to`, steps down
+#
+# The difference from the emergency path is the last line of the report: nothing stranded, because the
+# freeze made sure there was nothing to strand.
+def handover(host: DomainHost, to: str, signer_backup: bytes, domain_id: str, objects_of, carry_to,
+             wall=time.time) -> tuple[DomainHost, dict]:
+    """`carry_to()` runs `to`'s agent once — in production, a nudge to the agent it would run anyway."""
+    host.frozen_for = to
+    try:
+        rev = host.backup([to], objects_of(host.name))
+        carry_to()
+        try:
+            ptr, _ = host.fed.clusters[to].vars.get(BACKUP)
+        except Unreachable:
+            ptr = None                                   # gone in the middle: it cannot be the new host now
+        if not ptr or int(ptr["rev"]) != rev or int(ptr["term"]) != host.term:
+            raise RuntimeError(f"{to} did not take backup rev {rev}; the handover is called off and {host.name} "
+                               f"is still the host")
+    except Exception:
+        host.frozen_for = None
+        raise
+    new, report = rehost(host.fed, to, signer_backup, domain_id, objects_of, wall)
+    host.check()
+    left = stranded(host.vars, report["state"])
+    report.update(planned=True, stranded=left,
+                  sentence=f"planned handover: term {new.term} on {to}, the domain's state at rev {rev} from "
+                           f"{host.name}; " + ("nothing stranded" if not left else f"{len(left)} item(s) stranded — a write got past the freeze"))
+    return new, report
 
 
 # What an old host that came back holds and the new term does not: every exported item that differs from
