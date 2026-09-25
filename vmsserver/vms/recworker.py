@@ -97,6 +97,10 @@ class RecWorker(VmsWorker):
     # recorder flaps between taking and dropping the same broken archive. Long enough not to flap, short
     # enough that a key somebody fixed is picked up without a restart.
     REFUSED_FOR = 600.0
+    # How long `volume_pass` waits on OPENING an archive before calling it away. Opening is a `makedirs` on the
+    # root — near instant when the archive is there — and it happens inside `lease_pass`, so this wait is
+    # the most a hung mount may take from the renewals, once per volume taken.
+    OPEN_WAIT = 5.0
     # How many closed ranges the heartbeat carries. A window and not a queue: the console acts on what it
     # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
     # decision has to be idempotent on its own (it is: the job's id is the range).
@@ -143,6 +147,7 @@ class RecWorker(VmsWorker):
         # the call it swallowed, and starting another behind it every pass would pile up threads that are
         # all waiting on the same dead mount.
         self._promoter: threading.Thread | None = None
+        self._opener: threading.Thread | None = None     # the one open in flight — a hung one included
         self.promoting_since = 0.0
         self.last_progress = 0.0                     # when a promotion last moved a segment — what tells moving from stuck
         self.grace_seconds = grace_seconds
@@ -367,12 +372,13 @@ class RecWorker(VmsWorker):
     def _write_into(self, vol) -> OSError | None:
         if not vol.url or vol.url == self.archive.root:
             return None
-        try:
-            archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall)
-        except OSError as e:
-            if failure_kind(e) == "permanent":
-                return e
-            archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall, create=False)
+        e = self._open(vol.url)
+        if e is not None and failure_kind(e) == "permanent":
+            return e
+        # Opened — or away: either way a handle that does not touch the root. When it opened, the thread
+        # already made it; when it is away, promotion makes its directories segment by segment once it answers.
+        archive = ArchiveResource(self.archive.spool, vol.url, wall=self.wall, create=False)
+        if e is not None:
             if not self.archive_error:
                 self.archive_away_since = self.wall()
                 logging.warning("%s: %s is away at open (%s) — keeping it and recording into the spool",
@@ -381,6 +387,30 @@ class RecWorker(VmsWorker):
         self.archive, self.archive_root = archive, vol.url
         logging.info("%s: writing into %s (%s)", self.name, vol.name, vol.url)
         return None
+
+    # Open an archive — make its root — on a thread of its own, and wait `OPEN_WAIT` for it. Opening is where a
+    # mount that went quiet hangs, and it used to hang right here, inside `lease_pass`, stopping the very
+    # renewals that keep this process's epochs. So: the error it raised, None if it opened, or — when it has
+    # not come back — a `TimeoutError` with `ETIMEDOUT`, which `failure_kind` reads as AWAY like any other
+    # timeout. A hung call is not cancelled, only left; and while one is still in flight, no second is
+    # started behind it, the way promotion keeps one.
+    def _open(self, url: str) -> OSError | None:
+        if self._opener is not None and self._opener.is_alive():
+            return TimeoutError(errno.ETIMEDOUT, f"an earlier open has not returned; not starting another for {url}")
+        result: dict = {}
+
+        def attempt():
+            try:
+                ArchiveResource(self.archive.spool, url, wall=self.wall)
+            except OSError as e:
+                result["error"] = e
+
+        self._opener = threading.Thread(target=attempt, name=f"{self.name}-open", daemon=True)
+        self._opener.start()
+        self._opener.join(timeout=self.OPEN_WAIT)
+        if self._opener.is_alive():
+            return TimeoutError(errno.ETIMEDOUT, f"opening {url} has not returned in {self.OPEN_WAIT:.0f} s")
+        return result.get("error")
 
     # Stop writing into a volume that is no longer ours — the administrator withdrew it, or the hold
     # lapsed and somebody else took it. Every recording of that archive is stopped and released, which is

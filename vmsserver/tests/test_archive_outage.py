@@ -306,3 +306,51 @@ def test_a_promotion_that_comes_back_late_does_not_speak_for_the_next_volume():
     r.promote_closed(old_archive, started_for)                     # …and the old promotion finally answers
     assert r.archive_error == "" and r.archive_failure == "", \
         "a late answer about the old volume was written into the new one's state"
+
+
+def test_an_archive_that_hangs_at_open_does_not_stop_the_recorder_living():
+    """Opening a volume is `makedirs` on its root, and a mount that went quiet does not raise there either —
+    it waits in the kernel. It used to wait inside `volume_pass`, which runs inside `lease_pass`: the one
+    place a hang does the most damage, because it stops the renewals themselves. A recorder that restarted
+    during an outage and reached for its network archive stopped renewing its leases on the spot.
+
+    So opening runs on a thread of its own and is waited on for `OPEN_WAIT`. One that has not come back by
+    then is an archive that is AWAY — the same answer as a timeout that did come back: keep the volume,
+    point at it without touching its root, record into the spool, and say so."""
+    import vms.recworker as rw
+    from vms import volumes
+    box = Box()
+    cloud = os.path.join(box.root, "cloud")
+    volumes.write(box.vars, {"name": "cloud", "kind": "local", "url": cloud, "server": "srv-1", "quota_bytes": 10 ** 9})
+    release, real = threading.Event(), rw.ArchiveResource
+
+    class Hanging(real):
+        def __init__(self, spool, root, *a, create=True, **k):
+            if root == cloud and create:
+                release.wait(10)                                   # the mount does not answer
+            super().__init__(spool, root, *a, create=create, **k)
+    rw.ArchiveResource = Hanging
+    try:
+        r = _real_recorder(box)
+        r.OPEN_WAIT = 0.05
+        calls = {"heartbeat": 0, "lease": 0}
+        heartbeat, lease = r.heartbeat_once, r.lease_pass
+
+        def counted_heartbeat():
+            calls["heartbeat"] += 1
+            return heartbeat()
+
+        def counted_lease():
+            calls["lease"] += 1
+            return lease()
+        r.heartbeat_once, r.lease_pass = counted_heartbeat, counted_lease
+
+        t = _run_a_minute_in_the_background(r, box)
+        seen, state = dict(calls), (r.volume, r.archive_failure)
+        release.set(); t.join(timeout=10)
+    finally:
+        rw.ArchiveResource = real
+
+    assert seen["lease"] >= 5, f"leases renewed {seen['lease']} times while opening the archive hung"
+    assert seen["heartbeat"] >= 5, f"heartbeat sent {seen['heartbeat']} times while opening the archive hung"
+    assert state == ("cloud", "transient"), f"a volume that hung at open should be kept and said away, got {state}"
