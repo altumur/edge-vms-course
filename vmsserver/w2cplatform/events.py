@@ -190,3 +190,98 @@ def subsystems_under(root: str) -> dict[str, list[str]]:
         units = sorted(u for u in os.listdir(os.path.join(root, sub)) if os.path.isdir(os.path.join(root, sub, u)))
         out[sub] = units
     return out
+
+
+# ==================================================================================================
+# Suppression — the writer's work, because the writer is the only one who sees the stream before it
+# becomes a file.
+# ==================================================================================================
+# A storm of events is NORMAL, not a fault: a contact bouncing, a link flapping, a sensor re-reporting
+# for as long as the thing it watches keeps happening. Nothing downstream can undo one — an index reads
+# what is written, a timeline draws what it reads, and every reader that tried to collapse repeats would
+# do it its own way and disagree with the others. The one place a repeat can be recognised BEFORE it costs anything is the
+# process holding the unit's epoch, one line before `append`.
+#
+# Two things make suppression honest rather than a quiet loss of data:
+#
+#   1. The FIRST line of a window is written immediately and unchanged. Whatever the repeats are
+#      worth, the first occurrence is the observation, and delaying it to batch it would trade the
+#      one property an alarm has for a smaller file.
+#   2. What was dropped is SAID. When the window closes, a summary line carries `repeats`, `since`
+#      and `until`, so a quiet log and a suppressed storm are different things on the timeline.
+#      Without it suppression is indistinguishable from nothing having happened, which is the failure
+#      this whole module is built to avoid (`state`, `truncated`, `unreachable` — Lesson 13).
+@dataclass(frozen=True)
+class Suppress:
+    """One kind's rule. `window` in seconds; `by` are the fields that, with the kind, say two lines
+    are THE SAME THING — `None` means every field the line carries.
+
+    Every-field is the default because it cannot be wrong: two lines collapse only when they are
+    identical, so a contact that opens and then closes (`value` differs) is never one event, and the
+    same reading reported twice is never two. A subsystem narrows it when a field drifts for reasons
+    that are not a new observation — a score, a temperature, a counter."""
+    kind: str
+    window: float
+    by: tuple[str, ...] | None = None
+
+
+class Suppressor:
+    """Per (unit, kind, identity) counters, held by the writer for as long as it holds the unit.
+
+    Not a platform decision about what deserves suppressing: it applies the rules its subsystem
+    declared and nothing else. A kind with no rule passes through untouched, which is what every
+    subsystem gets until it says otherwise."""
+
+    def __init__(self, rules: dict[str, Suppress] | None = None):
+        self.rules = dict(rules or {})
+        self.open: dict[tuple, list] = {}          # key -> [since, until, repeats, kind, first fields]
+
+    # The identity of one line: the unit, the kind, and the values of the fields that decide sameness.
+    # `None` when this kind has no rule — the caller writes it and asks nothing further.
+    def key(self, unit: str, kind: str, fields: dict):
+        rule = self.rules.get(kind)
+        if rule is None:
+            return None
+        names = sorted(fields) if rule.by is None else sorted(rule.by)
+        return (str(unit), kind, tuple((n, fields.get(n)) for n in names))
+
+    # What to write for one observation, in order: `(t, kind, fields)` triples.
+    #
+    # Either one line (the observation, when nothing is being suppressed), or none (a repeat inside
+    # an open window), or two (the window closed: the summary of what it swallowed, then this line as
+    # the first of the new window). The summary comes FIRST because it happened first — a log read by
+    # time must not put the report of a storm after the line that ended it.
+    def lines(self, t: float, unit: str, kind: str, fields: dict) -> list[tuple[float, str, dict]]:
+        k = self.key(unit, kind, fields)
+        if k is None:
+            return [(t, kind, dict(fields))]
+        rule, state = self.rules[kind], self.open.get(k)
+        if state is not None and t - state[0] < rule.window:
+            state[1], state[2] = t, state[2] + 1                  # inside the window: counted, not written
+            return []
+        out = []
+        if state is not None and state[2]:
+            out.append(self._summary(k))
+        self.open[k] = [t, t, 0, kind, dict(fields)]
+        out.append((t, kind, dict(fields)))
+        return out
+
+    # Windows that have closed since the last call, as summaries — the lines nobody would otherwise
+    # write, because the storm stopped and no observation came to close the window. Called once a
+    # pass: without it a burst that ends is a burst nobody ever counted.
+    def flush(self, t: float) -> list[tuple[str, float, str, dict]]:
+        out = []
+        for k, state in sorted(self.open.items(), key=lambda kv: kv[1][0]):
+            if t - state[0] >= self.rules[state[3]].window:
+                if state[2]:
+                    out.append((k[0], *self._summary(k)))         # the unit too: the caller writes per unit
+                del self.open[k]
+        return out
+
+    # `repeats` is how many were swallowed, `since`/`until` the bounds they fell between — the three
+    # numbers an incident is reconstructed from. The fields are the FIRST line's of that window: with
+    # every-field identity they are all of them, and with a narrowed `by` they are one concrete
+    # example of what repeated.
+    def _summary(self, k) -> tuple[float, str, dict]:
+        since, until, repeats, kind, fields = self.open[k]
+        return (until, kind, {**fields, "repeats": repeats, "since": since, "until": until})

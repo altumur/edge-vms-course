@@ -100,9 +100,9 @@ from w2cplatform.contract import Subsystem, Worker
 from w2cplatform.objects import ObjectStore
 from w2cplatform.variables import Variables
 
-from w2cplatform.events import EventLog
+from w2cplatform.events import EventLog, Suppressor
 
-from .config import (PLAYBACK_PORT, RTSP_PORT, SHM_DIR, channel_of, device_of, live_shm, live_url,
+from .config import (PLAYBACK_PORT, RTSP_PORT, SHM_DIR, SPEC, channel_of, device_of, live_shm, live_url,
                      playback_url, port_of, row)
 from .reconciler import CONVERGED, Reconciler
 
@@ -326,6 +326,10 @@ class VmsWorker(Worker):
         self.rtsp_port = port_of(env.get("RTSP_PORT"), RTSP_PORT)
         self.playback_port = port_of(env.get("PLAYBACK_PORT"), PLAYBACK_PORT)
         self.bucket_seconds = bucket_seconds
+        # What this subsystem declared about repeats (`events.suppress`), held for as long as this worker
+        # holds its units. The counters live HERE and nowhere else: this process is the only one that sees
+        # the stream before it is a file, and the only one holding the epoch that makes the file writable.
+        self.suppressor = Suppressor(SPEC.suppress)
         self.observed: list[tuple[int, float, str]] = []
         # Request ids this worker has served — performed, refused or expired, all three being answers.
         # The heartbeat carries them and the controller's `clear_requests` removes the rows: a worker
@@ -522,7 +526,42 @@ class VmsWorker(Worker):
             return None
         t = self.wall()
         self.observed.append((cid, t, kind))
-        return EventLog(self.archive_root, self.SUB.name, str(cid), epoch, self.bucket_seconds).append(t, kind, **fields)
+        # Suppression stands between the observation and the file, and it is the LAST thing before the
+        # write for a reason: everything above this line — the epoch, the fence, `observed` — is about
+        # whether this worker may speak about this unit at all, and that answer does not change because
+        # the same thing happened twice. What comes back is what belongs in the log: usually this line,
+        # sometimes nothing, sometimes the summary of a window that just closed and then this line.
+        return self._write(cid, epoch, self.suppressor.lines(t, str(cid), kind, fields))
+
+    # Writes the lines a suppressor handed back, and answers with the path of the LAST one — the caller
+    # asked "where did my observation go", and the summary that may precede it is not its answer. `None`
+    # when nothing was written, which is what a suppressed repeat is.
+    def _write(self, cid: int, epoch: int, lines) -> str | None:
+        log_ = EventLog(self.archive_root, self.SUB.name, str(cid), epoch, self.bucket_seconds)
+        path = None
+        for t, kind, fields in lines:
+            path = log_.append(t, kind, **fields)
+        return path
+
+    # Windows that closed with nobody left to close them — the storm stopped, so no observation came to
+    # carry the summary out. Called once a pass: without it a burst that ENDS is a burst nobody ever
+    # counted, and the log says the quiet minute and the swallowed thousand with the same silence.
+    #
+    # A summary needs the epoch its window was opened under, and this worker may have lost the unit since.
+    # Then the line is dropped rather than written under a fresh epoch: the events it counted belong to
+    # the run that observed them, and moving them forward would put a predecessor's storm in a successor's
+    # bucket. Being fenced drops them for the same reason, one that this whole file already obeys.
+    def flush_suppressed(self) -> int:
+        if not self.recording_allowed:
+            return 0
+        written = 0
+        for unit, t, kind, fields in self.suppressor.flush(self.wall()):
+            epoch = self.epochs.get(str(unit))
+            if epoch is None:
+                continue
+            self._write(int(unit), epoch, [(t, kind, fields)])
+            written += 1
+        return written
 
     # The bus, drained: `actuator.pump()` gives `(dead, posted)`; every posted `(cid, kind, fields)` becomes
     # `observe(...)` — a line only if I still hold the epoch; every dead camera becomes
@@ -537,6 +576,7 @@ class VmsWorker(Worker):
         for cid in dead:
             self.reconciler.lost(cid, self.now())
             self.observe(cid, "silent")                 # the event with no segment open, by definition
+        self.flush_suppressed()                         # …storms that ENDED, which no observation will close
         self.requests()                                 # …and what somebody asked this device to DO
 
     # -- commands: `<sub>/requests/<id>`, done by whoever holds the device ------------------------------

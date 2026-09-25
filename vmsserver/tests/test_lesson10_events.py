@@ -245,3 +245,29 @@ def test_the_operators_timeline_can_ask_for_its_own_window():
         assert st == 400 and "middle" in rep["error"]               # the resource's door says the same thing
     finally:
         srv.shutdown(); rsrv.shutdown()
+
+
+def test_a_suppression_rule_is_refused_at_load_when_it_would_drop_more_than_it_says():
+    """Suppression drops observations, so its declaration is read strictly rather
+    than leniently. Every refusal here is a typo that would otherwise leave a
+    subsystem believing it had suppression, or having far more than it asked for —
+    and both failures are invisible, because what they produce is a log that looks
+    calm."""
+    from w2cplatform.spec import SubsystemSpec
+    base = {"name": "panel", "unit": {"rows": "panels", "fields": {"host": {"type": "string"}}}}
+
+    spec = SubsystemSpec.from_dict({**base, "events": {"suppress": {"io.input": {"window": 30}}}})
+    assert spec.suppress["io.input"].window == 30 and spec.suppress["io.input"].by is None   # every field: the safe default
+    assert SubsystemSpec.from_dict(base).suppress == {}                                      # and nothing at all by default
+
+    def refused(rule):
+        try:
+            SubsystemSpec.from_dict({**base, "events": {"suppress": {"io.input": rule}}})
+            raise AssertionError(f"accepted {rule}")
+        except ValueError as e:
+            return str(e)
+
+    assert "must be positive" in refused({"window": 0})          # the shape a typo takes, read as "no suppression"
+    assert "must be positive" in refused({})                     # a rule with no window is a kind not listed here
+    assert "would then be the same thing" in refused({"window": 30, "by": []})   # empty `by`: every line collapses into one
+    assert "the summary line writes itself" in refused({"window": 30, "by": ["repeats"]})

@@ -79,6 +79,7 @@ from urllib.parse import urlsplit
 from .secrets import is_secret_field
 from .blobs import digest as blob_digest, is_digest, verify
 from .contract import DRAIN_KEY, UNPLACED, Controller, Subsystem, slot_number
+from .events import Suppress
 from .limits import TooLarge
 from .objects import ObjectStore
 from .variables import Variables
@@ -172,6 +173,20 @@ class Derived:
     row: str                      # under the subsystem's prefix, with {id}
     items: dict                   # item -> field
     on_delete: dict | None = None # what the row becomes when the unit is deleted (None: left alone)
+
+
+# `events.suppress` parsed into `{kind: Suppress}`. `by` left out means every field of the line, which is
+# the reading that cannot lose an observation — see `Suppressor` in `events.py`. Read leniently HERE and
+# refused in `from_dict`: parsing says what was written, the checks say whether it may be used, and keeping
+# the two apart is what lets a refusal name the number it objects to.
+def suppress_rules(events: dict) -> dict[str, Suppress]:
+    out: dict[str, Suppress] = {}
+    for kind, rule in (events.get("suppress") or {}).items():
+        rule = rule or {}
+        by = rule.get("by")
+        out[str(kind)] = Suppress(str(kind), float(rule.get("window", 0) or 0),
+                                  tuple(str(b) for b in by) if by is not None else None)
+    return out
 
 
 # The parsed YAML. Fields: `name`; `rows` (`"units"`; the VMS says `cameras`); `id` (`"numeric"` or a field
@@ -289,6 +304,18 @@ class SubsystemSpec:
     # compare against, not a loser to strike through. Marking it `fenced` would tell an operator that the
     # search they ran last week was never valid.
     older_epochs: str = "fenced"
+    # `events: {suppress: {<kind>: {window: <seconds>, by: [<field>, …]}}}` — which of this subsystem's
+    # event kinds collapse when they repeat, and what counts as a repeat.
+    #
+    # A storm is normal, not a fault, and the only place a repeat costs nothing to recognise is the writer
+    # (`Suppressor`, `events.py`). The subsystem declares it because the timescale belongs to the event:
+    # a door contact bounces in milliseconds, a motion detector re-reports for as long as the scene moves,
+    # a link flaps for as long as the cable is bad. The platform holds none of those numbers.
+    #
+    # `by` defaults to every field of the line, which is the reading that cannot lose an observation: two
+    # lines collapse only when they are identical. A subsystem narrows it when a field drifts for a reason
+    # that is not a new observation.
+    suppress: dict[str, "Suppress"] = field(default_factory=dict)
 
     # Builds the spec from the YAML dict, tolerating absent sections. Field defaults are parsed to their
     # type once here (strings kept as strings so `"cam{id}"` survives). `snapshot` defaults to every field.
@@ -336,7 +363,8 @@ class SubsystemSpec:
                              [n for n, f in fields.items() if not is_secret_field(n) and f.type != "blob"]),
                    tables=tuple(str(t) for t in (d.get("tables") or [])),
                    running_gauge=str((d.get("console", {}) or {}).get("running", "units_running")),
-                   older_epochs=str((d.get("events", {}) or {}).get("older_epochs", "fenced")))
+                   older_epochs=str((d.get("events", {}) or {}).get("older_epochs", "fenced")),
+                   suppress=suppress_rules(d.get("events", {}) or {}))
         # A secret in the snapshot is a secret leaving the cluster: `vms/snapshot/*` is what М12's directory
         # reads. Refused at LOAD time, not watched for at review time — and only when it is named, because
         # the default ("every field") is a convenience and not a decision.
@@ -363,6 +391,23 @@ class SubsystemSpec:
         if spec.older_epochs not in ("fenced", "earlier-run"):
             raise ValueError(f"spec {spec.name}: events.older_epochs is fenced or earlier-run, "
                              f"not {spec.older_epochs!r} — the page draws one of the two")
+        # Suppression drops observations, so its declaration is refused at LOAD time rather than read
+        # leniently. A window of zero is the shape a typo takes (`window: 0`, a missing key, a string
+        # that did not parse), and reading it as "no suppression" would leave a subsystem believing it
+        # had some. The fields naming what repeats are names, never a path or the reserved words the
+        # summary line itself carries.
+        for r in spec.suppress.values():
+            if r.window <= 0:
+                raise ValueError(f"spec {spec.name}: events.suppress.{r.kind}.window is seconds and must be "
+                                 f"positive, not {r.window!r} — a kind with no window is a kind not listed here")
+            if r.by is not None and not r.by:
+                raise ValueError(f"spec {spec.name}: events.suppress.{r.kind}.by is empty — every line of "
+                                 f"{r.kind} would then be the same thing. Leave `by` out for every field, "
+                                 f"or name the fields that decide sameness")
+            for b in r.by or ():
+                if not b or "/" in b or b in ("repeats", "since", "until"):
+                    raise ValueError(f"spec {spec.name}: events.suppress.{r.kind}.by names {b!r} — a field "
+                                     f"name, and not one the summary line writes itself")
         if spec.retire_field and spec.retire_field not in fields:
             raise ValueError(f"spec {spec.name}: retire_when names no field: {spec.retire_field!r}")
         if bool(spec.retire_field) != bool(spec.retire_values):

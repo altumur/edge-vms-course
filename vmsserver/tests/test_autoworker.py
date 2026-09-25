@@ -340,3 +340,37 @@ def test_a_cut_window_is_reported_even_when_fencing_hides_the_count():
     assert cut["limit"] == AutoWorker.PER_KIND and cut["keep"] == "newest"   # it asks for the newest end…
     assert any("came back full" in m and "vms.io.input" in m for m in seen), \
         "the window was cut and the evaluator said nothing: fencing put the count below the limit"
+
+
+def test_the_summary_of_a_suppressed_storm_does_not_fire_a_scenario():
+    """The writer collapses repeats and says what it swallowed: one line with
+    `repeats`, `since` and `until` (М10A, урок 12). That line is for the operator
+    reading the timeline and for whoever reconstructs the incident — it is not a
+    new observation, and the first line of that window already fired this scenario.
+
+    Acting on it too would open the door a second time for one continuous event,
+    and would do it worse the louder the sensor: the longer the storm, the more
+    summaries. So a line carrying `repeats` never fires, and that is one condition
+    in `fires`, next to the matching it belongs with — not a filter each consumer
+    re-invents."""
+    box = Box()
+    t = box.wall()
+    summary = ev(t - 2, "vms", 12, "io.input", port="1", value="closed",
+                 repeats=200, since=t - 10, until=t - 2)
+
+    _scenario(box, name="one", when=[DOOR["when"][0]], within=0, then=[DOOR["then"][0]])
+    _assigned(box, "one")
+
+    w = _worker(box, _Log([summary], wall=box.wall))
+    assert w.reconcile_once() == [], "the summary of a storm fired a scenario on its own"
+    assert box.vars.list("vms/requests/") == []
+
+    box2 = Box()
+    _scenario(box2, name="one", when=[DOOR["when"][0]], within=0, then=[DOOR["then"][0]])
+    _assigned(box2, "one")
+    t2 = box2.wall()
+    w2 = _worker(box2, _Log([ev(t2 - 10, "vms", 12, "io.input", port="1", value="closed"),
+                             ev(t2 - 2, "vms", 12, "io.input", port="1", value="closed",
+                                repeats=200, since=t2 - 10, until=t2 - 2)], wall=box2.wall))
+    assert w2.reconcile_once() == ["one"]                       # the observation fires it…
+    assert len(box2.vars.list("vms/requests/")) == 1, "one continuous event, one request"   # …and only it

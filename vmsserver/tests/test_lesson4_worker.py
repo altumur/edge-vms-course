@@ -238,3 +238,68 @@ def test_the_first_heartbeat_does_not_wait_for_the_first_tick():
     assert sent and sent[0] == 0.0, f"the first heartbeat waited: {sent}"
     assert len(sent) == 2, sent          # the announcement, and the orderly stop's own
     assert box.objects.get("vms/heartbeats/w-1")
+
+
+def test_a_storm_becomes_one_line_and_a_count_of_what_it_swallowed():
+    """A storm of events is normal, not a fault: a contact bouncing, a link
+    flapping, a device re-reporting for as long as the thing it watches keeps
+    happening. Nothing downstream can undo one — an index reads what is
+    written, a timeline draws what it reads, and every reader that collapsed
+    repeats on its own would disagree with the others. The one place a repeat
+    costs nothing to recognise is the process holding the epoch, one line
+    before the write.
+
+    Two properties make that honest rather than a quiet loss of data. The
+    FIRST line of a window is written immediately and unchanged, because
+    whatever the repeats are worth, the first occurrence is the observation.
+    And what was swallowed is SAID: `repeats`, `since` and `until`, so a quiet
+    log and a suppressed storm are different things on the timeline."""
+    from w2cplatform.events import read_bucket
+    box, ctl = _box_with_cameras(1)
+    ctl.assign("w-1", ["1"])
+    act = FakeActuator(); w = VmsWorker("w-1", box.vars, box.objects, act, clock=box.clock, wall=box.wall, archive_root=box.archive)
+    w.reconcile_once()
+
+    p = w.observe(1, "io.input", port="1", value="closed")        # the first one is the news…
+    for _ in range(200):                                          # …and the next two hundred are the same news
+        box.wall.advance(0.1); w.observe(1, "io.input", port="1", value="closed")
+    assert len(read_bucket(p)) == 1, "the window is open: repeats are counted, not written"
+
+    box.wall.advance(30)                                          # the window closes, and the next observation carries the count out
+    w.observe(1, "io.input", port="1", value="closed")
+    rows = read_bucket(p)
+    assert [r.get("repeats") for r in rows] == [None, 200, None]  # summary between the two windows' first lines
+    assert abs((rows[1]["until"] - rows[1]["since"]) - 20.0) < 0.01 and rows[1]["value"] == "closed"
+    assert rows[1]["t"] == rows[1]["until"], "the summary is dated when the storm ended, not when it was reported"
+
+
+def test_a_contact_that_changes_is_never_one_event_and_a_storm_that_ends_is_counted():
+    """Sameness is every field by default, which is the reading that cannot
+    lose an observation: a contact that opens and then closes differs in
+    `value`, so it is two events however fast it moves. That default is why
+    suppression can be turned on for a kind without first proving which of its
+    fields matter.
+
+    And a burst that ENDS still gets counted. Nothing observes it closed — the
+    storm stopped — so the pass flushes the window: without that, the quiet
+    minute and the swallowed thousand look the same in the log."""
+    from w2cplatform.events import read_bucket
+    box, ctl = _box_with_cameras(1)
+    ctl.assign("w-1", ["1"])
+    act = FakeActuator(); w = VmsWorker("w-1", box.vars, box.objects, act, clock=box.clock, wall=box.wall, archive_root=box.archive)
+    w.reconcile_once()
+
+    p = w.observe(1, "io.input", port="1", value="closed")
+    box.wall.advance(0.1); w.observe(1, "io.input", port="1", value="open")      # a different thing…
+    box.wall.advance(0.1); w.observe(1, "io.input", port="2", value="closed")    # …and a different contact
+    assert [r["value"] for r in read_bucket(p)] == ["closed", "open", "closed"]
+
+    box.wall.advance(0.1)
+    for _ in range(9):
+        box.wall.advance(0.1); w.observe(1, "io.input", port="2", value="closed")
+    assert w.flush_suppressed() == 0, "the window has not closed yet: nothing to report"
+    box.wall.advance(30)
+    assert w.flush_suppressed() == 1
+    last = read_bucket(p)[-1]
+    assert last["repeats"] == 9 and last["port"] == "2"
+    assert w.flush_suppressed() == 0, "a window is reported once"

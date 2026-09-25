@@ -121,7 +121,15 @@ def refuse_scenario(fields: dict) -> None:
 #
 # Matching is equality on strings and nothing else. No ranges, no negation, no substring: each of those is
 # a question about what the operator meant, and the answer belongs in another trigger or in another field.
+#
+# A line carrying `repeats` is the summary of a window the WRITER suppressed (`Suppressor`, М10A урок 12),
+# and it never fires. It is not a new observation: the first line of that window was, and it fired this
+# scenario already. Acting on the summary too would open the door a second time for one continuous event —
+# and would do it worse the longer the storm ran, because the louder the sensor, the more summaries.
+# The summary exists for the operator reading the timeline and for whoever reconstructs the incident.
 def fires(trigger: dict, event: dict) -> bool:
+    if "repeats" in event:
+        return False
     if str(trigger.get("sub", "")) != str(event.get("subsystem", "")):
         return False
     if str(trigger.get("kind", "")) != str(event.get("kind", "")):

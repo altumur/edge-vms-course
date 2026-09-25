@@ -146,6 +146,29 @@ console:
   # been `units_running`.
   running: cameras_running             # vms_cameras_running: cameras held — streaming to whoever subscribes; recording is rec's gauge
 
+events:
+  # Which of this subsystem's events collapse when they repeat. A storm is normal, not a fault, and the
+  # only place a repeat costs nothing to recognise is the worker holding the device — one line before the
+  # write (`w2cplatform/events.py`, `Suppressor`; М10A, урок 12).
+  #
+  # The first line of every window goes into the log immediately and unchanged: whatever the repeats are
+  # worth, the first occurrence is the observation. What was swallowed is said when the window closes —
+  # one line carrying `repeats`, `since` and `until`, so a quiet log and a suppressed storm are different
+  # things on the timeline.
+  #
+  # `by` is left out everywhere here, which means "every field of the line": two lines collapse only when
+  # they are identical. A contact that opens and then closes differs in `value` and is never one event;
+  # only the same reading, repeated, is.
+  suppress:
+    io.input:
+      window: 30                       # a contact bounces for milliseconds and a bad one for hours; thirty
+                                       # seconds is long enough that a swinging gate is one line per window,
+                                       # short enough that a door genuinely used twice a minute is two.
+    silent:
+      window: 60                       # a camera that cannot be reached posts this every pass — once every
+                                       # two seconds, for as long as the network is down. The first one is
+                                       # the news; the next thirty are the same news.
+
 # ================================================================================================
 # NOTES — what every part of this file does and why (kept beside the code, not in a separate document)
 # ================================================================================================
