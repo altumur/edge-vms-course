@@ -39,7 +39,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from .federation import DomainDirectory, Federation, Unreachable
+from .federation import Answer, DomainDirectory, Federation, Unreachable
 
 
 @dataclass
@@ -89,10 +89,14 @@ class Snapshot:
     ts: float
     server: str
     status: list[dict]
+    doors: dict | None = None   # the worker's published doors — live_url, playback_url, coverage (Lesson 13)
+
+DOORS = ("live_url", "playback_url", "coverage")
 
 
 class ReadView:
-    def __init__(self, fed: Federation, lost_after: float = 45.0, wall=time.time):
+    def __init__(self, fed: Federation, lost_after: float = 45.0, wall=time.time, lanes: int = 1,
+                 backoff: float = 0.0, backoff_max: float = 60.0):
         self.fed, self.lost_after, self.wall = fed, lost_after, wall
         self.snapshots: dict[tuple[str, str], Snapshot] = {}     # (cluster, worker) -> last heartbeat seen
         self.configured: dict[str, list[dict]] = {}              # cluster -> the rows its snapshot carries
@@ -100,26 +104,57 @@ class ReadView:
         self.cluster_ok: dict[str, float] = {}
         self.cluster_down_since: dict[str, float] = {}
         self.passes = 0
+        # Lesson 11. `lanes` members are read at once; a member that did not answer is not asked again
+        # until `retry_at` — `backoff` seconds after its first silence, doubling to `backoff_max`. With the
+        # defaults (one lane, no backoff) a pass is what it was in Lesson 3: every member, in order.
+        self.lanes, self.backoff, self.backoff_max = max(1, lanes), backoff, backoff_max
+        self.failures: dict[str, int] = {}
+        self.retry_at: dict[str, float] = {}
 
     # -- the one pass ----------------------------------------------------------
+    # One member's part of it. The heartbeats, then the cluster's own copy of what SHOULD exist, for the
+    # cameras no worker reports — read in the same call and from the same member, so a member that goes
+    # unreachable loses both together rather than leaving one of them stale in a way nothing explains.
+    # The snapshot is read ONCE: this used to call `c.snapshot()` twice, for the rows and for their age,
+    # which at three clusters was invisible and at three hundred is a third of every pass (Lesson 11).
+    @staticmethod
+    def _read(c) -> tuple[dict, dict]:
+        return c.heartbeats(), (c.snapshot() or {})
+
     def refresh(self) -> None:
         now = self.wall()
-        for name, c in self.fed.clusters.items():
-            try:
-                for w, hb in c.heartbeats().items():
-                    self.snapshots[(name, w)] = Snapshot(w, name, float(hb.get("ts", 0)), str(hb.get("server", "?")),
-                                                         list(hb.get("status", [])))
-                # …and the cluster's own copy of what SHOULD exist, for the cameras no worker reports.
-                # Read in the same pass and from the same cluster, so a cluster that goes unreachable
-                # loses both together rather than leaving one of them stale in a way nothing explains.
-                self.configured[name] = (c.snapshot() or {}).get("cameras", [])
-                self.configured_at[name] = float((c.snapshot() or {}).get("ts", 0))
-            except Unreachable:
+        due = [(n, c) for n, c in self.fed.clusters.items() if self.retry_at.get(n, 0) <= now]
+        if self.lanes > 1 and len(due) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(self.lanes, len(due))) as pool:
+                results = list(pool.map(lambda nc: self._try(nc[1]), due))
+        else:
+            results = [self._try(c) for _, c in due]
+        for (name, _), got in zip(due, results):
+            if got is None:
                 self.cluster_down_since.setdefault(name, now)
+                if self.backoff:
+                    self.failures[name] = self.failures.get(name, 0) + 1
+                    self.retry_at[name] = now + min(self.backoff_max, self.backoff * 2 ** (self.failures[name] - 1))
                 continue
+            hbs, snap = got
+            for w, hb in hbs.items():
+                self.snapshots[(name, w)] = Snapshot(w, name, float(hb.get("ts", 0)), str(hb.get("server", "?")),
+                                                     list(hb.get("status", [])),
+                                                     {k: hb[k] for k in DOORS if hb.get(k) is not None})
+            self.configured[name] = snap.get("cameras", [])
+            self.configured_at[name] = float(snap.get("ts", 0))
             self.cluster_ok[name] = now
             self.cluster_down_since.pop(name, None)
+            self.failures.pop(name, None)
+            self.retry_at.pop(name, None)
         self.passes += 1
+
+    def _try(self, c):
+        try:
+            return self._read(c)
+        except Unreachable:
+            return None
 
     # -- reads, from memory ----------------------------------------------------
     # The cluster that last reported the camera the domain calls `camera`, and the row it reported — kept when
@@ -131,6 +166,22 @@ class ReadView:
                 if str(row.get("ref", "")) == str(camera):
                     return cluster, row
         return None
+
+    # Lesson 11: "where is camera X", answered from this pass's memory instead of a scan of every member.
+    # `DomainDirectory.where` reads every cluster's snapshot on every call — at three clusters a detail, at
+    # three hundred members two calls each, per camera, per edit. The answer is as old as the last pass, and
+    # it says so the way the directory's does: found only in a member that answered, and the silent ones named.
+    def where(self, camera) -> Answer:
+        down = sorted(n for n in self.fed.clusters if n in self.cluster_down_since or n not in self.cluster_ok)
+        searched = sorted(n for n in self.fed.clusters if n not in down)
+        hits = [(cl, row) for cl in searched for row in self.configured.get(cl, [])
+                if str(row.get("ref", "")) == str(camera)]
+        if len(hits) > 1:
+            raise RuntimeError(f"camera {camera} claimed by {[h[0] for h in hits]}: a placement failure, not a tie")
+        if hits:
+            cl, row = hits[0]
+            return Answer(camera, row.get("worker"), row.get("server"), cl, searched, down)
+        return Answer(camera, None, None, None, searched, down)
 
     def rows(self) -> list[Row]:
         now = self.wall()

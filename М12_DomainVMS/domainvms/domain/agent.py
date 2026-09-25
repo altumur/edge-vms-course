@@ -20,6 +20,10 @@ from .federation import Unreachable
 from .tokens import KeySet, RevocationList
 
 KEYS_PATH, REVOKED_PATH, GRANTS_PATH = "domain/keys", "domain/revoked", "domain/grants"
+# Lesson 13: where this cluster's recorders find cameras of OTHER clusters. Lesson 14: whose closed alarm
+# buckets this cluster keeps a copy of.
+SOURCES_PATH, MIRRORS_PATH = "domain/sources", "domain/mirrors"
+PER_CLUSTER = (SOURCES_PATH, MIRRORS_PATH)
 
 
 class DomainPublisher:
@@ -48,12 +52,18 @@ class DomainPublisher:
 
 class DomainAgent:
     def __init__(self, cluster: str, domain_vars: Variables, cluster_vars: Variables, now=time.time,
-                 console=None, current=None):
+                 console=None, current=None, domain_objects=None, cluster_objects=None):
         """`console` and `current` are Lesson 9: this cluster's console, which writes its rows, and
         `current(ref) -> (id, row)` for a camera by the domain's name. Given them, the agent also applies
-        the edits the domain kept while this cluster was off. Without them it only carries them home."""
+        the edits the domain kept while this cluster was off. Without them it only carries them home.
+
+        `domain_objects` and `cluster_objects` are Lesson 12: where the domain publishes documents, and
+        this cluster's DURABLE object store, where the agent keeps the copy it verified. Given them, it
+        carries the shared settings home."""
         self.cluster, self.domain_vars, self.cluster_vars, self.now = cluster, domain_vars, cluster_vars, now
         self.console, self.current = console, current
+        self.domain_objects, self.cluster_objects = domain_objects, cluster_objects
+        self.shared = self.backup = self.host = ""          # what the last pass did with each document
         self.last_synced: float | None = None
         self.syncs = 0
 
@@ -73,9 +83,12 @@ class DomainAgent:
             revoked, _ = self.domain_vars.get(REVOKED_PATH)
             grants, _ = self.domain_vars.get(f"{GRANTS_PATH}/{self.cluster}")
             pending, _ = self.domain_vars.get(f"{PENDING_PATH}/{self.cluster}")
+            # What the domain decided for THIS cluster in the later lessons — each one more row of the same
+            # kind: written by the domain under `<path>/<cluster>`, carried home to `<path>`.
+            later = [(path, self.domain_vars.get(f"{path}/{self.cluster}")[0]) for path in PER_CLUSTER]
         except Unreachable:
             return False
-        for path, items in ((KEYS_PATH, keys), (REVOKED_PATH, revoked), (GRANTS_PATH, grants)):
+        for path, items in ((KEYS_PATH, keys), (REVOKED_PATH, revoked), (GRANTS_PATH, grants), *later):
             self._carry(path, items)
         # Edits the domain kept while this cluster was off (Lesson 9) — carried home even when there are
         # none left, because an edit the domain has cleared must stop being applied here. Then applied, by
@@ -88,6 +101,23 @@ class DomainAgent:
             outcomes = apply_pending(entries, self.current, self.console, self.now())
             self._carry(OUTCOMES_PATH, {k: json.dumps(v, ensure_ascii=False, sort_keys=True)
                                         for k, v in outcomes.items()}, clear=True)
+        # The shared settings (Lesson 12), checked against the key set this pass just carried — the member's
+        # own, never one that came with the document.
+        # And Lesson 15: which member hosts the domain — carried like the keys, but never to a smaller term —
+        # and, on the members chosen to keep it, the backup of the domain's state, carried like the settings.
+        from .term import BACKUP, carry_host
+        keyset = ClusterTrust(self.cluster_vars).keyset()
+        try:
+            self.host = carry_host(self.domain_vars, self.cluster_vars, keyset, self.now()) if keyset else "no keys yet"
+            if self.domain_objects is not None and self.cluster_objects is not None:
+                from .shared import carry
+                self.shared = carry(self.domain_vars, self.domain_objects, self.cluster_vars, self.cluster_objects,
+                                    keyset, self.now())
+                self.backup = carry(self.domain_vars, self.domain_objects, self.cluster_vars, self.cluster_objects,
+                                    keyset, self.now(), src=f"{BACKUP}/{self.cluster}", dst=BACKUP, obj=BACKUP,
+                                    refused=f"{BACKUP}-refused")
+        except Unreachable:
+            return False
         self.last_synced = self.now()
         self.syncs += 1
         return True

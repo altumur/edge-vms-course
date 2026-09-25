@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .federation import DomainDirectory
+from .federation import DomainDirectory, Unreachable
 
 FORBIDDEN_FIELDS = ("cluster", "worker", "server", "placement", "epoch", "observed_revision", "phase", "revision")
 
@@ -81,7 +81,17 @@ class ConsoleAPI:
                 self._seen[idempotency_key] = kept
                 return kept
             raise ApiError(404 if ans.complete else 503, ans.sentence())
-        result = self.consoles(ans.cluster).update_camera(camera, fields, subject)
+        try:
+            result = self.consoles(ans.cluster).update_camera(camera, fields, subject)
+        except Unreachable:
+            # It answered the directory and not the edit — gone between the two, or, with a directory
+            # answered from memory (Lesson 11), gone since the last pass. Either way the owner is known,
+            # and silent: the same case as Lesson 9's.
+            kept = self._keep_for(ans.cluster, camera, fields, subject)
+            if kept is None:
+                raise ApiError(503, f"{ans.cluster} did not answer the edit")
+            self._seen[idempotency_key] = kept
+            return kept
         resp = {"camera": camera, "cluster": ans.cluster, "worker": ans.worker, "result": result,
                 "authenticated": self.verifier is not None}
         self._seen[idempotency_key] = resp
@@ -97,7 +107,15 @@ class ConsoleAPI:
         known = self.last_known(camera)
         if known is None or known[0] not in ans.unreachable:
             return None
-        cluster, row = known
+        return self._keep_for(known[0], camera, fields, subject)
+
+    def _keep_for(self, cluster: str, camera, fields: dict, subject: str | None) -> dict | None:
+        if self.pending is None or self.last_known is None:
+            return None
+        known = self.last_known(camera)
+        if known is None or known[0] != cluster:
+            return None
+        row = known[1]
         entry = self.pending.add(cluster, camera, fields, row, subject)
         return {"camera": camera, "cluster": cluster, "pending": True, "fields": entry["fields"],
                 "detail": f"{cluster} is not answering; the edit is kept and will be applied when it is back",

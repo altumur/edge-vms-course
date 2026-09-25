@@ -25,7 +25,7 @@ Builds and returns the request handler class closed over this console.
 - `do_PUT`:
   - only `/api/cameras/<camera>`; else 404.
   - `Idempotency-Key` header required, else `400` with the sentence "a retried PUT must be the same PUT".
-  - reads `Content-Length` bytes of JSON as `fields` (empty body → `{}`), calls `api.update_camera(<camera>, fields, key, token)` → `200` with its response; an `ApiError` becomes its status and `{"detail": …}`. Other exceptions are not caught here.
+  - reads `Content-Length` bytes of JSON as `fields` (empty body → `{}`), calls `api.update_camera(<camera>, fields, key, token)` → `200` with its response, or `202` when the response says `pending` — an edit kept for a cluster that is off (Lesson 9): accepted is not applied; an `ApiError` becomes its status and `{"detail": …}`. Other exceptions are not caught here.
 - `log_message` — silenced.
 
 ### `serve(self, host="127.0.0.1", port=8090) -> ThreadingHTTPServer`

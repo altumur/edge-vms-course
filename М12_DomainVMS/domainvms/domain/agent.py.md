@@ -13,11 +13,16 @@
 ### `publish_grants(self, cluster, grants)` — `domain/grants/<cluster>` ← `grants_to_items(grants)`, by CAS; "the cluster's agent copies them home". Called only by tests (see Notes).
 
 ## `class DomainAgent`
-### `__init__(self, cluster, domain_vars, cluster_vars, now=time.time)`
-`cluster` is this cluster's name (selects its grants); `domain_vars` the domain cluster's Variables (read); `cluster_vars` this cluster's Variables through the agent's own token (written). `last_synced`, `syncs` for the log line and the tests.
+### `__init__(self, cluster, domain_vars, cluster_vars, now=time.time, console=None, current=None, domain_objects=None, cluster_objects=None)`
+`console` and `current(ref) -> (id, row)` are Lesson 9: given them the agent also applies the edits the domain kept for this cluster, through the cluster's own console. `domain_objects` (where the domain publishes documents) and `cluster_objects` (this cluster's DURABLE store) are Lessons 12 and 15: given them it carries the shared settings and, on a member chosen to keep it, the backup of the domain's state. `shared`, `backup`, `host` hold what the last pass did with each document, for the console and the tests.
+
+### `_carry(self, path, items, clear=False)`
+Copy one Variable home, by CAS, only if it differs. `items is None` means the domain has nothing there, and nothing is written — unless `clear`, which carries an EMPTY set too: an edit the domain has cleared must stop being applied here (Lesson 9).
 
 ### `sync(self) -> bool`
 One pass. Reads the three Variables from the domain (`domain/keys`, `domain/revoked`, `domain/grants/<cluster>`); `Unreachable` → `False` and nothing written (`test_domain_down_clusters_keep_verifying_nobody_new_logs_in` asserts `last_synced` unchanged). For each of the three that exists on the domain side, compare with what the cluster has and `put` by CAS only if different — an unchanged set costs no raft write. Stamps `last_synced`, counts, returns `True`. `test_nothing_about_a_user_reaches_a_worker_only_trust_does`: after a sync south's Variables under `domain/` are exactly `["domain/keys"]` and under `identity/` nothing; and the agent's writer handle gets `Forbidden` on `vms/cameras/7`, `vms/epoch/7`, `vms/slots/w-0`.
+
+Since Lessons 9–15 the same pass also: reads `domain/pending/<cluster>` and the per-cluster rows in `PER_CLUSTER` (`domain/sources/<cluster>` — Lesson 13's source book; `domain/mirrors/<cluster>` — Lesson 14's mirror plan) and carries each to its unsuffixed path; carries the pending edits with `clear=True`, applies them with `apply_pending` and writes the outcomes to `domain/outcomes`; carries the host record with `term.carry_host`, which never takes a smaller term (Lesson 15); and, given the object stores, carries the shared settings and this member's backup pointer with `shared.carry`, verified against the key set this pass just carried. Any `Unreachable` along the way → `False`.
 
 ## `class ClusterTrust`
 "What a cluster's console and gateway read from THEIR OWN cluster's Variables — never from the domain — to verify tokens and decide grants offline."

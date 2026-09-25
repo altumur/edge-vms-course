@@ -24,15 +24,24 @@ Silence explained at the largest failure domain.
 ### `sentence(self) -> str` — `server silent: north/srv-1 for 100 s — 2 worker(s), 100 camera(s)`.
 
 ## `class Snapshot` (dataclass)
-The last heartbeat seen from one worker, as kept in memory: `worker`, `cluster`, `ts`, `server`, `status` (the raw list of status dicts). Not to be confused with a cluster's `vms/snapshot` object.
+The last heartbeat seen from one worker, as kept in memory: `worker`, `cluster`, `ts`, `server`, `status` (the raw list of status dicts), and `doors` — the worker's published `live_url`, `playback_url` and `coverage` (`DOORS`), kept since Lesson 13 because the source book is built from them. Not to be confused with a cluster's `vms/snapshot` object.
 
 ## `class ReadView`
 
-### `__init__(self, fed, lost_after=45.0, wall=time.time)`
-`lost_after` is the same 45 s as М11's `disconnect.lost_after` and the resource's `lost_after`: a heartbeat older than this means the worker is gone. State: `snapshots: {(cluster, worker): Snapshot}`, `configured: {cluster: [snapshot rows]}` and `configured_at: {cluster: ts}` (the second source and its age) (survives across passes — that is what keeps an unreachable cluster's rows), `cluster_ok: {cluster: last good pass time}`, `cluster_down_since: {cluster: first failed pass time}`, `passes` (reported by `/healthz`).
+### `__init__(self, fed, lost_after=45.0, wall=time.time, lanes=1, backoff=0.0, backoff_max=60.0)`
+`lost_after` is the same 45 s as М11's `disconnect.lost_after` and the resource's `lost_after`: a heartbeat older than this means the worker is gone. State: `snapshots: {(cluster, worker): Snapshot}`, `configured: {cluster: [snapshot rows]}` and `configured_at: {cluster: ts}` (the second source and its age) (survives across passes — that is what keeps an unreachable cluster's rows), `cluster_ok: {cluster: last good pass time}`, `cluster_down_since: {cluster: first failed pass time}`, `passes` (reported by `/healthz`). Lesson 11: `lanes` members are read at once; `backoff` > 0 makes a silent member wait `backoff · 2^(failures−1)` seconds, capped at `backoff_max`, before it is asked again (`failures`, `retry_at`). The defaults are Lesson 3's pass: one lane, every member every pass.
+
+### `_read(c)` (static) and `_try(self, c)`
+One member's part of a pass: `c.heartbeats()` and `c.snapshot()`, each read ONCE — the pass used to call `snapshot()` twice (for the rows and for their age), a third of every pass at three hundred members (`test_one_pass_asks_each_member_four_things_and_no_more`). `_try` turns `Unreachable` into `None`.
 
 ### `refresh(self) -> None`
-The one pass. For each cluster, `heartbeats()`; every worker's heartbeat replaces its `Snapshot` (`ts`, `server`, `status`); then `snapshot()` for the same cluster, so a cluster that goes unreachable loses both sources together rather than leaving one stale in a way nothing explains. `Unreachable` marks `cluster_down_since` (kept at its first value) and leaves that cluster's snapshots as they were; success records `cluster_ok` and clears `cluster_down_since`. Increments `passes`. A partially read cluster (the exception in the middle of the loop) keeps whatever was already replaced.
+The one pass, over the members whose `retry_at` has come. Read in a thread pool of `lanes` when `lanes > 1`, in turn otherwise; the results are applied in member order either way (`test_reading_in_lanes_changes_the_time_and_nothing_else`; `test_lanes_are_real_threads_not_only_arithmetic` times real sleeping stores). For a member that answered: every worker's heartbeat replaces its `Snapshot`, the snapshot's rows and `ts` replace `configured`/`configured_at`, `cluster_ok` is stamped, and `cluster_down_since`, `failures`, `retry_at` are cleared. For one that did not: `cluster_down_since` (kept at its first value), and with `backoff` the next `retry_at`. Its rows stay as they were. Increments `passes`.
+
+### `last_known(self, camera) -> tuple[str, dict] | None`
+Lesson 9. The cluster whose last snapshot carried the camera the domain calls `camera` (its `ref`), and that row — kept when the cluster stops answering, which is the point: a kept edit is measured against what the domain last saw.
+
+### `where(self, camera) -> Answer`
+Lesson 11. "Where is camera X" from this pass's memory instead of `DomainDirectory.where`'s scan of every member — which at three hundred members is two calls per member per edit (`test_where_from_the_directory_scans_every_member_on_every_edit`: 28 550 calls for fifty edits through the directory, none from memory). Exactly as honest: found only in a member that answered, `unreachable` lists the silent ones and the never-read, two claimants raise.
 
 ### `rows(self) -> list[Row]`
 From memory: for each snapshot, `age = now − ts`, `worker_state` = `unreachable` if the cluster is down, else `stale` if `age > lost_after`, else `live`; one `Row` per status entry. Sorted by (cluster, worker, camera).
