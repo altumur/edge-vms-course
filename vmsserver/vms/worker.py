@@ -100,7 +100,7 @@ from w2cplatform.contract import Subsystem, Worker
 from w2cplatform.objects import ObjectStore
 from w2cplatform.variables import Variables
 
-from w2cplatform.events import EventLog, Suppressor
+from w2cplatform.events import ALARM, OBSERVATION, EventLog, Suppressor
 
 from .config import (PLAYBACK_PORT, RTSP_PORT, SHM_DIR, SPEC, channel_of, device_of, live_shm, live_url,
                      playback_url, port_of, row)
@@ -531,16 +531,29 @@ class VmsWorker(Worker):
         # whether this worker may speak about this unit at all, and that answer does not change because
         # the same thing happened twice. What comes back is what belongs in the log: usually this line,
         # sometimes nothing, sometimes the summary of a window that just closed and then this line.
-        return self._write(cid, epoch, self.suppressor.lines(t, str(cid), kind, fields))
+        return self._write(cid, epoch, self.suppressor.lines(t, str(cid), kind, fields), self.class_of(cid, kind))
+
+    # The traffic class of one line: `alarm` when this DEVICE lists this kind among its alarms, else
+    # `observation`. The platform fixes the two words and refuses anything else (`events.py`); which of a
+    # device's kinds belong to which is the operator's, on the row, because it is a fact about the wiring —
+    # the same `io.input` is a door forced on one camera and a technician's cabinet on the next.
+    #
+    # A camera this worker holds no row for reads as observation rather than refusing: the epoch says the
+    # unit is mine, the row may be a pass behind, and downgrading a line beats dropping it.
+    def class_of(self, cid: int, kind: str) -> str:
+        row = next((r for r in self.rows if str(r.get("id")) == str(cid)), None)
+        alarms = (row or {}).get("alarms") or ""
+        names = alarms if isinstance(alarms, (list, tuple)) else str(alarms).split(",")
+        return ALARM if kind in [str(n).strip() for n in names if str(n).strip()] else OBSERVATION
 
     # Writes the lines a suppressor handed back, and answers with the path of the LAST one — the caller
     # asked "where did my observation go", and the summary that may precede it is not its answer. `None`
     # when nothing was written, which is what a suppressed repeat is.
-    def _write(self, cid: int, epoch: int, lines) -> str | None:
+    def _write(self, cid: int, epoch: int, lines, cls: str = OBSERVATION) -> str | None:
         log_ = EventLog(self.archive_root, self.SUB.name, str(cid), epoch, self.bucket_seconds)
         path = None
         for t, kind, fields in lines:
-            path = log_.append(t, kind, **fields)
+            path = log_.append(t, kind, cls, **fields)
         return path
 
     # Windows that closed with nobody left to close them — the storm stopped, so no observation came to
@@ -559,7 +572,7 @@ class VmsWorker(Worker):
             epoch = self.epochs.get(str(unit))
             if epoch is None:
                 continue
-            self._write(int(unit), epoch, [(t, kind, fields)])
+            self._write(int(unit), epoch, [(t, kind, fields)], self.class_of(int(unit), kind))
             written += 1
         return written
 

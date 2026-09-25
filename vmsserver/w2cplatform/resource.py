@@ -542,7 +542,7 @@ class Resource:
 # - `do_GET`:
 #   - `GET /buckets/<sub>/<unit>` — `buckets_under` for that unit, one `Bucket.line()` per line, 200.
 #   - `GET /mirrored/<server>` — `mirrored_buckets` for that server, same format.
-#   - `GET /events?from&to&cam&kind&subsystem&unit&limit&keep` — `resource.database.query(...)` as JSON
+#   - `GET /events?from&to&cam&kind&subsystem&unit&limit&keep&class` — `resource.database.query(...)` as JSON
 #     (`{events, state, truncated}`, unfenced: the console fences); `keep` is "newest" (default) or
 #     "oldest" — which end of an overflowing window survives; 400 if it is neither; 503 if the job
 #     runs no database.
@@ -581,7 +581,8 @@ def serve(resource: Resource, host: str = "0.0.0.0", port: int = 8090, extra=Non
                 try:
                     rep = resource.database.query(float(q.get("from", 0)), float(q.get("to", 1e12)),
                                                int(q["cam"]) if q.get("cam") else None, q.get("kind"), q.get("subsystem"), q.get("unit"),
-                                               limit=int(q.get("limit", 1000)), keep=q.get("keep", "newest"))
+                                               limit=int(q.get("limit", 1000)), keep=q.get("keep", "newest"),
+                                               cls=q.get("class"))
                 except ValueError as e:                           # an unknown `keep` is refused, not read as the other end
                     return self._raw(400, json.dumps({"error": str(e)}).encode(), [("Content-Type", "application/json")])
                 return self._raw(200, json.dumps(rep).encode(), [("Content-Type", "application/json")])

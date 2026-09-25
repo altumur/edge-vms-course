@@ -48,6 +48,15 @@ unit:
     # against the worker's server labels. Accepts a JSON list or a comma-separated string; stored
     # comma-joined.
     labels:                {type: list}                       # where the camera is reachable from: "vlan:cctv-a"
+    # Which of this device's event kinds are ALARMS (`w2cplatform/events.py`: the platform fixes the
+    # vocabulary, the unit says which of its lines belong to which class). A list of kinds, empty by
+    # default — a camera observes, and observing is not alarming.
+    #
+    # It lives on the UNIT and not in this spec's `events:` section, because the class is a property of
+    # how the device was WIRED, not of the event type: `io.input` is an alarm on a door contact and noise
+    # on a technological sensor that reports the same way. Written here as a constant, a perimeter camera
+    # and a corridor camera would have to be two subsystems to be told apart.
+    alarms:                {type: list}                       # kinds that are alarms on THIS device: "io.input,silent"
     # the name a layer above (М12) knows the camera by; the worker copies it into each status entry, and it
     # leaves the cluster in the snapshot.
     ref:                   {type: string}                     # the name a layer above knows it by (М12)
@@ -138,7 +147,7 @@ placement:
 # `id`, `revision`, `worker` and `server` added by the controller. All eight operator fields here; it is the
 # copy that leaves the cluster (М12), never the rows themselves. `publish_snapshot` runs in every controller
 # pass.
-snapshot: [name, source, enabled, events_retention_days, priority, labels, ref, live, kind]
+snapshot: [name, source, enabled, events_retention_days, priority, labels, alarms, ref, live, kind]
 console:
   # the name of the running gauge: `metrics_text()` emits `vms_cameras_running <n>` for status entries in
   # phase `running` on live workers (`test_the_console_over_http` sees `vms_cameras_running 1`); `/spec`

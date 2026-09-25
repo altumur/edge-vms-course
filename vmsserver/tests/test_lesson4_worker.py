@@ -303,3 +303,31 @@ def test_a_contact_that_changes_is_never_one_event_and_a_storm_that_ends_is_coun
     last = read_bucket(p)[-1]
     assert last["repeats"] == 9 and last["port"] == "2"
     assert w.flush_suppressed() == 0, "a window is reported once"
+
+
+def test_the_same_kind_is_an_alarm_on_one_device_and_noise_on_the_next():
+    """Where the class lives is the whole decision, and it is not in the spec.
+
+    Declared per kind in `vms.subsystem.yaml`, `io.input` would be an alarm
+    everywhere or nowhere. But it is a door forced on the camera watching the gate
+    and a technician opening a cabinet on the one in the plant room — the same
+    event type, the same firmware, a different pair of wires. A subsystem cannot
+    know that; the operator who installed the device does, and says so on the row.
+
+    The platform keeps only the vocabulary, and refuses anything outside it: that
+    is what a naming convention on `kind` could never do."""
+    from w2cplatform.events import read_bucket
+    box, ctl = _box_with_cameras(2)
+    ctl.update(1, {"alarms": "io.input"})                          # the gate: a contact here is an incident
+    ctl.assign("w-1", ["1", "2"])
+    act = FakeActuator(); w = VmsWorker("w-1", box.vars, box.objects, act, clock=box.clock, wall=box.wall, archive_root=box.archive)
+    w.reconcile_once()
+
+    gate = w.observe(1, "io.input", port="1", value="open")
+    plant = w.observe(2, "io.input", port="1", value="open")
+    assert read_bucket(gate)[0]["class"] == "alarm"
+    assert "class" not in read_bucket(plant)[0], "the plant room's contact is an observation"
+
+    assert w.class_of(1, "silent") == "observation"               # only the kinds the row named
+    ctl.update(1, {"alarms": "io.input,silent"}); w.reconcile_once()
+    assert w.class_of(1, "silent") == "alarm"                      # …and the operator may change their mind

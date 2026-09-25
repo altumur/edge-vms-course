@@ -510,7 +510,7 @@ class SpecConsole:
     #   - `GET /servers` — `servers()`: per server, `archive` (what its workers record into — Nomad's `meta.archive`
     #     on a cluster), `resource` (`live | silent | unknown`), `workers`, `placeable` and `why`.
     #   - `GET /unplaceable` — `ctl.unplaceable()`.
-    #         - `GET /events?from&to&cam|unit&kind&subsystem&limit&keep` — 503 if no index; else builds
+    #         - `GET /events?from&to&cam|unit&kind&subsystem&limit&keep&class` — 503 if no index; else builds
     #       `current_epochs` from every `<sub>/epoch/*` row and calls `index.query`. A numeric `unit` is
     #       treated as `cam`; a non-numeric one is passed as `unit`. `keep` is "newest" (default) or
     #       "oldest", 400 if it is neither; the reply carries `truncated` when the window did not fit.
@@ -604,7 +604,8 @@ class SpecConsole:
                                                         int(cam) if cam else None, q.get("kind"), q.get("subsystem"),
                                                         q.get("unit") if not cam else None, cur,
                                                         limit=int(q.get("limit", 1000)),
-                                                        epoch_policy=con.epoch_policy, keep=q.get("keep", "newest")))
+                                                        epoch_policy=con.epoch_policy, keep=q.get("keep", "newest"),
+                                                        cls=q.get("class")))
                 except ValueError as e:
                     return h._send(400, {"error": str(e)})
             if path == "/metrics":

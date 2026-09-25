@@ -107,6 +107,30 @@ class Bucket:
                            "start": self.start, "end": self.end, "path": self.path, "events": self.events})
 
 
+# ==================================================================================================
+# Traffic classes — two, because two is the fewest that can carry different policy.
+# ==================================================================================================
+# An ALARM is a line whose loss is the loss of the thing the system exists for: a door forced, a contact
+# opened, a stream gone. An OBSERVATION is everything else, and it is nearly every line.
+#
+# The class is a FIELD, declared and refused, and deliberately not a convention on `kind`. A convention
+# refuses nothing: it reads whatever is written and quietly excludes a typo, and the exclusion shows up
+# months later as an alarm nobody was shown. This is the same reason `keep` is refused rather than read
+# leniently (Lesson 13) and a suppression rule is refused at load (above).
+#
+# Two is a decision, not a placeholder. A class earns its place by having a POLICY that differs, and
+# today exactly one does: when a window overflows its limit, observations are dropped before alarms
+# (`eventdatabase.query`). A third class with no policy of its own would be a word in a file.
+#
+# Which lines are alarms is NOT settled here, and not in a subsystem's spec either: the same `io.input` is
+# an alarm on a door contact and noise on a technological sensor, and the difference is how the device was
+# wired, not what the event type is. So the platform fixes the vocabulary and refuses anything outside it;
+# the value comes from the unit's own configuration, one layer up.
+ALARM = "alarm"
+OBSERVATION = "observation"
+CLASSES = (ALARM, OBSERVATION)
+
+
 # What a worker holds per unit it has an epoch for: the writer side.
 class EventLog:
     """What a worker holds per unit it has an epoch for. `append` writes one
@@ -125,11 +149,26 @@ class EventLog:
     # Writes one JSON line `{t, kind, **fields}` to the bucket for `t`, creating directories, flushing after
     # the write; returns the path. Append-only, one process per file: the epoch in the path guarantees no
     # two live writers share a file.
-    def append(self, t: float, kind: str, **fields) -> str:
+    #
+    # `cls` is the line's TRAFFIC CLASS, and it is a declared value rather than a convention on `kind`.
+    # A convention — "kinds beginning with io. are alarms" — does not refuse anything: the first
+    # `det.Motion` written where `det.motion` was meant falls out of its class in silence, and stays out
+    # until somebody reads the file by hand. An unknown class is refused here instead, where the line is
+    # written and the traceback names the writer.
+    #
+    # Only an alarm is written down. Absent means `observation`, which is what nearly every line is, and
+    # a class on every line would be a word repeated a million times to say "nothing special".
+    def append(self, t: float, kind: str, cls: str = OBSERVATION, **fields) -> str:
+        if cls not in CLASSES:
+            raise ValueError(f"event class is one of {', '.join(CLASSES)}, not {cls!r}")
+        if "class" in fields:
+            raise ValueError("`class` is the traffic class and travels as `cls=`, not as a field — two "
+                             "spellings of one thing drift, and the drift is invisible in the file")
         p = self.path_for(t)
         os.makedirs(os.path.dirname(p), exist_ok=True)
+        line = {"t": t, "kind": kind, **({} if cls == OBSERVATION else {"class": cls}), **fields}
         with open(p, "a") as f:
-            f.write(json.dumps({"t": t, "kind": kind, **fields}) + "\n"); f.flush()
+            f.write(json.dumps(line) + "\n"); f.flush()
         return p
 
 

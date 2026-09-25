@@ -271,3 +271,93 @@ def test_a_suppression_rule_is_refused_at_load_when_it_would_drop_more_than_it_s
     assert "must be positive" in refused({})                     # a rule with no window is a kind not listed here
     assert "would then be the same thing" in refused({"window": 30, "by": []})   # empty `by`: every line collapses into one
     assert "the summary line writes itself" in refused({"window": 30, "by": ["repeats"]})
+
+
+def test_an_overflowing_window_drops_observations_before_alarms():
+    """The class earns its existence here, and nowhere else it could be checked.
+
+    A limit is a budget for a screenful. Spending it on the thousand statistics
+    lines that crowded out the one contact that opened is exactly the failure the
+    class exists to prevent — and it is the failure the previous fix could not
+    reach: keeping the NEWEST end is right when every line is worth the same, and
+    the whole point of a class is that they are not.
+
+    Without this ordering `class` would be a word in a file: written, indexed,
+    filterable, and changing nothing about what anybody is shown."""
+    from w2cplatform.events import ALARM
+    from vms.archive import event_log
+    box = Box()
+    log = event_log(box.archive, 7, 1)
+    for i in range(20):
+        log.append(1000.0 + i, "stats", n=i)                      # the noise, filling the window
+    log.append(1001.5, "io.input", ALARM, port="1", value="open")  # one alarm, and an OLD one at that
+    db = EventDatabase(box.archive, "srv-1", wall=box.wall); db.rebuild()
+
+    rep = db.query(0, 1e12, limit=5)
+    assert rep["truncated"] is True
+    kinds = [e["kind"] for e in rep["events"]]
+    assert "io.input" in kinds, "the newest five buried the alarm the window existed for"
+    assert kinds.count("stats") == 4 and len(kinds) == 5           # the alarm took one seat, the newest noise the rest
+    assert [e["t"] for e in rep["events"]] == sorted(e["t"] for e in rep["events"])   # still a timeline
+    assert rep["events"][0]["class"] == ALARM                      # …and it is the oldest of the five
+
+    assert all(e["class"] == "observation" for e in db.query(0, 1e12, kind="stats")["events"])
+    only = db.query(0, 1e12, cls=ALARM)
+    assert [e["kind"] for e in only["events"]] == ["io.input"] and only["truncated"] is False
+
+
+def test_the_merge_keeps_an_alarm_a_busier_neighbour_would_have_crowded_out():
+    """The merge cuts the union a second time, so the policy has to be carried both
+    ways: an alarm that survived its own server's window is dropped when it meets a
+    louder neighbour's, and no single resource could have warned about that."""
+    from w2cplatform.events import ALARM
+    from w2cplatform.resource import RESOURCES
+    box = Box()
+    rows = [{"subsystem": "vms", "unit": "7", "cam": 7, "epoch": 1, "t": 1000.0 + i, "kind": "stats",
+             "server": "srv-1", "bucket": "b-1", "class": "observation", "n": i} for i in range(6)]
+    rows += [{"subsystem": "vms", "unit": "8", "cam": 8, "epoch": 1, "t": 1000.5, "kind": "io.input",
+              "server": "srv-2", "bucket": "b-2", "class": ALARM, "port": "1"}]
+    for s in ("srv-1", "srv-2"):
+        box.objects.put(f"{RESOURCES}/{s}/heartbeat",
+                        json.dumps({"server": s, "ts": box.wall(), "url": f"http://{s}"}).encode())
+
+    def fetch(url, p):
+        mine = sorted([e for e in rows if e["server"] == url.rsplit("/", 1)[1]], key=lambda e: e["t"])
+        lim = int(p["limit"])
+        return {"events": mine[-lim:] if len(mine) > lim else mine, "state": "live", "truncated": len(mine) > lim}
+
+    m = MergedIndex(box.objects, fetch=fetch, wall=box.wall)
+    rep = m.query(0, 1e12, limit=3)
+    assert rep["truncated"] is True
+    assert [e["kind"] for e in rep["events"]].count("io.input") == 1, "the alarm was crowded out by a neighbour"
+    assert len(rep["events"]) == 3
+
+
+def test_a_traffic_class_is_a_declared_value_and_not_a_convention_on_kind():
+    """The whole argument for making this a field: a convention refuses nothing.
+    "Kinds beginning with io. are alarms" reads whatever is written, so the first
+    `IO.input` typed where `io.input` was meant leaves the class in silence and
+    stays out of it until somebody reads the file by hand.
+
+    An unknown class is refused where the line is written, and there is exactly one
+    spelling of it — a `class` field beside a `cls` argument would be two names for
+    one thing, and they drift."""
+    from w2cplatform.events import EventLog
+    box = Box()
+    log = EventLog(box.archive, "vms", "7", 1)
+
+    try:
+        log.append(1000.0, "io.input", "Alarm")
+        raise AssertionError("an unknown class was written")
+    except ValueError as e:
+        assert "'Alarm'" in str(e) and "alarm, observation" in str(e)
+
+    try:
+        log.append(1000.0, "io.input", **{"class": "alarm"})
+        raise AssertionError("a second spelling was accepted")
+    except ValueError as e:
+        assert "two spellings" in str(e)
+
+    from w2cplatform.events import read_bucket
+    p = log.append(1000.0, "silent")
+    assert "class" not in read_bucket(p)[0], "an observation says nothing: it is nearly every line"

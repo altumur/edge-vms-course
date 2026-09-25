@@ -65,7 +65,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from .events import Bucket, buckets_under, read_bucket, subsystems_under
+from .events import ALARM, CLASSES, OBSERVATION, Bucket, buckets_under, read_bucket, subsystems_under
 from .resource import MIRROR_DIR, mirrored_buckets, mirrored_servers, resources_seen
 
 
@@ -88,10 +88,11 @@ class EventDatabase:
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS seen   (server TEXT, path TEXT, n INTEGER DEFAULT 0, PRIMARY KEY (server, path));
             CREATE TABLE IF NOT EXISTS events (subsystem TEXT, unit TEXT, cam INTEGER, epoch INTEGER, t REAL, kind TEXT,
-                                               server TEXT, path TEXT, fields TEXT);
+                                               server TEXT, path TEXT, cls TEXT, fields TEXT);
             CREATE INDEX IF NOT EXISTS events_cam_t ON events (cam, t);
             CREATE INDEX IF NOT EXISTS events_sub_unit_t ON events (subsystem, unit, t);
-            CREATE INDEX IF NOT EXISTS events_kind_t ON events (kind, t);""")
+            CREATE INDEX IF NOT EXISTS events_kind_t ON events (kind, t);
+            CREATE INDEX IF NOT EXISTS events_cls_t ON events (cls, t);""")
         self.state = "empty"
         self.indexed_segments = 0
         self._stop = threading.Event()
@@ -135,10 +136,15 @@ class EventDatabase:
             rows = []
             for e in read_bucket(file)[have:]:                                # buckets are append-only: the lines past what we hold
                 cam = e.get("cam", int(b.unit) if b.unit.isdigit() else None)   # a numeric unit is its own `cam`; others may name one
+                # `class` becomes a COLUMN and leaves `fields`: it is the one field the database itself
+                # acts on (the overflow policy in `query`), and a JSON blob cannot be ordered by. Absent
+                # in the line means `observation`, so the column is never null and the SQL never has to
+                # say `IS NULL OR = ?`.
                 rows.append((b.subsystem, b.unit, cam, b.epoch, float(e["t"]), e["kind"], server, b.path,
-                             json.dumps({k: v for k, v in e.items() if k not in ("t", "kind", "cam")})))
+                             str(e.get("class", OBSERVATION)),
+                             json.dumps({k: v for k, v in e.items() if k not in ("t", "kind", "cam", "class")})))
             with self.db:
-                self.db.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?)", rows)
+                self.db.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
                 self.db.execute("INSERT OR REPLACE INTO seen VALUES (?,?,?)", (server, b.path, have + len(rows)))
             self.indexed_segments += 0 if row else 1
             return len(rows)
@@ -146,7 +152,7 @@ class EventDatabase:
     def query(self, t0: float, t1: float, cam: int | None = None, kind: str | None = None,
               subsystem: str | None = None, unit: str | None = None,
               current_epochs: dict[tuple[str, str], int] | None = None, limit: int = 1000,
-              epoch_policy: dict[str, str] | None = None, keep: str = "newest") -> dict:
+              epoch_policy: dict[str, str] | None = None, keep: str = "newest", cls: str | None = None) -> dict:
         """`current_epochs` is {(subsystem, unit): epoch} — fencing is per unit, and only the
         unit's own subsystem knows its current epoch; the database just compares.
 
@@ -163,29 +169,47 @@ class EventDatabase:
         scenario are both looking at.
 
         The answer is ascending by time whichever end was kept, and it carries `truncated`, so a
-        decision taken on part of a window cannot look like one taken on all of it."""
+        decision taken on part of a window cannot look like one taken on all of it.
+
+        `cls` narrows to one traffic class — "show me the alarms of this hour" — and an unknown one
+        is refused rather than answered with nothing, because an empty list is what "no alarms
+        happened" looks like too.
+
+        And the class earns its existence HERE: when the window overflows, OBSERVATIONS ARE DROPPED
+        BEFORE ALARMS. A limit is a budget for a screenful, and spending it on the thousand statistics
+        lines that crowded out the one contact that opened is the failure the class was introduced to
+        prevent. The ordering costs one clause; leaving it out would make the class a word in a file."""
         if keep not in ("newest", "oldest"):
             raise ValueError(f"keep is 'newest' or 'oldest', not {keep!r}")
-        sql, args = "SELECT subsystem, unit, cam, epoch, t, kind, server, path, fields FROM events WHERE t >= ? AND t < ?", [t0, t1]
+        if cls is not None and cls not in CLASSES:
+            raise ValueError(f"event class is one of {', '.join(CLASSES)}, not {cls!r}")
+        sql, args = ("SELECT subsystem, unit, cam, epoch, t, kind, server, path, cls, fields "
+                     "FROM events WHERE t >= ? AND t < ?"), [t0, t1]
         if cam is not None: sql += " AND cam = ?"; args.append(cam)
         if kind is not None: sql += " AND kind = ?"; args.append(kind)
         if subsystem is not None: sql += " AND subsystem = ?"; args.append(subsystem)
         if unit is not None: sql += " AND unit = ?"; args.append(str(unit))
+        if cls is not None: sql += " AND cls = ?"; args.append(cls)
         # One row PAST the limit, so `truncated` is a fact and not a guess: a window holding exactly
         # `limit` rows is whole, and calling it cut would be the same lie pointing the other way.
-        sql += " ORDER BY t DESC LIMIT ?" if keep == "newest" else " ORDER BY t LIMIT ?"
+        #
+        # Alarms first, then time. `keep` still decides which end of the OBSERVATIONS survives; what it
+        # no longer decides is whether an alarm survives at all.
+        args.append(ALARM)                                        # binds the ORDER BY below, after every filter above
+        sql += " ORDER BY cls = ? DESC, t DESC LIMIT ?" if keep == "newest" else " ORDER BY cls = ? DESC, t LIMIT ?"
         args.append(limit + 1)
         out = []
         with self._lock:
             rows = self.db.execute(sql, args).fetchall()
         truncated = len(rows) > limit
         rows = rows[:limit]
-        if keep == "newest": rows.reverse()
-        for sub, u, c, ep, t, k, server, path, fields in rows:
+        rows.sort(key=lambda r: r[4])                             # alarms came first for the CUT; the answer is by time
+        for sub, u, c, ep, t, k, server, path, rcls, fields in rows:
             cur = (current_epochs or {}).get((sub, u))
             older = cur is not None and ep < cur
             was = (epoch_policy or {}).get(sub, "fenced") if older else "current"
             out.append({"subsystem": sub, "unit": u, "cam": c, "epoch": ep, "t": t, "kind": k, "server": server, "bucket": path,
+                        "class": rcls or OBSERVATION,
                         "epoch_is": was, "fenced": was == "fenced", **json.loads(fields)})
         return {"events": out, "state": self.state, "truncated": truncated}
 
@@ -237,10 +261,15 @@ class MergedIndex:
             return json.loads(r.read())
 
     def query(self, t0: float, t1: float, cam=None, kind=None, subsystem=None, unit=None, current_epochs=None,
-              limit: int = 1000, epoch_policy: dict[str, str] | None = None, keep: str = "newest") -> dict:
+              limit: int = 1000, epoch_policy: dict[str, str] | None = None, keep: str = "newest",
+              cls: str | None = None) -> dict:
         """`keep` as in `EventDatabase.query`, and it has to be carried BOTH ways: the merge asks
         each resource for a window and then cuts the union to `limit` again, so a limit with no
         direction dropped the newest end twice — once per resource, once more over the merge.
+
+        The overflow policy is carried both ways for the same reason: each resource kept its alarms
+        ahead of its observations, and the merge must do it again over the union, or an alarm that
+        survived on its own server is dropped when it meets a busier neighbour's window.
 
         `truncated` is true if ANY resource cut its answer or the merge cut theirs: the reader is
         told the window is partial, not which server made it partial.
@@ -251,10 +280,12 @@ class MergedIndex:
         window and an infrastructure fault that never happened."""
         if keep not in ("newest", "oldest"):
             raise ValueError(f"keep is 'newest' or 'oldest', not {keep!r}")
+        if cls is not None and cls not in CLASSES:
+            raise ValueError(f"event class is one of {', '.join(CLASSES)}, not {cls!r}")
         now = self.wall(); seen = resources_seen(self.objects)
         live = {s for s, hb in seen.items() if now - float(hb["ts"]) <= self.lost_after}
         params = {k: v for k, v in (("from", t0), ("to", t1), ("cam", cam), ("kind", kind), ("subsystem", subsystem),
-                                    ("unit", unit), ("limit", limit), ("keep", keep)) if v is not None}
+                                    ("unit", unit), ("limit", limit), ("keep", keep), ("class", cls)) if v is not None}
         events, unreachable, from_mirror, have = [], [], set(), set()
         truncated = False
         for server in sorted(live):
@@ -278,7 +309,14 @@ class MergedIndex:
         events.sort(key=lambda e: e["t"])
         if len(events) > limit:
             truncated = True
-            events = events[-limit:] if keep == "newest" else events[:limit]
+            alarms = [e for e in events if e.get("class") == ALARM]
+            rest = [e for e in events if e.get("class") != ALARM]
+            # Alarms first; what is left over is the observations' budget. A window holding more alarms
+            # than the whole limit is cut like anything else — an unbounded answer is not a kindness to
+            # anybody — but it is cut with the observations already gone, and `truncated` says so.
+            alarms = alarms if len(alarms) <= limit else (alarms[-limit:] if keep == "newest" else alarms[:limit])
+            room = max(0, limit - len(alarms))
+            events = sorted(alarms + (rest[-room:] if keep == "newest" else rest[:room]), key=lambda e: e["t"])
         cur = current_epochs or {}
         for e in events:                                          # each resource fenced its own; re-decide over the merge
             c = cur.get((e["subsystem"], e["unit"]))
