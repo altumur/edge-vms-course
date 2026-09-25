@@ -79,7 +79,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .contract import BUILD, SCHEMA, check_schema
-from .events import Bucket, buckets_under, parse_bucket, subsystems_under
+from .events import CONSOLE, Bucket, buckets_under, parse_bucket, subsystems_under
 
 MIRROR_DIR = ".mirror"
 MIRROR_KEY = "platform/mirror"
@@ -138,6 +138,24 @@ def retention_days(vars_, subsystem: str, unit: str, default: float = 365.0) -> 
         if items and "days" in items:
             return float(items["days"])
     return default
+
+
+# What the console's own buckets must outlive: the longest-kept unit on this resource.
+#
+# An operator's record REFERS to events — a mark names a unit, and an acknowledgement (when there is one)
+# names the alarm it answers. The reference is one-way and the asymmetry matters: a record that outlives
+# what it refers to is harmless clutter, while an event that outlives the record ABOUT it silently goes
+# back to looking unanswered. Sweeping the console's bucket on its own clock would do exactly that, and it
+# would do it a year later, to the one class of line somebody is going to be asked about.
+#
+# So the console's days are a floor, not a setting: whatever anybody keeps longest, its records keep too.
+# It costs nothing — an operator writes a handful of lines a day against a worker's thousands — and it is
+# the one rule that has to exist BEFORE the records do, because getting it wrong is invisible until the
+# day the record is missing.
+def console_floor(days_of: dict[tuple[str, str], float]) -> float:
+    """The longest retention among everything that is not the console's own."""
+    others = [d for (sub, _), d in days_of.items() if sub != CONSOLE]
+    return max(others) if others else 0.0
 
 
 # The rule that replaces a map: sort the other live servers, take those after mine then wrap around, and
@@ -412,9 +430,14 @@ class Resource:
         """Each subsystem's buckets by its own days. Files only: a subsystem that
         indexes its buckets (the VMS's manifest) drops the lines in its own pass."""
         removed = []
+        # What each unit keeps, decided before anything is swept, because the console's floor is read off
+        # the others (`console_floor`).
+        days_of = {(sub, unit): retention_days(self.vars, sub, unit)
+                   for sub, units in self.units().items() for unit in units}
+        floor = console_floor(days_of)
         for sub, units in self.units().items():
             for unit in units:
-                days = retention_days(self.vars, sub, unit)
+                days = max(days_of[(sub, unit)], floor) if sub == CONSOLE else days_of[(sub, unit)]
                 for path in self.volumes.values():
                     for b in buckets_under(path, sub, unit, self.bucket_seconds):
                         if b.end < self.wall() - days * 86400:

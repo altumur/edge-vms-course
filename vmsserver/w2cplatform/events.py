@@ -135,6 +135,11 @@ ALARM = "alarm"
 OBSERVATION = "observation"
 CLASSES = (ALARM, OBSERVATION)
 
+# The console's own subsystem name: its marks (and whatever else an operator records about the system)
+# live in `console/<instance>/` beside every worker's buckets, written by the console process, epoch 1
+# because there is one writer. `resource.retain` knows this name for one reason — see `console_floor`.
+CONSOLE = "console"
+
 
 # macOS' `fsync` returns as soon as the kernel has the bytes; only `F_FULLFSYNC` asks the drive to flush
 # its own write cache. Measured on this course's machine: `append` as it stands runs at ~20,000 lines/s,

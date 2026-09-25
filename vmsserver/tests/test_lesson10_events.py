@@ -512,3 +512,37 @@ def test_the_timeline_endpoint_hands_the_page_counts_and_says_why():
         assert st == 200 and quiet["aggregated"] is False and len(quiet["events"]) == 90
     finally:
         srv.shutdown(); rsrv.shutdown()
+
+
+def test_the_consoles_records_outlive_what_they_refer_to():
+    """The one rule that has to exist BEFORE the records it protects.
+
+    An operator's record refers to events — a mark names a unit, and an
+    acknowledgement, when there is one, names the alarm it answers. The
+    reference is one-way, and the asymmetry decides everything: a record that
+    outlives what it refers to is harmless clutter, while an event that outlives
+    the record ABOUT it goes quietly back to looking unanswered.
+
+    Swept on its own clock, the console's bucket would do exactly that — a year
+    later, to the one class of line somebody is going to be asked about. So its
+    days are a floor and not a setting: whatever anybody keeps longest, the
+    records keep too. It costs almost nothing, because an operator writes a
+    handful of lines a day against a worker's thousands."""
+    from w2cplatform.events import EventLog
+    from w2cplatform.resource import console_floor
+    box = Box(); old = box.wall() - 400 * 86400
+    event_log = __import__("vms.archive", fromlist=["event_log"]).event_log
+    event_log(box.archive, 7, 1).append(old, "motion")             # a camera that keeps two years…
+    marks = EventLog(box.archive, "console", "c-1", 1)
+    mark = marks.append(old, "mark", user="anna", note="checked")  # …and the record written the same day
+    box.vars.put("vms/retention/7", {"days": "730"})
+
+    res = vms_resource(ArchiveResource(box.spool, box.archive, wall=box.wall), "srv-1", "", box.vars, box.objects, wall=box.wall)
+    assert res.retain() == 0                                       # neither is old enough yet
+    assert os.path.exists(mark)
+
+    box.vars.put("vms/retention/7", {"days": "500"})               # still longer than the console's year
+    assert res.retain() == 0 and os.path.exists(mark), "the record was swept while the events it names stayed"
+
+    assert console_floor({("vms", "7"): 500.0, ("console", "c-1"): 365.0}) == 500.0
+    assert console_floor({("console", "c-1"): 365.0}) == 0.0       # nothing to outlive: its own days stand
