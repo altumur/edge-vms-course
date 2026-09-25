@@ -59,9 +59,17 @@ unit:
     # with a key of their own it carries no information, and a prefix carrying no information is a thing
     # to get wrong (`Loc:`, `loc :`) with no one to refuse it.
     #
+    # A PATH, one per camera: `/` between the levels — `Объект А/Подъезд`. An ordinary string, not a type
+    # of its own: nothing in the platform needs to know it is a path, and a string has none of a list's
+    # limits — it is stored as written, a comma included (`Корпус 1, этаж 2` is one level). The tree is
+    # whatever draws it, splitting on `/`.
+    #
+    # Nothing is inherited down the tree. A folder groups; it carries no policy — no retention, no
+    # placement, no rights. The day a folder is meant to CARRY something, that is a separate decision with
+    # its own rules about what a child overrides.
+    #
     # Nothing in М10 reads it — like `priority`. Stored, and shown by the console because the page builds
-    # its form from `/spec`. Flat list: whether folders nest is not decided here, and a separator would be
-    # the decision.
+    # its form from `/spec`.
     #
     # NOT in the snapshot below, and that was measured rather than chosen: the snapshot is one object per
     # worker under a 64 KiB ceiling, `test_the_shard_fits_where_the_one_object_did_not` holds it to a third
@@ -69,7 +77,7 @@ unit:
     # there so the shape survives the next field; spending it on a field nothing reads, to loosen a test
     # written to measure exactly this, would be the wrong trade. When М12's directory wants folders, put it
     # in and re-measure — that is a decision with a number attached, which is what the test is for.
-    folders:               {type: list}                       # the operator's grouping: "Подъезд,Улица"
+    folders:               {type: string}                     # the camera's folder, a path: "Объект А/Подъезд"
     # Which of this device's event kinds are ALARMS (`w2cplatform/events.py`: the platform fixes the
     # vocabulary, the unit says which of its lines belong to which class). A list of kinds, empty by
     # default — a camera observes, and observing is not alarming.
