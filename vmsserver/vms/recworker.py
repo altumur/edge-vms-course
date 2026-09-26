@@ -36,7 +36,7 @@ import os
 import threading
 import time
 
-from w2cplatform.console import holder_of
+from w2cplatform.console import heartbeats, holder_of
 from w2cplatform.contract import Subsystem
 from w2cplatform.objects import ObjectStore
 from w2cplatform.resource import disk_space, space_settings
@@ -105,6 +105,10 @@ class RecWorker(VmsWorker):
     # sees, and a range that scrolled out was either acted on or is gone — which is why the console's
     # decision has to be idempotent on its own (it is: the job's id is the range).
     CLOSED_REPORTED = 32
+    # How long a primary recording may be not written before a `when: offline` backup stands in for it
+    # (Lesson 26). Every event-driven recording starts this way — a row appears, a pipeline takes a few
+    # seconds — and waking the backup for each would make it record every event twice.
+    START_GRACE = 10.0
     SLOT_PREFIX, NAME_ENV = "r", "RECORDER_NAME"
     parse_row = staticmethod(rec_row)
 
@@ -160,6 +164,13 @@ class RecWorker(VmsWorker):
         self.backfilled = 0
         self.fetched: list[str] = []                # request ids this worker has fetched — the heartbeat carries them
         self.closed: list[str] = []                 # ranges promoted from a device: `<unit>|<from>|<to>`, for the console
+        # What a clean fetch was asked for and did not get, per (recording, source) — the source does not
+        # have it either (Lesson 16, the feedback's P). A summary in a heartbeat says where a card starts and
+        # ends, never where its holes are; without this the same empty range is planned every pass, and each
+        # plan opens one of the device's one or two sessions.
+        self.nowhere: dict[tuple[str, str], list[tuple[float, float]]] = {}
+        self.archive_url = ""                       # this recorder's archive door, once served (Lesson 26)
+        self._not_written_since: dict[str, float] = {}   # primary recording -> since when nobody writes it
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
@@ -209,14 +220,59 @@ class RecWorker(VmsWorker):
         out = {"cam": str(cam["cam"]), "source": src[1] if src else None, "via": (None if src is None else "shm" if src[1].startswith("shm://") else "rtsp")}
         if cam["id"] in self.waiting and cam["id"] not in self.reconciler.actual:
             out["why"] = "camera held by nobody"
+        # A BACKUP recording says what it holds, the way Lesson 15's holder says what a card holds: a
+        # summary, cheap to carry in every heartbeat. The primary plans from it and asks the manifest before
+        # it copies anything (Lesson 26).
+        if volumes.is_backup(cam, self.vars):
+            ours = self.our_coverage(cam["id"])
+            if ours:
+                out["coverage"] = {"from": ours[0][0], "to": ours[-1][1], "fragments": len(ours)}
         return out
 
     def status(self) -> list[dict]:
         out = super().status()
+        standby = {r["id"] for r in self.rows if self._stands_by(r)}
         for st in out:
             if st["phase"] != "running" and st["id"] in self.waiting and st["enabled"]:
                 st["phase"] = "waiting"
+            if st["id"] in standby and st["phase"] != "running":
+                st["phase"], st["why"] = "standby", "the primary recording is being written"
         return out
+
+    # -- a backup that records only for a primary that is down (Lesson 26) -----------------------------
+    # `when: offline` on a backup recording: record only while the camera's PRIMARY recording should be
+    # written and is not. "Should be" is the whole rule, and the feedback's point S is why: a primary that is
+    # switched off, or an event recording whose event has ended, is nobody's failure — standing in for it
+    # would turn a recording on events into a recording always, on the backup's disk and, for a card, over
+    # the camera's uplink. What is covered is a failure, never a decision.
+    def desired(self) -> list[dict]:
+        return [r for r in super().desired() if not self._stands_by(r)]
+
+    def _stands_by(self, row: dict) -> bool:
+        return str(row.get("when") or "") == "offline" and volumes.is_backup(row, self.vars) \
+            and not self.primary_needs_cover(row)
+
+    def primary_needs_cover(self, row: dict, now: float | None = None) -> bool:
+        now = self.wall() if now is None else now
+        names = volumes.backups(self.vars)
+        running = {str(st.get("id")) for hb in heartbeats(self.objects, self.SUB.name + "/").values()
+                   if now - hb.ts <= 45.0 for st in hb.status if st.get("phase") == "running"}
+        need = False
+        for key in self.vars.list(self.SUB.config(self.ROWS, "")):
+            items, _ = self.vars.get(key)
+            if not items or items.get("deleted") == "true":
+                continue
+            other = self.parse_row(items)
+            if str(other["id"]) == str(row["id"]) or str(other["cam"]) != str(row["cam"]) or volumes.is_backup(other, names=names):
+                continue
+            until = float(other.get("until") or 0)
+            should = bool(other.get("enabled")) and (until == 0 or until > now)
+            if not should or str(other["id"]) in running:
+                self._not_written_since.pop(str(other["id"]), None)
+                continue
+            since = self._not_written_since.setdefault(str(other["id"]), now)
+            need = need or now - since >= self.START_GRACE
+        return need
 
     # -- the passes: the worker's, plus a re-subscription when the camera's holder moved, plus the
     # promotion of closed segments ---------------------------------------------------------------------
@@ -277,7 +333,12 @@ class RecWorker(VmsWorker):
                 # …and whose footage those are, by volume. A volume here that no recorder holds is footage
                 # that is waiting — not lost and not misfiled — until somebody takes it.
                 "spool_for": self.spool_by_volume(),
-                "closed": ",".join(self.closed)}
+                "closed": ",".join(self.closed),
+                # Lesson 26: the door this recorder serves its archive at, for a primary backfilling from it.
+                **({"archive_url": self.archive_url} if self.archive_url else {}),
+                # Lesson 16: what a clean fetch found nowhere — ours missing it, the source missing it too.
+                # A number the operator wants on its own: "of what we lost, 519 s were not on the card either".
+                "nowhere_seconds": int(sum(b - a for spans in self.nowhere.values() for a, b in spans))}
 
     # -- which archive this recorder writes into ------------------------------------------------------
     # Run once a pass, after the slot and the leases. Four outcomes, and the one that matters is the last.
@@ -629,14 +690,38 @@ class RecWorker(VmsWorker):
     def our_coverage(self, unit) -> list[tuple[float, float]]:
         return self.archive.coverage(str(unit), self.stitch)
 
-    # What the device has and we do not, bounded at both ends. Not older than our own retention — otherwise
-    # backfill and retention chase each other round the clock, for ever. Not fresher than `settle` — the
-    # last minutes are being written right now, are in no manifest yet, and we would be fetching what we
-    # are recording.
-    def gaps(self, unit, coverage: dict, now: float) -> list[tuple[float, float]]:
-        want = (max(float(coverage["from"]), now - self.keep_days * 86400),
-                min(float(coverage["to"]), now - self.settle))
-        return [] if want[1] <= want[0] else subtract(want, self.our_coverage(unit))
+    # What a source has and we do not, bounded at both ends. Not older than our own retention — otherwise
+    # backfill and retention chase each other round the clock, for ever.
+    #
+    # Not newer than what we can SEE (the feedback's Q). Everything after the end of our visible coverage is
+    # either being written this minute or written and not yet in the manifest, and there is no need to tell
+    # the two apart: neither is a gap. `settle` alone used to stand for that, and it held only while
+    # `settle > segment + grace` — true for the defaults, written nowhere, and false the day somebody sets
+    # twenty-minute segments: the recorder then fetched from the card what it was recording that minute,
+    # and the overlap check before `promote` could not catch it, because the live segment was not in the
+    # manifest yet. The visible end is the lag MEASURED; `settle` stays as the floor, and is all there is
+    # for a recording with nothing visible.
+    #
+    # PLANNED backfill starts at our first visible second (the feedback's S). Before it the recording was not
+    # running by design — created yesterday, or a recording on events — and filling it from the card would
+    # turn a recording on events into a recording always, a night late. An operator's request is not
+    # planned: a person asked for that hour, and may ask for any hour.
+    #
+    # And never what a clean fetch from THIS source already found nowhere.
+    def gaps(self, unit, coverage: dict, now: float, planned: bool = True, source: str = "device") -> list[tuple[float, float]]:
+        ours = self.our_coverage(unit)
+        lo = max(float(coverage["from"]), now - self.keep_days * 86400)
+        hi = min(float(coverage["to"]), now - self.settle, ours[-1][1] if ours else now)
+        if planned:
+            if not ours:
+                return []
+            lo = max(lo, ours[0][0])
+        if hi <= lo:
+            return []
+        holes = subtract((lo, hi), ours)
+        for gone in self.nowhere.get((str(unit), source), []):
+            holes = [h for hole in holes for h in subtract(hole, [gone])]
+        return holes
 
     # The disk is over its high mark: the resource is freeing space this minute, and backfill exists to
     # bring more in. Without this line they chase each other for ever on a full disk — the same trap
@@ -673,6 +758,78 @@ class RecWorker(VmsWorker):
             return None                       # no phase: a channel held only for its archive answers too
         return found[2]["playback_url"], found[2]["coverage"]
 
+    # -- the backup archive: a recording of the same camera on a backup volume (Lesson 26) ----------------
+    # Found the way everything here is found — in heartbeats: a recording of this camera, homed on a backup
+    # volume, run by a recorder that is alive, says what it holds and serves its archive. `self` is never its
+    # own source, and a backup fetches from nobody.
+    def backup_sources(self, row: dict, now: float | None = None) -> list[dict]:
+        now = self.wall() if now is None else now
+        names = volumes.backups(self.vars)
+        if not names or volumes.is_backup(row, names=names):
+            return []
+        recs = set()
+        for key in self.vars.list(self.SUB.config(self.ROWS, "")):
+            items, _ = self.vars.get(key)
+            if items and items.get("deleted") != "true":
+                other = self.parse_row(items)
+                if str(other["id"]) != str(row["id"]) and str(other["cam"]) == str(row["cam"]) and volumes.is_backup(other, names=names):
+                    recs.add(str(other["id"]))
+        out = []
+        for name, hb in sorted(heartbeats(self.objects, self.SUB.name + "/").items()):
+            url = hb.extra.get("archive_url", "")
+            if not url or now - hb.ts > 45.0:
+                continue
+            for st in hb.status:
+                if str(st.get("id")) in recs and st.get("coverage"):
+                    out.append({"key": f"backup:{st['id']}", "kind": "backup", "recording": str(st["id"]),
+                                "recorder": name, "url": url.rstrip("/"), "coverage": st["coverage"]})
+        return out
+
+    # Where one recording's gaps can come from, in order: the device's own archive (Lesson 16), then every
+    # backup recording of the same camera.
+    def sources_of(self, row: dict) -> list[dict]:
+        out = []
+        dev = self.device_source(row["cam"])
+        if dev is not None:
+            out.append({"key": "device", "kind": "device", "url": dev[0], "coverage": dev[1]})
+        return out + self.backup_sources(row)
+
+    # The backup's MANIFEST, through its recorder's door: the exact list of what it holds, where the
+    # heartbeat had only a summary. The plan comes from the summary; what is copied comes from this.
+    def read_manifest(self, url: str, unit: str):
+        import urllib.parse
+        import urllib.request
+        from .archive import Segment
+        with urllib.request.urlopen(f"{url}/manifest/{urllib.parse.quote(str(unit))}", timeout=10) as r:
+            return [Segment.from_line(l) for l in r.read().decode().splitlines() if l.strip()]
+
+    # This recorder's archive, served — `/manifest/<unit>` and `/segment/<path>`, the resource's two reads
+    # (`vms/resource.py`), over the archive THIS process writes. A backup recorder serves it so a primary
+    # can copy from it; any recorder may.
+    def serve_archive(self, host: str = "127.0.0.1", port: int = 0):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from .resource import vms_routes
+        routes = vms_routes(self.archive)
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                got = routes(self.path, self.headers)
+                if got is None:
+                    self.send_response(404); self.end_headers(); return
+                status, body, *extra = got
+                self.send_response(status)
+                for k, v in (extra[0] if extra else ()):
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+        srv = ThreadingHTTPServer((host, port), H)
+        threading.Thread(target=srv.serve_forever, daemon=True, name="archive-door").start()
+        self.archive_url = f"http://{host}:{srv.server_address[1]}"
+        return srv
+
     # -- what an operator asked for: `rec/requests/<id>`, written by the console ------------------------
     #
     # The ordinary pass is bounded by a budget and an hour because backfill competes with live for the
@@ -701,11 +858,12 @@ class RecWorker(VmsWorker):
             # that was never addressed to it (`it["from"]` would not be there).
             if str(it.get("action", "backfill")) != "backfill":
                 continue
-            src = self.device_source(it.get("cam", it["unit"]))
+            unit, cam = str(it["unit"]), str(it.get("cam", it["unit"]))
+            srcs = self.sources_of({"id": unit, "cam": cam, "home": next((r.get("home") for r in self.rows if str(r["id"]) == unit), "")})
             rid = key.rsplit("/", 1)[1]
-            if src is None:
-                continue                                     # nobody holds the device right now; ask again next pass
-            r = self.fetch(str(it["unit"]), str(it.get("cam", it["unit"])), src[0], float(it["from"]), float(it["to"]))
+            if not srcs:
+                continue                                     # nobody holds the device and no backup answers; ask again next pass
+            r = self.fetch_from(unit, cam, srcs[0], float(it["from"]), float(it["to"]))
             if r.get("skipped"):
                 continue                                     # not fetched: reporting it would have the console
                                                              # delete a request nobody served
@@ -715,6 +873,8 @@ class RecWorker(VmsWorker):
 
     # Bounded work, on request — never in the ordinary pass, the way `rebalance(budget)` is bounded
     # (Lesson 13): backfill competes with live for the device's uplink, so it gets a ceiling and an hour.
+    # Each of this recorder's recordings, from each of its sources in order — the device, then any backup —
+    # and a backup recording from none: a backup fetches from nobody.
     def backfill(self, budget: int = 1, now: float | None = None, force: bool = False) -> list[dict]:
         now = self.wall() if now is None else now
         if not (force or self.in_window(now)):
@@ -722,42 +882,82 @@ class RecWorker(VmsWorker):
         if self.under_pressure():
             return []
         done: list[dict] = []
+        names = volumes.backups(self.vars)
         for row in self.rows:
             if len(done) >= budget:
                 break
-            src = self.device_source(row["cam"])            # the DEVICE is the camera's
-            if src is None:
+            if volumes.is_backup(row, names=names):
                 continue
-            url, cov = src
-            for (t0, t1) in self.gaps(row["id"], cov, now)[:budget - len(done)]:   # the GAPS are this recording's
-                done.append(self.fetch(row["id"], row["cam"], url, t0, t1))
+            for src in self.sources_of(row):
+                for (t0, t1) in self.gaps(row["id"], src["coverage"], now, source=src["key"])[:budget - len(done)]:
+                    done.append(self.fetch_from(row["id"], row["cam"], src, t0, t1))
+                if len(done) >= budget:
+                    break
         return done
 
-    # One range: fetch it, and promote what came back as OURS — `source: edge`, our epoch, our manifest,
-    # our retention. The overlap is checked a second time here because live recording may have reached the
-    # same minutes while we were fetching; a segment that would land on top of one we already have is
-    # dropped rather than written.
+    # One range from one source. From the device: a pipeline on its playback door, as Lesson 16 wrote it.
+    # From a backup recording: its manifest first — the exact spans, where the heartbeat had a summary — and
+    # then each of its segments that falls in the range COPIED, cut to the range, with the times it was
+    # recorded at. Either way what lands is promoted as ours.
+    def fetch_from(self, unit, cam, src: dict, t0: float, t1: float) -> dict:
+        if src["kind"] == "device":
+            return self.fetch(unit, cam, src["url"], t0, t1)
+        unit = str(unit)
+        if not self.may_write(unit):
+            return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "skipped": "no lease"}
+        try:
+            segs = self.read_manifest(src["url"], src["recording"])
+        except OSError as e:
+            return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "error": f"{src['recording']}: {e}"}
+        self.actuator.range_error = ""
+        paths = []
+        for seg in sorted(segs, key=lambda x: x.start):
+            lo, hi = max(t0, seg.start), min(t1, seg.end)
+            if hi > lo:
+                paths += self.actuator.copy_range(unit, f"{src['url']}/segment/{seg.path}#{seg.start}",
+                                                  self.epochs.get(unit, 0), lo, hi, self.archive.spool)
+        return self._land(unit, cam, paths, t0, t1, "backup", src["key"])
+
+    # One range from the device: fetch it, and promote what came back as OURS — `source: edge`, our epoch,
+    # our manifest, our retention.
     def fetch(self, unit, cam, url: str, t0: float, t1: float) -> dict:
         unit = str(unit)
         if not self.may_write(unit):
             return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "skipped": "no lease"}
+        self.actuator.range_error = ""
         paths = self.actuator.record_range(unit, f"{url}?from={t0}&to={t1}", self.epochs.get(unit, 0),
                                            t0, t1, self.archive.spool)
+        return self._land(unit, cam, paths, t0, t1, "edge", "device")
+
+    # What a fetch brought, landed. The overlap is checked a second time here because live recording may
+    # have reached the same minutes while we were fetching; a segment that would land on top of one we
+    # already have is dropped rather than written. Then, if the fetch was CLEAN, whatever of the range is
+    # still not ours is remembered as nowhere for this source — never after a fetch that failed half way,
+    # which says nothing about what the source holds.
+    def _land(self, unit: str, cam, paths: list[str], t0: float, t1: float, origin: str, source: str) -> dict:
         have, kept = self.our_coverage(unit), 0
         for p in paths:
             parsed = parse(p, self.archive.spool)
             span = (parsed[2].timestamp(), os.path.getmtime(p)) if parsed else (t0, t1)
             if overlaps(have, span):
                 os.remove(p); continue                   # live recording got there while we were fetching
-            self.archive.promote(p, source="edge"); kept += 1
+            self.archive.promote(p, source=origin); kept += 1
         self.backfilled += kept
+        failed = getattr(self.actuator, "range_error", "")
+        if not failed:
+            missing = subtract((t0, t1), self.our_coverage(unit))
+            if missing:
+                self.nowhere[(unit, source)] = sorted(self.nowhere.get((unit, source), []) + missing)
         if kept:
             # What arrived is now ordinary footage — and a hole in the DETECTIONS, because nothing was
             # watching this camera while nothing was recording it. The console turns each of these into a
             # scan (М10B Lesson 22), so the two holes close together. Reported here and not written
             # anywhere: a worker's token writes no configuration.
             self.closed = (self.closed + [f"{unit}|{t0:.0f}|{t1:.0f}"])[-self.CLOSED_REPORTED:]
-        return {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "segments": kept}
+        out = {"unit": unit, "cam": str(cam), "from": t0, "to": t1, "segments": kept, "source": source}
+        if failed:
+            out["error"] = failed
+        return out
 
     def metrics_text(self) -> str:
         return (f"# TYPE rec_recordings_running gauge\nrec_recordings_running {len(self.reconciler.actual)}\n"

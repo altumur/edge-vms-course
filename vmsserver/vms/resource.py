@@ -185,7 +185,7 @@ def archives_of(vars_, objects, sub, server: str, now: float, lost_after: float 
     for v in vols_.declared(vars_):
         if not v.enabled:
             continue
-        if v.kind == "local":
+        if v.kind in vols_.ON_A_BOX:
             mine = v.server == server
         else:
             slot = held.get(v.name)

@@ -170,6 +170,15 @@ def test_the_console_draws_the_device_only_where_we_have_nothing():
         srv.shutdown()
 
 
+def _ours(box, r, unit, spans):
+    """Footage of our own, already in the archive. Planned backfill closes holes INSIDE what a recording has
+    recorded (the feedback's point S), so a test of it starts with some."""
+    for start, end in spans:
+        p = segment_path(box.archive, unit, r.epochs[str(unit)], datetime.fromtimestamp(start, timezone.utc))
+        os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"x")
+        Manifest(box.archive, unit).append(Segment(str(unit), r.epochs[str(unit)], start, end, os.path.relpath(p, box.archive), 1))
+
+
 def _noon(now: float) -> float:
     """A wall time that is certainly inside the day, whatever the machine's zone."""
     lt = time.localtime(now)
@@ -494,6 +503,7 @@ def test_backfill_stops_while_the_disk_is_over_the_mark():
     from w2cplatform.resource import SPACE_KEY
     now = 1_000_000.0
     box.vars.put(SPACE_KEY, {"enabled": "true", "high": "0.85", "low": "0.75"}, cas=0)
+    _ours(box, r, 1, ((now - 80000, now - 76400), (now - 70000, now - 66400)))   # an hour missing between two
     r.space_probe = lambda root: (1_000_000, 100_000)                    # 90 % full
     assert r.under_pressure()
     assert r.backfill(budget=1, now=now, force=True) == []               # force does not open it either
@@ -1015,6 +1025,7 @@ def test_the_hole_in_the_footage_and_the_hole_in_the_detections_close_together()
                   env={}, keep_days=1.0, settle=1000.0)
     r.heartbeat_once(); rec_ctl.ensure_placed(); r.reconcile_once()
 
+    _ours(box, r, 1, ((now - 80000, now - 76400), (now - 70000, now - 66400)))   # recorded, then a hole
     done = r.backfill(budget=1, now=now, force=True)                 # the link came back
     assert done and done[0]["segments"] > 0
     r.heartbeat_once()

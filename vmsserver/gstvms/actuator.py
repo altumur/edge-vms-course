@@ -194,6 +194,7 @@ class GstRecActuator(GstActuator):
     def __init__(self, spool: str, archive: str, segment_seconds: int = 600, watchdog_ms: int = 8000):
         self.spool, self.archive, self.seg, self.watchdog = spool, archive, segment_seconds, watchdog_ms
         self.fanout = None
+        self.range_error = ""                            # why the last range pipeline failed, if it did (Lesson 16)
         self.pipelines, self.dead, self.posted = {}, [], []
 
     # One range from the device's own archive, run to completion: the pipeline ends by itself at EOS, and
@@ -209,8 +210,40 @@ class GstRecActuator(GstActuator):
         msg = p.get_bus().timed_pop_filtered(Gst.CLOCK_TIME_NONE, Gst.MessageType.EOS | Gst.MessageType.ERROR)
         p.send_event(Gst.Event.new_eos())                # finalize whatever fragment is open
         p.set_state(Gst.State.NULL)
+        self.range_error = ""
         if msg is not None and msg.type == Gst.MessageType.ERROR:
             log.error("camera %s: backfill %s-%s: %s", cam, t0, t1, msg.parse_error()[0])
+            # Said, not only logged: a range that failed half way is not a range the source does not have,
+            # and the recorder must not remember it as "nowhere" (Lesson 16).
+            self.range_error = str(msg.parse_error()[0])
+        after = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
+        return sorted(p for p in after - before if parse(p, spool))
+
+    # A range copied out of ANOTHER archive of ours — a backup recording's segment, served by its recorder's
+    # door (Lesson 26). `source` is the segment's URL and `#<start>` the time its file begins at; the range
+    # is the part of it to take. The same demux into the same sink as `record_range`, seeked to the range, so
+    # the copy is the footage as stored and not a re-encode. Not exercised by the test suite, which has no
+    # GStreamer; the fake writes the files.
+    def copy_range(self, cam, source: str, epoch: int, t0: float, t1: float, spool: str, seg: int = 600) -> list[str]:
+        import os
+        from vms.archive import parse
+        url, _, start = source.partition("#")
+        begins = float(start or t0)
+        before = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
+        p = Gst.parse_launch(REC_RANGE_DESC.format(source=url, cam=cam, epoch=epoch, spool=spool,
+                                                   archive=self.archive, seg=seg))
+        p.set_state(Gst.State.PAUSED)
+        p.get_state(Gst.CLOCK_TIME_NONE)
+        p.seek(1.0, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE, Gst.SeekType.SET,
+               int((t0 - begins) * Gst.SECOND), Gst.SeekType.SET, int((t1 - begins) * Gst.SECOND))
+        p.set_state(Gst.State.PLAYING)
+        msg = p.get_bus().timed_pop_filtered(Gst.CLOCK_TIME_NONE, Gst.MessageType.EOS | Gst.MessageType.ERROR)
+        p.send_event(Gst.Event.new_eos())
+        p.set_state(Gst.State.NULL)
+        self.range_error = ""
+        if msg is not None and msg.type == Gst.MessageType.ERROR:
+            log.error("recording %s: copy %s-%s: %s", cam, t0, t1, msg.parse_error()[0])
+            self.range_error = str(msg.parse_error()[0])
         after = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
         return sorted(p for p in after - before if parse(p, spool))
 

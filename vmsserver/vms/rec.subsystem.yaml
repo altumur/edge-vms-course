@@ -44,6 +44,7 @@ unit:
     # survive ten minutes for the recording to stop, and a restart would leave a camera recording for
     # ever with nobody remembering why.
     until:          {type: float,  default: 0}       # unix seconds; 0 — never
+    when:           {type: string, default: always}  # a BACKUP recording (home on a backup volume): `always`, or `offline` — only while the primary should be written and is not (Lesson 26)
 placement:
   capacity:   {from: capacity, fallback: 50}         # cameras a recorder can write — its own number, from its heartbeat: disks and NIC
   headroom:   {from: headroom}

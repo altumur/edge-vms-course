@@ -153,3 +153,5 @@ def row(items: dict) -> dict:
 # The controller uses the spec's method directly; this wrapper exists for symmetry and for the tests.
 def items(row_: dict) -> dict:
     return SPEC.items(row_)
+
+from . import volumes as _volumes  # noqa: E402,F401  — registers the backup volume's placement rules (Lesson 26)

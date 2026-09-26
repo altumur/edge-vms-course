@@ -204,6 +204,9 @@ class FakeActuator:
         self.dead: list[int] = []
         self.posted: list[tuple[int, str, dict]] = []
         self.fetched: list[tuple] = []                   # what `record_range` was asked for
+        self.copied: list[tuple] = []                    # what `copy_range` was asked for (Lesson 26)
+        self.available = None                            # (source, t0, t1) -> spans the source really holds; None: all
+        self.range_error = ""                            # set by a real actuator whose range pipeline failed
         self.started: dict[int, dict] = {}
 
     # Records the call. `stop` always succeeds and removes the id. A start/restart on a failing id fails
@@ -238,25 +241,41 @@ class FakeActuator:
         """What an element would post on the bus."""
         self.posted.append((cid, kind, fields))
 
-    # Clears `running`.
     # Fetch a range out of a device's own archive and write it as segments in the spool, the way a live
     # recording is written — the only difference is where the bytes came from. The real one is a pipeline on
     # the holder's playback door; this one writes the files so the ordering and the manifest can be tested.
+    #
+    # `available(source, t0, t1) -> [(a, b)]`, when a test sets it, is what the source ACTUALLY holds of the
+    # range — a card with a hole in it (Lesson 16, and the feedback's point P: a summary cannot say where the
+    # holes are). Only those spans are written. Unset, the source has everything it is asked for.
     def record_range(self, cam, source: str, epoch: int, t0: float, t1: float, spool: str, seg: int = 600) -> list[str]:
+        return self._write_range(cam, source, epoch, t0, t1, spool, seg, self.fetched)
+
+    # A range COPIED out of another archive of ours — a backup recording's segments (Lesson 26): the samples
+    # as they were stored, with the times they were recorded at, not a second recording of them through a
+    # pipeline. Here it is the same file-writing as `record_range`; the difference is what it is asked from
+    # and what `copied` remembers.
+    def copy_range(self, cam, source: str, epoch: int, t0: float, t1: float, spool: str, seg: int = 600) -> list[str]:
+        return self._write_range(cam, source, epoch, t0, t1, spool, seg, self.copied)
+
+    def _write_range(self, cam, source, epoch, t0, t1, spool, seg, log) -> list[str]:
         import os
         from datetime import datetime, timezone
         from .archive import segment_path
+        spans = [(t0, t1)] if self.available is None else [(max(a, t0), min(b, t1)) for a, b in self.available(source, t0, t1)
+                                                          if b > t0 and a < t1]
         out = []
-        t = t0
-        while t < t1:
-            end = min(t + seg, t1)
-            p = segment_path(spool, str(cam), epoch, datetime.fromtimestamp(t, timezone.utc).replace(microsecond=0))
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "wb") as f:
-                f.write(b"\x00" * 16)
-            os.utime(p, (end, end))                      # the segment ends where it ends: `promote` reads mtime
-            out.append(p); self.fetched.append((str(cam), t, end, source))
-            t = end
+        for lo, hi in spans:
+            t = lo
+            while t < hi:
+                end = min(t + seg, hi)
+                p = segment_path(spool, str(cam), epoch, datetime.fromtimestamp(t, timezone.utc).replace(microsecond=0))
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "wb") as f:
+                    f.write(b"\x00" * 16)
+                os.utime(p, (end, end))                  # the segment ends where it ends: `promote` reads mtime
+                out.append(p); log.append((str(cam), t, end, source))
+                t = end
         return out
 
     def stop_all(self) -> None:

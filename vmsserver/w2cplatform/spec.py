@@ -567,6 +567,30 @@ def register_constraint(name: str, fn) -> None:
     CONSTRAINTS[name] = fn
 
 
+# Two more doors of the same kind, for rules a constraint cannot state because they need more than the row
+# and the worker's labels. Keyed by the SPEC's name; the platform calls them and knows nothing of what they
+# mean.
+#
+# `admit(ctl, row, worker) -> bool` — may this unit be placed on this worker at all. A FILTER: it runs in
+# `eligible`, beside the labels and `spread_by`, so it beats `home` and `near` the way they do. The VMS
+# registers one for `rec`: a backup volume holds only the recordings homed on it, and they go nowhere else.
+#
+# `near_rank(ctl, their_id) -> sortable` — when `near` finds SEVERAL units of the followed subsystem (two
+# recordings of one camera), which one to stand beside. Smallest first; ties by their id, so two passes
+# agree. The VMS registers one for `vms`: beside the BACKUP recording, which is the one that must survive
+# the primary's server.
+ADMIT: dict[str, object] = {}
+NEAR_RANK: dict[str, object] = {}
+
+
+def register_admit(spec_name: str, fn) -> None:
+    ADMIT[spec_name] = fn
+
+
+def register_near_rank(spec_name: str, fn) -> None:
+    NEAR_RANK[spec_name] = fn
+
+
 # Sort key: numeric ids before others, numbers by value.
 def _unit_key(u: str):
     return (0, int(u)) if u.isdigit() else (1, u)
@@ -801,6 +825,9 @@ class SpecController(Controller):
         rule = CONSTRAINTS[self.spec.constraint]
         out = [w for w in workers if rule(row, self.labels_of(w))]
         out = [w for w in out if self.server_of(w) not in self.servers_taken(row)]
+        admit = ADMIT.get(self.spec.name)
+        if admit is not None:
+            out = [w for w in out if admit(self, row, w)]
         with_group = self.worker_with_group(row, out)
         return [w for w in out if w == with_group] if with_group else out
 
@@ -1004,7 +1031,8 @@ class SpecController(Controller):
                         return w, hb.extra.get("server", "?")
                     found.append((str(st.get("id")), w, hb.extra.get("server", "?")))
         if found:
-            _, w, server = sorted(found)[0]
+            rank = NEAR_RANK.get(self.spec.name)
+            _, w, server = sorted(found, key=lambda f: ((rank(self, f[0]) if rank else 0), f))[0]
             return w, server
         return None
 

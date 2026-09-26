@@ -53,8 +53,13 @@ from w2cplatform.spec import Refused
 
 SUB = "rec"
 TABLE = "volumes"
-KINDS = ("local", "network")
+KINDS = ("local", "network", "backup")
 FIELDS = ("kind", "url", "server", "quota_bytes", "access_secret", "enabled")
+
+
+# The kinds that are a disk on ONE box, named in `server`. A backup volume is one: a camera's card, or the
+# disk of a second server that keeps a copy of critical cameras.
+ON_A_BOX = ("local", "backup")
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,9 @@ def refuse(fields: dict) -> None:
         raise Refused(f"a volume is {' or '.join(KINDS)}, not {kind!r}")
     if kind == "local" and not str(fields.get("server", "")):
         raise Refused("a local volume is a disk on one server: name it")
+    if kind == "backup" and not str(fields.get("server", "")):
+        raise Refused("a backup volume is a disk on one box — a camera's card, a second server — and a copy "
+                      "is only a copy if you know which box it is on: name it")
     if kind == "network" and str(fields.get("server", "")):
         raise Refused("a network volume is served by whichever box takes it — leave `server` empty")
     # EVERY declared volume has a ceiling, local ones included, and that is the change that lets a disk
@@ -161,7 +169,7 @@ def declared(vars_) -> list[Volume]:
 # to help — then the network archives, which anybody can take and which are therefore the ones a spare is
 # for. Disabled volumes are nobody's: the administrator turned them off.
 def servable(vols: list[Volume], server: str) -> list[str]:
-    mine = [v.name for v in vols if v.enabled and v.kind == "local" and v.server == server]
+    mine = [v.name for v in vols if v.enabled and v.kind in ON_A_BOX and v.server == server]
     net = [v.name for v in vols if v.enabled and v.kind == "network"]
     return mine + net
 
@@ -175,7 +183,7 @@ def servable(vols: list[Volume], server: str) -> list[str]:
 def suggest(vars_, objects, sub: Subsystem, now: float, lost_after: float = 45.0) -> list[dict]:
     from w2cplatform.console import heartbeats
     from w2cplatform.resource import resources_seen
-    have = {v.server for v in declared(vars_) if v.kind == "local"}
+    have = {v.server for v in declared(vars_) if v.kind in ON_A_BOX}
     res = resources_seen(objects)
     out = {}
     for _, hb in heartbeats(objects, sub.name + "/").items():
@@ -241,3 +249,60 @@ def _unwritable(objects, sub: Subsystem, now: float, lost_after: float) -> dict[
         if vol and err:
             out[vol] = err
     return out
+
+
+
+# -- the backup archive (М10B Lesson 26) ---------------------------------------------------------------
+# A BACKUP volume holds a second recording of a camera: on the camera's own card, or on a second server's
+# disk. The primary recording closes its gaps from it — a link that dropped, the seconds its recorder took
+# to move — the way Lesson 16 closes them from a device's archive, except that this archive is OURS: a
+# recording, with a manifest, served by a recorder.
+
+def backups(vars_) -> set[str]:
+    """The names of the enabled backup volumes."""
+    return {v.name for v in declared(vars_) if v.kind == "backup" and v.enabled}
+
+
+def is_backup(row: dict, vars_=None, names: set[str] | None = None) -> bool:
+    """Is this recording a backup copy — homed on a backup volume?"""
+    names = backups(vars_) if names is None else names
+    return str(row.get("home") or "") in names
+
+
+# `home` is a preference everywhere else, and for a backup volume that is wrong in both directions. A
+# primary recording moved onto the backup volume while its own server rebooted leaves ONE copy where the
+# operator paid for two (and on a card, eats the camera's uplink); a backup recording moved off it is not a
+# copy at all. So for `rec` it is a filter: a recording homed on a backup volume goes to that volume or
+# nowhere, and nothing else goes to a backup volume. `/unplaceable` then says so, which is the honest
+# answer to "the card is gone".
+def admit_recording(ctl, row: dict, worker: str) -> bool:
+    names = backups(ctl.vars)
+    if not names:
+        return True
+    place = ctl.place_of(worker)
+    home = str(row.get("home") or "")
+    if home in names:
+        return place == home
+    return place not in names
+
+
+# A camera with two recordings has its worker placed beside one of them (`near: {sub: rec, of: cam}`).
+# Beside the PRIMARY is the obvious choice and the wrong one: when the primary's server falls, it takes the
+# worker with it, and the backup loses its stream at exactly the moment it exists for. Beside the backup,
+# the worker survives the primary's server, the backup keeps recording, and the primary backfills its move
+# from the backup.
+def rank_near_recording(ctl, recording_id: str) -> int:
+    names = backups(ctl.vars)
+    if not names:
+        return 0
+    items, _ = ctl.vars.get(f"{SUB}/recordings/{recording_id}")
+    return 0 if items and str(items.get("home") or "") in names else 1
+
+
+def _register() -> None:
+    from w2cplatform.spec import register_admit, register_near_rank
+    register_admit(SUB, admit_recording)
+    register_near_rank("vms", rank_near_recording)
+
+
+_register()
