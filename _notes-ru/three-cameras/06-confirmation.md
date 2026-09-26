@@ -150,10 +150,14 @@ vms_headroom 147
 vms_worker_load{worker="w-1"} 0.020
 vms_worker_load{worker="w-2"} 0.020
 vms_worker_load{worker="w-3"} 0.020
+# TYPE vms_spare_workers gauge
+vms_spare_workers 0
 # TYPE vms_epoch_conflicts counter
 vms_epoch_conflicts{worker="w-1"} 0
 vms_epoch_conflicts{worker="w-2"} 0
 vms_epoch_conflicts{worker="w-3"} 0
+# TYPE vms_failover_seconds gauge
+vms_failover_seconds{kind="worst"} 0.0
 # TYPE vms_resources_live gauge
 vms_resources_live 3
 # TYPE vms_cameras_running gauge
@@ -163,6 +167,10 @@ vms_snapshot_age_seconds 1.3
 ```
 
 `vms_cameras_running 3` — это счёт записей в фазе `running` по живым воркерам, то есть тот же источник, что и `rows`.
+
+`vms_spare_workers 0` — метрика общая для всех подсистем. Запасной воркер жив, но не держит ни одного места и ждёт, когда оно освободится. Места бывают у записи — это тома архива. У VMS место — это просто сервер, и запасных у неё не бывает, поэтому здесь всегда `0`. Запасной в `vms_worker_load` не попадает: его нулевая загрузка тянула бы среднее вниз и мешала бы масштабированию.
+
+`vms_failover_seconds{kind="worst"}` — самое долгое переключение, которое видно по heartbeat'ам: разница между последним отчётом прежнего держателя имени (`previous_hb`) и стартом нового экземпляра (`started`). Здесь переключений не было, отсюда `0.0`.
 
 `vms_snapshot_age_seconds` показывает, насколько устарела копия, которую читает доменный слой. Значение `-1` означало бы «снапшот не публиковался ни разу» — отдельный случай от «опубликован только что».
 
