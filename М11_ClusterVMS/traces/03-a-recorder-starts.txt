@@ -1,0 +1,107 @@
+# recworker (allocation 0 on srv-a)
+GET /v1/var/platform/schema?namespace=default
+→ 404
+
+# recworker (allocation 0 on srv-a)
+GET /v1/vars?prefix=rec/slots/&namespace=default
+→ 200 []
+
+# recworker (allocation 0 on srv-a)
+GET /v1/var/rec/slots/r-0?namespace=default
+→ 404
+
+# recworker (allocation 0 on srv-a)
+PUT /v1/var/rec/slots/r-0?namespace=default&cas=0
+{"Items": {"holder": "alloc-0001", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "rec/slots/r-0", "ModifyIndex": 1002}
+
+# recworker (allocation 0 on srv-a)
+GET /v1/var/objects/rec/heartbeats/r-0?namespace=default
+→ 404
+
+# recworker (allocation 0 on srv-a)
+GET /v1/var/rec/slots/r-0?namespace=default
+→ 200 {
+  "Path": "rec/slots/r-0",
+  "Items": {
+    "holder": "alloc-0001",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1002
+}
+
+# recworker (allocation 0 on srv-a)
+PUT /v1/var/rec/slots/r-0?namespace=default&cas=1002
+{"Items": {"holder": "alloc-0001", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "rec/slots/r-0", "ModifyIndex": 1003}
+
+# recworker (allocation 0 on srv-a)
+GET /v1/vars?prefix=rec/volumes/&namespace=default
+→ 200 [{"Path": "rec/volumes/disks-a", "ModifyIndex": 1001}]
+
+# recworker (allocation 0 on srv-a)
+GET /v1/var/rec/volumes/disks-a?namespace=default
+→ 200 {
+  "Path": "rec/volumes/disks-a",
+  "Items": {
+    "kind": "local",
+    "url": "/data/srv-a/archive",
+    "server": "srv-a",
+    "quota_bytes": "4000000000000",
+    "access_secret": "",
+    "enabled": "true"
+  },
+  "ModifyIndex": 1001
+}
+
+# recworker (allocation 0 on srv-a)
+GET /v1/var/rec/holds/disks-a?namespace=default
+→ 404
+
+# recworker (allocation 0 on srv-a)
+PUT /v1/var/rec/holds/disks-a?namespace=default&cas=0
+{"Items": {"holder": "alloc-0001", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "rec/holds/disks-a", "ModifyIndex": 1004}
+
+# recworker (allocation 0 on srv-a)
+PUT /v1/var/objects/rec/heartbeats/r-0?namespace=default
+{
+  "Items": {
+    "data": {
+      "worker": "r-0",
+      "ts": 1757500000.0,
+      "status": [],
+      "server": "srv-a",
+      "instance": "alloc-0001",
+      "alloc": "alloc-0001",
+      "labels": "vlan:cctv-a",
+      "assignment_rev": 0,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 0,
+      "capacity": 50,
+      "headroom": 50,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/srv-a/archive",
+      "devices": [],
+      "fetched": "",
+      "volume": "disks-a",
+      "volume_error": "",
+      "archive_error": "",
+      "archive_away_since": 0.0,
+      "archive_failure": "",
+      "refused": {},
+      "spool": 0,
+      "spool_for": {},
+      "closed": "",
+      "nowhere_seconds": 0,
+      "schema": 1,
+      "build": "dev"
+    }
+  }
+}
+→ 200 {"Path": "objects/rec/heartbeats/r-0", "ModifyIndex": 1005}
