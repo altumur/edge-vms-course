@@ -1,181 +1,256 @@
-# Lesson 1 — When One Box Isn't Enough
+# Урок 1 — Когда одной коробки мало
 
-**Module:** ClusterVMS — workers that outlive their server (Module 11)
-**You will build:** a three-server Nomad cluster with ACLs on and a data partition under raft, М10's platform tests running against Nomad's stores instead of files, and a measured per-worker budget — plus a written justification for why this deployment needed a scheduler at all.
-**Time:** ~150 minutes (60 without the bench).
+**Модуль:** М11 — ClusterVMS: воркеры, которые переживают свой сервер
+**Вы напишете:** письменное обоснование того, зачем развёртыванию понадобился планировщик; бюджет воркера `B + n·I` и его `CAPACITY`, измеренные на своём железе; и стенд модуля — три сервера, на которых идёт весь модуль, с первым воркером, который взял имя и сказал, сколько камер он может.
+**Время:** ~90 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-М10 ended with the platform's shape on one box: a controller that is the only writer, a worker that is DriverPack, an archive resource, and two stores underneath — a directory of JSON files with a `ModifyIndex`, and a directory of objects. Every test in that module passed against files. This module's first claim is that **nothing in `vms/` changes** when the files become a raft — both of them: the config store as Variables, and the object store as Variables too, at this size — and the first thing to do is prove it, because everything after depends on it.
+М10 закончился формой платформы на одной коробке. Контроллер — единственный писатель конфигурации. Воркер — это DriverPack с назначенными ему камерами. Ресурс архива — диски коробки. Под ними два хранилища: каталог JSON-файлов с `ModifyIndex` и каталог объектов. Каждый тест того модуля проходил на файлах.
 
-The second claim is about restraint. The instinct after a few years near Kubernetes is that a scheduler is simply how things are run now. On one box it is a second supervisor over the same processes, memory taken from page cache, and a new way to orphan a container. The scheduler arrives with the second server, because that is when there is first a decision to make — *which* server — and this lesson makes you write down what forced that decision before you touch `nomad agent`.
+Этот модуль запускает ту же форму на нескольких серверах и делает так, чтобы она пережила смерть любого из них. Но прежде чем трогать `nomad agent`, нужно ответить на вопрос, на который после нескольких лет рядом с Kubernetes почти никто не отвечает: **а зачем здесь планировщик вообще?** Привычка говорит, что так сейчас запускают всё. На одной коробке планировщик — это второй надзиратель над теми же процессами, память, отнятая у страничного кеша, и новый способ осиротить контейнер. Он появляется вместе со вторым сервером, потому что только тогда впервые возникает решение, которое нужно принимать, — *на каком* сервере.
 
-> **What you can verify without hardware.** The argument, the arithmetic, and the store swap: `tests/test_lesson1_stores.py` runs М10's base classes against the cluster's Variables fake — the same CAS, the same ACL, the same epoch issuer under four threads. Building the cluster needs three VMs from the М9 bench (or three of anything with a Linux kernel and Podman). Nothing in this lesson needs a camera.
+Урок заставляет записать, что именно вынудило это решение, до того как вы его примете. И заканчивается первой настоящей вещью модуля: воркер на кластере стартует, берёт себе имя и публикует, сколько камер он потянет, — числом, которое он измерил сам.
 
-## Prerequisites
+> **Что проверяется без железа.** Аргумент, арифметика и первый воркер. `tests/stand.py` поднимает стенд модуля — три сервера, одно хранилище, настоящий `ClusterWorker` — и записывает каждый его запрос к Nomad так, как его отправил бы `NomadVariables`; полная трасса этого урока — [`traces/01-worker-starts.txt`](traces/01-worker-starts.txt). Сам кластер строится в уроке 2 и требует трёх виртуальных машин со стенда М9. Камера в этом уроке не нужна.
 
-- **М10 Lesson 1** — the contract: `Variables` with `get/put(cas)/list`, `ObjectStore` with `put/get/list`, the `Controller` and `Worker` bases.
-- **М9 Lesson 4** — the appliance's data partition; `/data` survives an A/B update and raft is going to live there.
-- **М9 Lesson 7** — `B + n·I`, which is the number a worker's `CAPACITY` comes from.
-- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) — why Nomad, and its licence.
+## Что нужно знать заранее
 
-## Learning objectives
+- **М10A, урок 1** — контракт: `Variables` с `get/put(cas)/list`, `ObjectStore` с `put/get/list`, базовые `Controller` и `Worker`.
+- **М10A, урок 7** — слот воркера и его аренда.
+- **М9, урок 7** — формула `B + n·I`, из которой берётся `CAPACITY` воркера.
+- [`kubernetes-vs-nomad.md`](kubernetes-vs-nomad.md) — почему Nomad и что с его лицензией.
 
-1. Name the four pressures that force a second server and say which one actually needs a scheduler.
-2. Argue why an orchestrator on a single appliance costs surface and buys nothing.
-3. Describe Nomad's server/client model and why three or five servers, never two or four.
-4. Bring up a three-server cluster with ACLs on and raft on the data partition.
-5. Swap М10's file stores for Nomad's and show the platform tests do not notice.
-6. Measure a worker's baseline and increment and derive its capacity.
+## Чему вы научитесь
+
+1. Назвать четыре давления, из-за которых ставят второй сервер, и сказать, какое из них действительно требует планировщика.
+2. Объяснить, почему оркестратор на одной коробке стоит поверхности и ничего не даёт.
+3. Описать модель Nomad — серверы, клиенты, регион — и почему серверов три или пять, но никогда не два и не четыре.
+4. Посчитать бюджет воркера и вывести его `CAPACITY`.
+5. Прочитать heartbeat воркера поле за полем и сказать, кто читает каждое.
 
 ---
 
-## Step 1 — What actually forces a second server
+## Шаг 1 — Что на самом деле заставляет поставить второй сервер
 
-Four things, and it is worth being precise because people reach for a cluster for the wrong one.
+Четыре вещи, и различать их стоит точно, потому что за кластером часто тянутся не из-за той.
 
-| Pressure | What runs out | Cluster or bigger box? |
+| Давление | Что кончается | Кластер или коробка побольше? |
 |---|---|---|
-| **Camera count** | CPU and memory for pipelines — `B + n·I` | A bigger box, for a long time. Fifty pipelines in one worker is cheap; a server runs several workers |
-| **Storage throughput** | disk write bandwidth, then disk *capacity* | More disks first. Two hundred cameras at 4 Mbit/s is 100 MB/s — one good disk — but 2 TB/day, which is where capacity beats bandwidth |
-| **Retention** | disk capacity, linearly with days | More disks, or a second box when the chassis is full of them |
-| **Availability** | **a server that must not be a single point of failure** | **This one.** No bigger box fixes it |
+| **Число камер** | процессор и память конвейеров — `B + n·I` | Коробка побольше, и надолго. Пятьдесят конвейеров в одном воркере дёшевы, а сервер держит несколько воркеров |
+| **Поток записи** | пропускная способность дисков, потом их **ёмкость** | Сначала больше дисков. Двести камер по 4 Мбит/с — это 100 МБ/с, один хороший диск; но и 2 ТБ в сутки, и тут ёмкость обгоняет скорость |
+| **Глубина архива** | ёмкость дисков, линейно по дням | Больше дисков или вторая коробка, когда корпус ими забит |
+| **Доступность** | **сервер, который не должен быть единой точкой отказа** | **Вот это.** Никакая коробка побольше его не лечит |
 
-The first three are arithmetic and a purchase order. The fourth is the reason this module exists: a customer for whom *the server died and the site was dark for four hours while somebody drove there* is not acceptable. Meeting it means something has to notice the box died and start the work elsewhere. That something is a scheduler, and it is the cost of that requirement and nothing else. Write the requirement down first:
+Первые три — арифметика и заявка на закупку. Четвёртое — причина, по которой этот модуль существует. Для заказчика неприемлемо «сервер умер, и площадка стояла тёмной четыре часа, пока кто-то ехал». Чтобы этого не было, нужно, чтобы **что-то** заметило смерть коробки и запустило работу в другом месте. Это «что-то» и есть планировщик, и он — цена этого требования, и ничего больше.
 
-> *A single server failure must not stop recording for longer than __ seconds, and must not require a person.*
+Поэтому сначала требование, письменно:
 
-The blank is the product's recovery time objective. Lesson 4 measures it — `vms_failover_seconds{kind="worst"}` — and the drill script keeps the worst of three runs, because the datasheet number is the worst case.
+> *Отказ одного сервера не должен останавливать запись дольше чем на __ секунд и не должен требовать человека.*
 
-## Step 2 — Why not on one box
+Пропуск — это целевое время восстановления продукта. Урок 8 его измерит (`vms_failover_seconds{kind="worst"}`), и сценарий учений оставит худший из трёх прогонов: в паспорт продукта идёт худший случай.
 
-**There is nothing to schedule.** A scheduler decides *which server* runs a piece of work. With one server there is one answer. "Run N workers" on one box is `systemctl start vmsworker@w-1`, `@w-2` — М10's template unit, with restart policy and the data-partition boundary already in it. A scheduler would add a second supervision layer over the same processes and a second notion of "running".
+## Шаг 2 — Почему не на одной коробке
 
-**It has a cost the appliance cannot spare.** Nomad's production guidance sizes *servers* at 4–8+ cores and 16–32 GB+ of memory and says nothing about single-node deployments; the shape is not one the tool is designed for. Memory spent on a raft server is memory that was page cache for video.
+**Планировать нечего.** Планировщик решает, *какой* сервер выполняет работу. При одном сервере ответ один. «Запустить N воркеров» на одной коробке — это `systemctl start vmsworker@w-1`, `@w-2`: шаблонный юнит из М10B, в котором уже есть политика перезапуска и граница раздела данных. Планировщик добавил бы второй слой надзора над теми же процессами и второе понятие «запущено».
 
-**It has its own failure modes.** HashiCorp publishes a support note on orphaned Podman containers after a Nomad agent restart — the same shape of bug М8 Lesson 3 met with the Docker client, one layer up. Under `systemd` that class of bug does not exist, because `systemd` *is* the supervisor and does not restart out from under itself.
+**Он стоит того, чего у коробки нет.** Рекомендации Nomad для продакшена дают *серверам* 4–8 ядер и 16–32 ГБ памяти и ничего не говорят об одноузловых установках: инструмент не рассчитан на такую форму. Память, отданная серверу raft, — это память, которая была страничным кешем для видео.
 
-> **Rule: one server, no orchestrator. The scheduler arrives with the second server, because that is when there is first a decision to make.**
+**У него свои отказы.** У HashiCorp есть заметка поддержки об осиротевших контейнерах Podman после перезапуска агента Nomad — та же форма ошибки, что М8 встречал с клиентом Docker, этажом выше. Под `systemd` такого класса ошибок нет: `systemd` сам и есть надзиратель и не перезапускается из-под себя.
 
-М10's shape is what makes this a rule rather than a preference: the controller, the worker and the resource are the same three programs under `systemd` and under Nomad. Nothing has to be rewritten to go from one to many, so nothing is gained by running the scheduler early.
+> **Правило: один сервер — без оркестратора. Планировщик приходит со вторым сервером, потому что только тогда впервые появляется решение, которое нужно принимать.**
 
-## Step 3 — Nomad's model, in the terms this module uses
+Правилом, а не вкусом, это делает форма М10: контроллер, воркер и ресурс — одни и те же три программы и под `systemd`, и под Nomad. Чтобы перейти от одной коробки к нескольким, ничего не нужно переписывать, — значит, и запускать планировщик заранее незачем.
 
-| Role | Does | Count |
+## Шаг 3 — Модель Nomad в терминах модуля
+
+| Роль | Что делает | Сколько |
 |---|---|---|
-| **Server** | accepts jobs, holds cluster state in **raft**, decides placement | **three or five** per region |
-| **Client** | registers its resources, runs the work it is given, reports back | every server that runs workers or carries a resource |
+| **Сервер** | принимает задания, держит состояние кластера в **raft**, решает, где что запустить | **три или пять** на регион |
+| **Клиент** | регистрирует свои ресурсы, запускает то, что ему дали, докладывает назад | каждый сервер, на котором идут воркеры или лежит ресурс |
 
-A **region** is one raft — one replicated log, one leader, one notion of what is true. Everything this module relies on for correctness — a worker's slot, the epoch per camera, the assignment, the placement — lives in that raft, which is why *cluster* in this course and a Nomad region are the same thing.
+**Регион** — это один raft: один реплицируемый журнал, один лидер, одно представление о том, что правда. Всё, на чём этот модуль держит корректность, — слот воркера, эпоха на камеру, назначение, размещение — живёт в этом raft. Поэтому *кластер* в этом курсе и регион Nomad — одно и то же.
 
-**Three or five, never two or four.** Raft needs a majority. Three servers tolerate one failure; two tolerate none — a two-server cluster is strictly worse than one server, because either one dying stops the other. For a server room, three.
+**Три или пять, никогда два или четыре.** Raft похож на собрание жильцов, где решение принято, когда за него большинство. Из трёх жильцов один может заболеть — двое остальных всё ещё большинство. Из двух не может заболеть никто: оставшийся один — не большинство, и дом не может решить ничего. Кластер из двух серверов строго хуже одного сервера: смерть любого останавливает второй. Четвёртый жилец к трём не добавляет ничего — большинство из четырёх — это три, и заболеть по-прежнему может только один, а поводов для «заболеть» стало больше. Для серверной — три.
 
-The servers decide; the clients execute. On the bench the same three boxes do both, and the roles stay distinct in the configuration.
+Серверы решают, клиенты исполняют. На стенде одни и те же три коробки делают и то и другое, а в конфигурации роли остаются раздельными (урок 2).
 
-## Step 4 — Build the cluster
+## Шаг 4 — Стенд модуля
 
-Three VMs from the М9 bench — `10.0.0.11`, `.12`, `.13` — each with a data partition at `/data`. **Neither `podman` nor `exec2` is built into Nomad**; both are plugins in a directory the agent is told about:
+Весь модуль идёт на одном стенде, и каждый урок продолжает его историю, как записки [`three-cameras`](../_notes-ru/three-cameras/README.md) продолжают историю своих трёх камер.
 
-```bash
-mkdir -p /data/nomad/plugins
-nomad version                                  # >= 1.8.0: the disconnect block (Lesson 4)
-install -m 0755 nomad-driver-podman /data/nomad/plugins/
-systemctl enable --now podman.socket
+```
+             vlan:cctv-a                vlan:cctv-b
+        ┌──────────┴──────────┐  ┌──────────┴──────────┐
+     ┌──┴───┐             ┌───┴──┴──┐             ┌───┴──┐
+     │srv-a │             │ srv-b   │             │srv-c │
+     └──────┘             └─────────┘             └──────┘
+   видит сегмент a     видит оба сегмента     видит сегмент b
 ```
 
-[`deploy/server.hcl`](clustervms/deploy/server.hcl) — `bootstrap_expect = 3`, `retry_join` the three addresses, `acl { enabled = true }`, `data_dir = "/data/nomad"`. [`deploy/client.hcl`](clustervms/deploy/client.hcl):
+Три сервера, одно хранилище (raft на всех трёх), у каждого свои диски. Сети камер две: `vlan:cctv-a` и `vlan:cctv-b`. `srv-a` видит первую, `srv-c` — вторую, `srv-b` — обе. Это различие начнёт работать в уроке 10, когда контроллер будет решать, на какой сервер можно поставить камеру, которую видно только из одного сегмента.
 
-```hcl
-client {
-  enabled = true
-  servers = ["10.0.0.11:4647", "10.0.0.12:4647", "10.0.0.13:4647"]
-  meta {
-    labels  = "vlan:cctv-a,vlan:cctv-b"   # what this server's NICs can reach; the worker reports it, the controller places by it
-    archive = "/data/archive"             # this server carries an archive resource
+Как сервер узнаёт, что он видит? Так же, как любой процесс кластера узнаёт что-то о своём месте, — из окружения. Nomad знает свои узлы: в `client.hcl` у каждого есть `meta.labels`. Но воркер не читает переменных Nomad: платформа знает пять нейтральных имён (`w2cplatform/runtime.py`), а задание Nomad (урок 3) переводит в них свои. Вот что получает первый воркер стенда:
+
+```json
+{"SLOT_INDEX": "0", "SERVER_NAME": "srv-a", "LABELS": "vlan:cctv-a", "INSTANCE_ID": "alloc-0001"}
+```
+
+`SLOT_INDEX` — номер аллокации в задании, `SERVER_NAME` — узел, на котором она запущена, `LABELS` — его `meta.labels`, `INSTANCE_ID` — идентификатор аллокации. Воркер не знает, кто это заполнил, — Nomad, Kubernetes или `systemd` через `%i`. На этом держится то, что модуль не привязан к Nomad (урок 3).
+
+## Шаг 5 — Бюджет воркера
+
+Прежде чем что-то размещать, нужно решить, **что** размещается. Один контейнер на камеру — очевидная единица и неправильная; измерение из урока 7 М9 показывает почему:
+
+```
+B ≈ 60 МБ на процесс        I ≈ 8 МБ на конвейер          (проверьте свои — это форма, а не обещание)
+
+контейнер на камеру:        200 × (B + I)   ≈ 13,6 ГБ
+четыре воркера по 50:         4 × (B + 50·I) ≈  1,8 ГБ
+```
+
+`B` — то, что стоит процесс сам по себе: интерпретатор, GStreamer, DriverPack. `I` — то, что добавляет каждый конвейер. Двести процессов платят `B` двести раз, четыре — четыре.
+
+**Считайте PSS, а не RSS.** Пятьдесят конвейеров в одном процессе делят одну `libgstreamer`, и RSS посчитает её пятьдесят раз, а между процессами — ещё и каждый раз заново. PSS делит общие страницы между теми, кто их держит, и сходится с тем, что на самом деле пропадёт из свободной памяти.
+
+Единица, которую размещает Nomad, — **воркер**: один процесс, N конвейеров. Его `CAPACITY` — сколько камер он берёт — считается на **своём** сервере:
+
+```
+CAPACITY = ⌊(бюджет памяти воркера − B) / I⌋
+
+бюджет 460 МБ:  ⌊(460 − 60) / 8⌋ = 50
+```
+
+Это число воркера, измеренное там, где идут конвейеры. Контроллер его читает и своего не имеет (М10B, урок 3): на сервере с другим процессором или другим DriverPack то же самое задание даст другой `CAPACITY`, и так и должно быть. Куда его записать, покажет задание воркера в уроке 3 — переменная `CAPACITY` в его окружении.
+
+## Шаг 6 — Воркер говорит, сколько он может
+
+Теперь первый воркер стенда стартует на `srv-a`. Вся его трасса — [`traces/01-worker-starts.txt`](traces/01-worker-starts.txt), шесть запросов. Разберём их.
+
+Первое, что делает любой процесс, открывший хранилище, — проверяет, понимает ли он его формат:
+
+```
+GET /v1/var/platform/schema?namespace=default
+→ 404
+```
+
+`404` здесь значит «формат тот, который знает эта сборка» — свежая установка. Если бы хранилище было новее сборки, воркер отказался бы запускаться, а не читал бы строки, которые поймёт неправильно (М10A, урок 17).
+
+Дальше воркер берёт **имя** — слот `w-0`. Номер аллокации `0` — это только пожелание; доказательство — запись в хранилище, сделанная по CAS:
+
+```
+GET /v1/vars?prefix=vms/slots/&namespace=default
+→ 200 []
+
+GET /v1/var/vms/slots/w-0?namespace=default
+→ 404
+
+PUT /v1/var/vms/slots/w-0?namespace=default&cas=0
+{"Items": {"holder": "alloc-0001", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "vms/slots/w-0", "ModifyIndex": 1001}
+```
+
+`cas=0` значит «создать, только если такого ключа ещё нет». Две аллокации с одним номером — а так бывает при переезде — придут к этому `PUT` вдвоём, и хранилище пустит одну: вторая получит `409` и возьмёт другой слот. Это целиком урок 4; здесь достаточно того, что имя воркера — это **запись в raft**, а не то, что сказал ему Nomad.
+
+И наконец воркер говорит о себе. Heartbeat — это объект, а объекты на этом кластере — тоже Variables, под `objects/…` (урок 2):
+
+```
+GET /v1/var/objects/vms/heartbeats/w-0?namespace=default
+→ 404
+
+PUT /v1/var/objects/vms/heartbeats/w-0?namespace=default
+```
+```json
+{
+  "Items": {
+    "data": {
+      "worker": "w-0",
+      "ts": 1757500000.0,
+      "status": [],
+      "server": "srv-a",
+      "instance": "alloc-0001",
+      "alloc": "alloc-0001",
+      "labels": "vlan:cctv-a",
+      "assignment_rev": 0,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 0,
+      "capacity": 50,
+      "headroom": 50,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
   }
 }
 ```
-
-Three things in there are load-bearing later. **`data_dir` on `/data`**: raft lives here, and the cluster's memory of every epoch ever issued must not be replaced by an OS update — М9 Lesson 4's boundary applied to the scheduler. **`meta.labels`** and **`meta.archive`**: the first becomes the worker's heartbeat and the controller's placement constraint (Lesson 5); the second is what pins the resource job to this server (Lesson 2). **`acl { enabled = true }`**: Lesson 2 depends on a worker being unable to write a camera row, and enabling ACLs later on a running cluster is a migration. Day one.
-
-```bash
-nomad server members         # three servers, one leader
-nomad node status            # three clients, ready; -verbose shows the podman driver healthy
-nomad acl bootstrap          # once; keep the management token somewhere that is not a lesson
+```
+→ 200 {"Path": "objects/vms/heartbeats/w-0", "ModifyIndex": 1002}
 ```
 
-And that is the whole of the cluster's storage layer: raft, and each server's disks. The object store М10's contract names — heartbeats, and one snapshot for the domain — is *also* Variables here, under `objects/…` (Step 5), because a dozen ten-kilobyte heartbeats every ten seconds is not a load a raft notices, and a second store with its own quorum, credentials and client is a cost the appliance does not need to pay for it. Footage and events are on the servers' own disks, as resources (Lesson 3).
+`GET` перед `PUT` — не лишний. Воркер смотрит, не оставил ли heartbeat **предыдущий** экземпляр этого слота: если оставил, его время — точка, от которой измеряется переезд (урок 8). Здесь его нет, поэтому `previous_hb` равен нулю.
 
-## Step 5 — The platform's stores become Nomad's
+Каждое поле heartbeat кто-то читает, и ни одно не лежит «на всякий случай»:
 
-This is the step the module's first claim rests on. `cluster/variables.py` is М10's `Variables` contract over Nomad's HTTP API:
+| Поле | Что значит | Кто читает |
+|---|---|---|
+| `worker` | имя, которое воркер доказал в слоте | все: это ключ |
+| `ts` | когда написан | все: heartbeat старше 45 секунд значит «воркера нет» |
+| `status` | что с каждой его камерой: фаза, ревизия, эпоха | консоль, контроллер (подтверждение правок, урок 10) |
+| `server` | на каком сервере воркер сейчас | контроллер (причина размещения), консоль (одна причина на мёртвый сервер) |
+| `instance`, `alloc` | какая аллокация | контроллер и воркеры: отличить новый экземпляр слота от старого |
+| `labels` | какие сети видит сервер | контроллер: куда можно ставить камеру (урок 10) |
+| `assignment_rev` | какую версию назначения воркер прочитал | консоль: догнал ли воркер свою правку |
+| `fenced` | отсечён ли экземпляр | консоль: зомби видно (урок 9) |
+| `capacity` | сколько камер воркер берёт — шаг 5 | контроллер: сколько ему назначать |
+| `headroom` | сколько ещё может взять | автоскейлер: нужен ли ещё воркер (урок 3) |
+| `started`, `previous_hb`, `previous_instance` | когда стартовал и чей heartbeat он сменил | измерение переезда (урок 8) |
+| `archive` | куда идут его события — ресурс этого сервера | ресурс, консоль (урок 6) |
+| `schema`, `build` | какой формат понимает и какая сборка | консоль: что запущено в кластере, для поэтапного обновления |
 
-```
-GET  /v1/var/vms/cameras/7                    -> Items, ModifyIndex
-PUT  /v1/var/vms/cameras/7?cas=8123           -> 200 if ModifyIndex is still 8123; 409 otherwise
-PUT  /v1/var/vms/cameras/7  (a worker's token) -> 403: the ACL, Lesson 2
-```
-
-And `FakeVariables` is the same contract in memory with exactly the semantics the docs promise — a raft-assigned `ModifyIndex`, `cas` succeeding only on a match, 409 otherwise, a 403 for a writer outside its prefixes. The tests run against the fake in milliseconds; `verify-bench.sh` checks the promises against real Nomad.
-
-The object store is the same store seen through the other contract: `VariablesObjectStore` implements М10's `put/get/list` as Variables under `objects/<key>`, so a worker's heartbeat is `objects/vms/w-1/heartbeat {data: …}` and the ACL that comes with its token covers it like any other Variable. `test_the_object_store_on_this_cluster_is_variables` runs М10's `Worker.heartbeat` and `Controller.workers_seen` over it unchanged. The contract is the point: when a cluster is large enough that its heartbeats are a raft load, `open_store("s3+http://…")` is the same three calls against MinIO or S3 (`s3.py`, SigV4 verified against Amazon's worked examples) — which is also the adapter a rented cluster uses in М12 — and `vms/` does not change.
-
-Then the test that says nothing else changed:
-
-```python
-sub = Subsystem("thing")
-ctl = Controller(sub, FakeVariables(), FsObjectStore(...))     # М10's base classes, untouched
-w = Worker(sub, None, ...); w.claim_slot()   -> "w-1"
-w.heartbeat([...], server="srv-a"); ctl.workers_seen()  -> {"w-1": ...}
-ctl.assign("w-1", ["1"]); w.assignment().units          -> ["1"]
-w.take_epoch("1")                                        -> 1
-```
-
-`test_m10s_base_classes_run_on_the_cluster_stores_unchanged` — the name is the claim. Four threads through `next_epoch` on the fake issue `1..200` with no number twice, which is what CAS on a `ModifyIndex` means whether the index comes from a file lock or a raft log.
-
-## Step 6 — The per-worker budget
-
-Before placing anything, the unit of placement. One container per camera is the obvious unit and the wrong one; М9 Lesson 7's probe measures why:
-
-```
-B ≈ 60 MB per process        I ≈ 8 MB per pipeline          (check yours — shapes, not claims)
-one container per camera:    200 × (B + I)  ≈ 13.6 GB
-four workers of fifty:         4 × (B + 50I) ≈  1.8 GB
-```
-
-Report PSS, not RSS — fifty processes share `libgstreamer`, and RSS counts it fifty times. The unit Nomad places is a **worker**: one process, N pipelines. Its `CAPACITY` — the number the worker puts in its heartbeat, the number the controller places by and the autoscaler scales on — is `(memory budget − B) / I` on *this* server, rounded down. It is the worker's number, measured where the pipelines run; the controller reads it and has none of its own (М10 Lesson 6).
-
-**Deliverable:** a working cluster; `tests/test_lesson1_stores.py` green; a measured `CAPACITY` for your hardware written into `deploy/vmsworker.nomad.hcl`; and your version of Step 2's argument, one page, for the first time somebody proposes running Nomad on the single-box product for consistency.
+`capacity` и `headroom` — два разных числа, и различие важно. `capacity` — сколько воркер может вообще. `headroom` — сколько ещё может взять **сейчас**: `capacity` минус назначенное. Автоскейлер смотрит на второе: воркер с загрузкой процессора 40 % и без свободных мест — полон, и новый воркер нужен, хотя процессор и не жалуется.
 
 ---
 
-## Troubleshooting
+## Результат
 
-| Symptom | Likely cause |
-|---|---|
-| `nomad node status -verbose` shows `podman` undetected | The plugin is not in `plugin_dir`, or `podman.socket` is not enabled. |
-| The cluster forms, then splits after a reboot | `data_dir` is on the rootfs slot of an A/B box and the update replaced it. Raft on `/data`. |
-| `nomad var put` works from the operator's shell and 403s from a job | ACLs are on and no policy is bound to the job yet — correct; Lesson 2 binds them. |
-| `FakeVariables` passes and Nomad returns 409 on every write | The code reads once and writes many times with the first index. `Controller.write` re-reads on conflict; use it. |
-| A worker's heartbeat returns 403 | Its policy lacks `objects/vms/*` — the object store is Variables here, and the ACL applies to it like everything else. |
+- Письменное требование: *отказ одного сервера останавливает запись не дольше чем на N секунд и не требует человека* — с вашим N.
+- Одна страница: почему на одиночной коробке нет Nomad, для первого, кто предложит его «для единообразия».
+- Измеренные `B` и `I` на вашем железе и `CAPACITY` из них.
+- Стенд модуля, на котором первый воркер взял слот `w-0` и опубликовал heartbeat с `capacity: 50`, — `tests/stand.py`, сцена `01-worker-starts`, и её трасса.
 
-## Recap
+## Что может пойти не так
 
-- Availability is the one pressure a bigger box cannot answer; write the RTO down before touching a scheduler.
-- One server, no orchestrator; the scheduler arrives with the second server.
-- A region is one raft; three servers, never two.
-- `data_dir` on `/data`; `meta.labels` and `meta.archive`; ACLs on day one.
-- Nomad Variables are М10's config store with the same two promises, and — at this size — its object store too, under `objects/…`; `vms/` does not notice either.
-- A worker's capacity is measured on its server and is the worker's number.
+- **Тянуться за кластером из-за числа камер.** Двести камер помещаются в одну коробку; кластер за это не заплатит.
+- **Ставить Nomad на одиночную коробку «на вырост».** Переписывать при переходе всё равно ничего не придётся — а память и поверхность отказов вы уже отдали.
+- **Два сервера.** Хуже одного: смерть любого останавливает второй.
+- **Считать память по RSS.** Бюджет выйдет в разы больше настоящего, и `CAPACITY` будет занижен.
+- **Задать `CAPACITY` в контроллере.** Это число воркера, измеренное на его сервере; контроллер, у которого оно своё, ошибётся на первом же сервере с другим железом.
+- **Путать `capacity` и `headroom`.** Автоскейлер, смотрящий на `capacity`, не увидит, что все места заняты.
 
-## Exercises
+## Итог
 
-1. Run the four-thread epoch test with the fake's lock removed. Report the first duplicate and explain why a real raft could never produce it.
-2. Size a two-server "cluster" and list every failure in which it is worse than one server.
-3. Put `data_dir` on the rootfs, simulate an A/B update by wiping it, and write down what the workers do at their next slot renewal.
-4. Write the ACL policy that lets a *read-only* console token list `vms/*` and nothing else, and say what it must not be able to see (hint: `vms/objects`).
-5. Argue the opposite of Step 2 for a customer with two hundred single-box sites and a central operations team — and say what they would have to give up.
+- Из четырёх давлений только доступность требует второго сервера; три других — диски и заявка на закупку.
+- Требование к восстановлению пишется до того, как трогают планировщик.
+- Один сервер — без оркестратора; планировщик приходит со вторым сервером.
+- Регион — это один raft; серверов три или пять.
+- Единица размещения — воркер, а не камера; его `CAPACITY` = `⌊(бюджет − B) / I⌋`, по PSS, на своём сервере.
+- Воркер узнаёт о своём месте из пяти нейтральных имён окружения и не знает, кто их заполнил.
+- Имя воркера — запись в raft, сделанная по CAS; его heartbeat — объект, который тоже живёт в raft; каждое его поле кто-то читает.
 
-## Where this is going
+## Упражнения
 
-The stores are Nomad's and nothing noticed. [**Lesson 2**](02-workers-resources-and-the-controller-as-jobs.md) runs the three programs as jobs — four, counting the autoscaler — gives each worker a name it claims rather than one it is given, and proves from inside an allocation that a worker cannot write a camera row.
+1. Измерьте `B` и `I` на своей машине: запустите воркер пустым, затем с 10 и 50 конвейерами из файла. Сравните PSS и RSS.
+2. Посчитайте «кластер» из двух серверов и перечислите все отказы, при которых он хуже одного сервера.
+3. Заказчик: двести одиночных коробок на двухстах площадках и центральная служба эксплуатации. Аргументируйте противоположное шагу 2 и скажите, от чего им придётся отказаться.
+4. В трассе `01-worker-starts` воркер делает `GET` своего heartbeat перед тем, как его написать. Что сломается в уроке 8, если убрать этот `GET`?
+5. Воркер на сервере с 1 ГБ бюджета и воркер на сервере с 460 МБ. Какими будут их `capacity`, и сколько камер контроллер назначит каждому при девяноста камерах?
+
+## Что дальше
+
+Первый воркер стоит на стенде, но хранилище под ним пока — фейк в памяти. [**Урок 2**](02-the-store-becomes-nomad.md) строит настоящий кластер из трёх серверов и показывает, во что превращается каждое обращение к хранилищу: запросы к Nomad Variables, CAS по `ModifyIndex`, `409` второго писателя и `403` процесса, который полез в чужой префикс.
