@@ -1,0 +1,92 @@
+# vmscontroller
+PUT /v1/var/objects/vms/snapshot/w-0?namespace=default
+{
+  "Items": {
+    "data": {
+      "cluster": "north",
+      "worker": "w-0",
+      "ts": 1757500000.0,
+      "cameras": [
+        {
+          "id": 1,
+          "name": "gate",
+          "source": "driverpack://file/gate.mp4",
+          "enabled": true,
+          "events_retention_days": 365,
+          "priority": 100,
+          "labels": [],
+          "alarms": [],
+          "ref": "",
+          "live": "always",
+          "kind": "video",
+          "revision": 1,
+          "worker": "w-0",
+          "server": "srv-a"
+        }
+      ]
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/snapshot/w-0", "ModifyIndex": 1025}
+
+# vmscontroller
+PUT /v1/var/objects/vms/snapshot/w-1?namespace=default
+{
+  "Items": {
+    "data": {
+      "cluster": "north",
+      "worker": "w-1",
+      "ts": 1757500000.0,
+      "cameras": [
+        {
+          "id": 2,
+          "name": "yard",
+          "source": "driverpack://file/yard.mp4",
+          "enabled": true,
+          "events_retention_days": 365,
+          "priority": 100,
+          "labels": [],
+          "alarms": [],
+          "ref": "",
+          "live": "always",
+          "kind": "video",
+          "revision": 1,
+          "worker": "w-1",
+          "server": "srv-b"
+        }
+      ]
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/snapshot/w-1", "ModifyIndex": 1026}
+
+# vmscontroller
+PUT /v1/var/objects/vms/snapshot/w-2?namespace=default
+{
+  "Items": {
+    "data": {
+      "cluster": "north",
+      "worker": "w-2",
+      "ts": 1757500000.0,
+      "cameras": [
+        {
+          "id": 3,
+          "name": "dock",
+          "source": "driverpack://file/dock.mp4",
+          "enabled": true,
+          "events_retention_days": 365,
+          "priority": 100,
+          "labels": [],
+          "alarms": [],
+          "ref": "",
+          "live": "always",
+          "kind": "video",
+          "revision": 1,
+          "worker": "w-2",
+          "server": "srv-c"
+        }
+      ]
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/snapshot/w-2", "ModifyIndex": 1027}

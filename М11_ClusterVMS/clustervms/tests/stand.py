@@ -477,6 +477,83 @@ def a_reassignment_is_not_a_zombie() -> str:
     return s.log.render(since=mark) + f"\n# a.lease_pass() lost {lost}; a.recording_allowed = {a.recording_allowed}; running {sorted(a.actuator.running)}\n"
 
 
+def _labelled_workers(s):
+    """Lesson 10's cluster: srv-a reaches vlan:cctv-a, srv-b both, srv-c vlan:cctv-b — one worker on each."""
+    s.resources_up()
+    ws = {"w-0": s.worker(0, "srv-a", capacity=10), "w-1": s.worker(1, "srv-b", capacity=10), "w-2": s.worker(2, "srv-c", capacity=10)}
+    for w in ws.values():
+        w.heartbeat_once()
+    return ws
+
+
+def placement_under_labels() -> str:
+    """Lesson 10: four cameras, each saying which network it is on. The controller places each on a worker
+    whose server reaches it, by the workers' own capacity, and writes the server into the reason; the one
+    nothing reaches is named with its labels."""
+    s = Stand()
+    _labelled_workers(s)
+    con, ctl = s.console(), s.controller()
+    for name, labels in (("a", ["vlan:cctv-a"]), ("b", ["vlan:cctv-b"]), ("ab", ["vlan:cctv-a", "vlan:cctv-b"]), ("x", ["vlan:cctv-x"])):
+        con.create_camera({"name": name, "source": f"driverpack://file/{name}.mp4", "labels": labels})
+    mark = s.log.mark()
+    ctl.ensure_placed()
+    return (s.log.render(since=mark, methods=("PUT",))
+            + f"\n# unplaceable() = {ctl.unplaceable()}\n")
+
+
+def two_controllers_one_camera() -> str:
+    """Lesson 10: `count = 1` is not exactly-one during a reschedule. Controller B places camera 1 between
+    controller A's read and A's write. A's CAS fails; A reads again, finds a worker already named, and
+    ADOPTS B's decision — it writes nothing more. One camera, one worker, whichever controller got there."""
+    s = Stand()
+    _labelled_workers(s)
+    s.console().create_camera({"name": "gate", "source": "driverpack://file/gate.mp4", "labels": ["vlan:cctv-a"]})
+    a, b = s.controller("vmscontroller A"), s.controller("vmscontroller B")
+    put = a.vars.put
+    first = {"done": False}
+
+    def racing_put(path, items, cas=None):
+        if path == "vms/placement/1" and not first["done"]:
+            first["done"] = True
+            b.place(1)                                               # B gets there between A's read and A's write
+        return put(path, items, cas)
+    a.vars.put = racing_put
+    mark = s.log.mark()
+    a.place(1)
+    reads = sum(1 for c in s.log.calls[mark:] if c.method == "GET")
+    return (s.log.render(since=mark, methods=("PUT",)) + f"\n# … and {reads} GET requests, omitted"
+            + f"\n# where(1) = {a.where(1)}; placement reason: {a.placement(1).reason!r}\n")
+
+
+def where_is_camera_7() -> str:
+    """Lesson 10: the cluster's directory is one scan of one raft. Nine cameras, nine answers, one scan."""
+    from cluster.directory import Directory
+    s = Stand()
+    _labelled_workers(s)
+    con, ctl = s.console(), s.controller()
+    for i in range(9):
+        con.create_camera({"name": f"cam-{i + 1}", "source": f"driverpack://file/{i + 1}.mp4"})
+    ctl.ensure_placed()
+    mark = s.log.mark()
+    d = Directory(s.vars, ttl=5.0, clock=s.clock)
+    answers = {i: d.where(i) for i in range(1, 10)}
+    return s.log.render(since=mark) + f"\n# where(1..9) = {answers}; scans = {d.scans}\n"
+
+
+def the_snapshot() -> str:
+    """Lesson 10: the one thing that leaves the cluster — a copy of the rows, one object per worker, with an age."""
+    s = Stand()
+    _labelled_workers(s)
+    con, ctl = s.console(), s.controller()
+    ctl.cluster = "north"
+    for name in ("gate", "yard", "dock"):
+        con.create_camera({"name": name, "source": f"driverpack://file/{name}.mp4"})
+    ctl.ensure_placed()
+    mark = s.log.mark()
+    ctl.publish_snapshot()
+    return s.log.render(since=mark, methods=("PUT",))
+
+
 SCENES = {"01-worker-starts": worker_starts,
           "02-console-creates-a-camera": console_creates_a_camera,
           "02-two-editors-one-row": two_editors_one_row,
@@ -494,7 +571,11 @@ SCENES = {"01-worker-starts": worker_starts,
           "08-pull-the-power": pull_the_power,
           "08-a-server-gone-under-distinct": a_server_gone_under_distinct,
           "09-the-old-instance-wakes-up": the_old_instance_wakes_up,
-          "09-a-reassignment-is-not-a-zombie": a_reassignment_is_not_a_zombie}
+          "09-a-reassignment-is-not-a-zombie": a_reassignment_is_not_a_zombie,
+          "10-placement-under-labels": placement_under_labels,
+          "10-two-controllers-one-camera": two_controllers_one_camera,
+          "10-where-is-camera-7": where_is_camera_7,
+          "10-the-snapshot": the_snapshot}
 
 
 def main() -> None:

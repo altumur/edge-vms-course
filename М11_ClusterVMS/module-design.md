@@ -214,6 +214,8 @@ group "vmsworker" {
 
 *Five lessons. Several servers, one scheduler — and the hard part is still what stays, not what moves.*
 
+> **Rewritten as ten lessons, in Russian (September 2026).** The plan below is the five-lesson record the module was written from, and it stays as the design. The lessons themselves are now ten, each with request traces taken from the module's stand (`clustervms/tests/stand.py`, full traces in `traces/`): Lesson 1 below became lessons 1–2 (*when one box isn't enough*; *the store becomes Nomad*); Lesson 2 became 3–5 (*seven jobs*; *a name is a slot*; *rights from inside an allocation*); Lesson 3 became 6–7 (*what stays on the server*; *events: the database that is a cache*); Lesson 4 became 8–9 (*pull the power*; *two instances of one worker*); Lesson 5 became 10 (*the controller*). The index is [`README.md`](README.md).
+
 ### Lesson 1 — When one box isn't enough
 
 - What actually forces a second server: camera count, storage throughput, retention, availability

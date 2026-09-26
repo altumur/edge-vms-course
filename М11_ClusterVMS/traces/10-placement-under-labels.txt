@@ -1,0 +1,52 @@
+# vmscontroller
+PUT /v1/var/vms/placement/1?namespace=default&cas=0
+{
+  "Items": {
+    "worker": "w-0",
+    "reason": "most free capacity (10) among 2 worker(s) reaching vlan:cctv-a; on srv-a, whose resource is live",
+    "at": "1757500000.0",
+    "rev": "1"
+  }
+}
+→ 200 {"Path": "vms/placement/1", "ModifyIndex": 1022}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-0?namespace=default&cas=0
+{"Items": {"units": "1", "rev": "1"}}
+→ 200 {"Path": "vms/workers/w-0", "ModifyIndex": 1023}
+
+# vmscontroller
+PUT /v1/var/vms/placement/2?namespace=default&cas=0
+{
+  "Items": {
+    "worker": "w-1",
+    "reason": "most free capacity (10) among 2 worker(s) reaching vlan:cctv-b; on srv-b, whose resource is live",
+    "at": "1757500000.0",
+    "rev": "1"
+  }
+}
+→ 200 {"Path": "vms/placement/2", "ModifyIndex": 1024}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=0
+{"Items": {"units": "2", "rev": "1"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1025}
+
+# vmscontroller
+PUT /v1/var/vms/placement/3?namespace=default&cas=0
+{
+  "Items": {
+    "worker": "w-1",
+    "reason": "most free capacity (9) among 1 worker(s) reaching vlan:cctv-a,vlan:cctv-b; on srv-b, whose resource is live",
+    "at": "1757500000.0",
+    "rev": "1"
+  }
+}
+→ 200 {"Path": "vms/placement/3", "ModifyIndex": 1026}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1025
+{"Items": {"units": "2,3", "rev": "2"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1027}
+
+# unplaceable() = [{'id': 4, 'labels': ['vlan:cctv-x'], 'workers_live': 3}]

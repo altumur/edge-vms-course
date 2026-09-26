@@ -1,0 +1,30 @@
+# console
+GET /v1/vars?prefix=vms/workers/&namespace=default
+→ 200 [
+  {
+    "Path": "vms/workers/w-0",
+    "ModifyIndex": 1050
+  },
+  {
+    "Path": "vms/workers/w-1",
+    "ModifyIndex": 1052
+  },
+  {
+    "Path": "vms/workers/w-2",
+    "ModifyIndex": 1054
+  }
+]
+
+# console
+GET /v1/var/vms/workers/w-0?namespace=default
+→ 200 {"Path": "vms/workers/w-0", "Items": {"units": "1,4,7", "rev": "3"}, "ModifyIndex": 1050}
+
+# console
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "2,5,8", "rev": "3"}, "ModifyIndex": 1052}
+
+# console
+GET /v1/var/vms/workers/w-2?namespace=default
+→ 200 {"Path": "vms/workers/w-2", "Items": {"units": "3,6,9", "rev": "3"}, "ModifyIndex": 1054}
+
+# where(1..9) = {1: 'w-0', 2: 'w-1', 3: 'w-2', 4: 'w-0', 5: 'w-1', 6: 'w-2', 7: 'w-0', 8: 'w-1', 9: 'w-2'}; scans = 1
