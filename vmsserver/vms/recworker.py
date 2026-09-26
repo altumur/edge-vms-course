@@ -107,8 +107,14 @@ class RecWorker(VmsWorker):
     CLOSED_REPORTED = 32
     # How long a primary recording may be not written before a `when: offline` backup stands in for it
     # (Lesson 26). Every event-driven recording starts this way — a row appears, a pipeline takes a few
-    # seconds — and waking the backup for each would make it record every event twice.
-    START_GRACE = 10.0
+    # seconds — and waking the backup for each would make it record every event twice. The product's
+    # number, from what a start takes on a real box.
+    START_GRACE = 20.0
+    # How long a released backup keeps writing after its primary is written again. The primary's first
+    # segment is not visible until it closes, and "running" in a heartbeat comes before the first frame on
+    # disk; stopping the backup at that word would leave the seam between them to nobody. With a minute of
+    # overlap the two archives overlap, and backfill finds the seam from both sides.
+    HOLD_AFTER = 60.0
     # How much of the past a held backup keeps in memory (Lesson 26). When the primary is found missing —
     # `START_GRACE` after it went quiet, plus a pass — the ring is written first, so the backup's footage
     # starts BEFORE the moment anybody noticed. Thirty seconds covers the grace, a pass and a keyframe.
@@ -176,6 +182,7 @@ class RecWorker(VmsWorker):
         self.archive_url = ""                       # this recorder's archive door, once served (Lesson 26)
         self._not_written_since: dict[str, float] = {}   # primary recording -> since when nobody writes it
         self.holding: dict[str, bool] = {}          # `when: offline` recording -> is its pipeline on hold now
+        self._primary_back_since: dict[str, float] = {}  # released backup -> since when its primary is written again
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
@@ -265,9 +272,9 @@ class RecWorker(VmsWorker):
         return str(row.get("when") or "") == "offline" and volumes.is_backup(row, self.vars)
 
     # One pass of the gate, after the reconciler's. A held backup whose primary now needs cover is RELEASED:
-    # the ring is written first, then live. A released one whose primary is back is put on hold again — a
-    # restart under the same epoch, so the open segment is finalized and promoted, and the ring starts
-    # filling afresh.
+    # the ring is written first, then live. A released one whose primary has been back for `HOLD_AFTER` is
+    # put on hold again — a restart under the same epoch, so the open segment is finalized and promoted, and
+    # the ring starts filling afresh.
     def gate_pass(self, now: float | None = None) -> list[tuple[str, str]]:
         now = self.wall() if now is None else now
         done = []
@@ -276,6 +283,8 @@ class RecWorker(VmsWorker):
             if not self._offline_backup(row) or uid not in {str(u) for u in self.reconciler.actual}:
                 continue
             need = self.primary_needs_cover(row, now)
+            if need:
+                self._primary_back_since.pop(uid, None)
             if need and self.holding.get(uid):
                 if self.actuator("release", {"id": row["id"], "now": now}):
                     self.holding[uid] = False
@@ -283,7 +292,9 @@ class RecWorker(VmsWorker):
                     log.warning("%s: the primary of %s is not being written — recording from %.0f s ago",
                                 self.name, uid, self.PREBUFFER)
             elif not need and self.holding.get(uid) is False:
-                if self._actuate("restart", row):
+                back = self._primary_back_since.setdefault(uid, now)
+                if now - back >= self.HOLD_AFTER and self._actuate("restart", row):
+                    self._primary_back_since.pop(uid, None)
                     done.append((uid, "held"))
         return done
 

@@ -57,9 +57,16 @@ KINDS = ("local", "network", "backup")
 FIELDS = ("kind", "url", "server", "quota_bytes", "access_secret", "enabled")
 
 
-# The kinds that are a disk on ONE box, named in `server`. A backup volume is one: a camera's card, or the
-# disk of a second server that keeps a copy of critical cameras.
-ON_A_BOX = ("local", "backup")
+# The kinds that are a disk on ONE box, named in `server`. A backup volume is one when it names a server — a
+# camera's card, the disk of a second server — and an ADDRESS any box may serve when it does not, like a
+# network volume: a second storage somewhere else, which is as independent of the primary's server as a
+# second disk is.
+def on_a_box(v: "Volume") -> bool:
+    return v.kind == "local" or (v.kind == "backup" and bool(v.server))
+
+
+def any_box(v: "Volume") -> bool:
+    return v.kind == "network" or (v.kind == "backup" and not v.server)
 
 
 @dataclass(frozen=True)
@@ -109,9 +116,6 @@ def refuse(fields: dict) -> None:
         raise Refused(f"a volume is {' or '.join(KINDS)}, not {kind!r}")
     if kind == "local" and not str(fields.get("server", "")):
         raise Refused("a local volume is a disk on one server: name it")
-    if kind == "backup" and not str(fields.get("server", "")):
-        raise Refused("a backup volume is a disk on one box — a camera's card, a second server — and a copy "
-                      "is only a copy if you know which box it is on: name it")
     if kind == "network" and str(fields.get("server", "")):
         raise Refused("a network volume is served by whichever box takes it — leave `server` empty")
     # EVERY declared volume has a ceiling, local ones included, and that is the change that lets a disk
@@ -169,8 +173,8 @@ def declared(vars_) -> list[Volume]:
 # to help — then the network archives, which anybody can take and which are therefore the ones a spare is
 # for. Disabled volumes are nobody's: the administrator turned them off.
 def servable(vols: list[Volume], server: str) -> list[str]:
-    mine = [v.name for v in vols if v.enabled and v.kind in ON_A_BOX and v.server == server]
-    net = [v.name for v in vols if v.enabled and v.kind == "network"]
+    mine = [v.name for v in vols if v.enabled and on_a_box(v) and v.server == server]
+    net = [v.name for v in vols if v.enabled and any_box(v)]
     return mine + net
 
 
@@ -183,7 +187,7 @@ def servable(vols: list[Volume], server: str) -> list[str]:
 def suggest(vars_, objects, sub: Subsystem, now: float, lost_after: float = 45.0) -> list[dict]:
     from w2cplatform.console import heartbeats
     from w2cplatform.resource import resources_seen
-    have = {v.server for v in declared(vars_) if v.kind in ON_A_BOX}
+    have = {v.server for v in declared(vars_) if on_a_box(v)}
     res = resources_seen(objects)
     out = {}
     for _, hb in heartbeats(objects, sub.name + "/").items():

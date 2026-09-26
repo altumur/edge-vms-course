@@ -225,9 +225,11 @@ def test_a_released_backup_writes_the_seconds_before_anybody_noticed():
     assert [(s.start, s.end) for s in segs] == [(start, released_at)]   # in the archive, at its own time
 
 
-def test_the_backup_goes_back_on_hold_when_the_primary_is_back():
-    """The primary is written again. The backup is put back on hold: a restart under the same epoch, so its
-    open segment is finalized and kept, and the ring starts filling afresh for next time."""
+def test_the_backup_goes_back_on_hold_a_minute_after_the_primary_is_back():
+    """The primary is written again — by its heartbeat. Its first segment is not on disk yet, and will not be
+    visible until it closes; stopping the backup at that word would leave the seam to nobody. So the backup
+    keeps writing for a minute, the two archives overlap, and only then is it put back on hold: a restart
+    under the same epoch, its open segment finalized and kept, the ring filling afresh for next time."""
     box, rec_ctl, primary, backup, w = _site(when="offline")
     _primary_stops(box, primary, backup, w)
     box.wall.advance(backup.START_GRACE + 1)
@@ -236,6 +238,10 @@ def test_the_backup_goes_back_on_hold_when_the_primary_is_back():
 
     w.heartbeat_once(); primary.reconcile_once(); primary.heartbeat_once()   # the primary's recorder is back
     assert backup.holding["1-copy"] is False                           # released: recording for the primary
+    backup.reconcile_once()
+    assert backup.holding["1-copy"] is False                           # the primary is back — and the backup still writes
+    box.wall.advance(backup.HOLD_AFTER)
+    w.heartbeat_once(); primary.heartbeat_once(); backup.heartbeat_once()
     backup.reconcile_once()
     assert backup.holding["1-copy"] is True and "1-copy" in backup.actuator.held
     assert backup.epochs["1-copy"] == epoch                            # the same writer, held again
@@ -254,11 +260,11 @@ def test_a_primary_switched_off_never_releases_the_ring():
     assert backup.actuator.released == [] and backup.holding["1-copy"] is True
 
 
-def test_a_backup_volume_names_its_box():
-    """A copy is only a copy if you know which box it is on: a backup volume without a server is refused,
-    the way a local one is."""
-    try:
-        volumes.refuse({"name": "copy", "kind": "backup", "url": "/data/b", "quota_bytes": 1})
-        raise AssertionError("a backup volume must name its box")
-    except Refused as e:
-        assert "name it" in str(e)
+def test_a_backup_volume_is_a_box_or_an_address():
+    """With a server it is a disk on that box — a camera's card, a second server's disk — and only that box
+    serves it. Without one it is an address any box may serve, like a network volume: a second storage
+    elsewhere is as independent of the primary's server as a second disk is."""
+    volumes.refuse({"name": "copy", "kind": "backup", "url": "s3://copies/site-1", "quota_bytes": 1})   # accepted
+    vols = [volumes.Volume("card", "backup", "/data/card", "cam-7", 1), volumes.Volume("cloud", "backup", "s3://c", "", 1)]
+    assert volumes.servable(vols, "cam-7") == ["card", "cloud"]
+    assert volumes.servable(vols, "srv-a") == ["cloud"]
