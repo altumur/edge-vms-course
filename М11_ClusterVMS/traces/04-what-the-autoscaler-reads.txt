@@ -1,0 +1,12 @@
+GET /metrics
+# TYPE vms_workers_live gauge
+vms_workers_live 2
+# TYPE vms_worker_headroom gauge
+vms_worker_headroom{worker="w-0",server="srv-a"} 0
+vms_worker_headroom{worker="w-1",server="srv-b"} 0
+vms_headroom 0
+# TYPE vms_worker_load gauge
+vms_worker_load{worker="w-0"} 1.000
+vms_worker_load{worker="w-1"} 1.000
+# TYPE vms_spare_workers gauge
+vms_spare_workers 0

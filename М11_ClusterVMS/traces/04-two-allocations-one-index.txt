@@ -1,0 +1,125 @@
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/platform/schema?namespace=default
+→ 404
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/vars?prefix=vms/slots/&namespace=default
+→ 200 [{"Path": "vms/slots/w-0", "ModifyIndex": 1010}]
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/slots/w-0?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-0",
+  "Items": {
+    "holder": "alloc-A",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1010
+}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/slots/w-0?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-0",
+  "Items": {
+    "holder": "alloc-A",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1010
+}
+
+# vmsworker (allocation 0 on srv-b)
+PUT /v1/var/vms/slots/w-0?namespace=default&cas=1010
+{"Items": {"holder": "alloc-B", "until": "1757500045.0", "released": "false", "gen": "2"}}
+→ 200 {"Path": "vms/slots/w-0", "ModifyIndex": 1014}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/objects/vms/heartbeats/w-0?namespace=default
+→ 404
+
+# vmsworker (allocation 0 on srv-a)
+GET /v1/var/vms/slots/w-0?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-0",
+  "Items": {
+    "holder": "alloc-B",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "2"
+  },
+  "ModifyIndex": 1014
+}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/workers/w-0?namespace=default
+→ 200 {"Path": "vms/workers/w-0", "Items": {"units": "1,2", "rev": "1"}, "ModifyIndex": 1011}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "cam-1",
+    "source": "driverpack://file/1.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1005
+}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/cameras/2?namespace=default
+→ 200 {
+  "Path": "vms/cameras/2",
+  "Items": {
+    "id": "2",
+    "revision": "1",
+    "name": "cam-2",
+    "source": "driverpack://file/2.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1008
+}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/epoch/1?namespace=default
+→ 200 {"Path": "vms/epoch/1", "Items": {"epoch": "1"}, "ModifyIndex": 1012}
+
+# vmsworker (allocation 0 on srv-b)
+PUT /v1/var/vms/epoch/1?namespace=default&cas=1012
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/1", "ModifyIndex": 1015}
+
+# vmsworker (allocation 0 on srv-b)
+GET /v1/var/vms/epoch/2?namespace=default
+→ 200 {"Path": "vms/epoch/2", "Items": {"epoch": "1"}, "ModifyIndex": 1013}
+
+# vmsworker (allocation 0 on srv-b)
+PUT /v1/var/vms/epoch/2?namespace=default&cas=1013
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/2", "ModifyIndex": 1016}

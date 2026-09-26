@@ -1,0 +1,164 @@
+# vmsworker (allocation 2 on srv-c)
+PUT /v1/var/vms/slots/w-2?namespace=default&cas=0
+{"Items": {"holder": "alloc-0003", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "vms/slots/w-2", "ModifyIndex": 1061}
+
+# vmsworker (allocation 2 on srv-c)
+PUT /v1/var/objects/vms/heartbeats/w-2?namespace=default
+{
+  "Items": {
+    "data": {
+      "worker": "w-2",
+      "ts": 1757500000.0,
+      "status": [],
+      "server": "srv-c",
+      "instance": "alloc-0003",
+      "alloc": "alloc-0003",
+      "labels": "vlan:cctv-b",
+      "assignment_rev": 0,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 0,
+      "capacity": 4,
+      "headroom": 4,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/heartbeats/w-2", "ModifyIndex": 1062}
+
+# vmscontroller
+PUT /v1/var/vms/placement/9?namespace=default&cas=0
+{
+  "Items": {
+    "worker": "w-2",
+    "reason": "most free capacity (4) among 3 worker(s); on srv-c, whose resource is live",
+    "at": "1757500000.0",
+    "rev": "1"
+  }
+}
+→ 200 {"Path": "vms/placement/9", "ModifyIndex": 1063}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=0
+{"Items": {"units": "9", "rev": "1"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1064}
+
+# vmsworker (allocation 2 on srv-c)
+PUT /v1/var/vms/epoch/9?namespace=default&cas=0
+{"Items": {"epoch": "1"}}
+→ 200 {"Path": "vms/epoch/9", "ModifyIndex": 1065}
+
+# vmsworker (allocation 2 on srv-c)
+PUT /v1/var/vms/slots/w-2?namespace=default&cas=1061
+{"Items": {"holder": "alloc-0003", "until": "1757500000.0", "released": "true", "gen": "1"}}
+→ 200 {"Path": "vms/slots/w-2", "ModifyIndex": 1066}
+
+# console
+PUT /v1/var/vms/cameras/1?namespace=default&cas=1005
+{
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "cam-1",
+    "source": "driverpack://file/1.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video",
+    "deleted": "true"
+  }
+}
+→ 200 {"Path": "vms/cameras/1", "ModifyIndex": 1067}
+
+# console
+PUT /v1/var/vms/retention/1?namespace=default&cas=1006
+{"Items": {"days": "0"}}
+→ 200 {"Path": "vms/retention/1", "ModifyIndex": 1068}
+
+# console
+PUT /v1/var/vms/cameras/2?namespace=default&cas=1008
+{
+  "Items": {
+    "id": "2",
+    "revision": "1",
+    "name": "cam-2",
+    "source": "driverpack://file/2.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video",
+    "deleted": "true"
+  }
+}
+→ 200 {"Path": "vms/cameras/2", "ModifyIndex": 1069}
+
+# console
+PUT /v1/var/vms/retention/2?namespace=default&cas=1009
+{"Items": {"days": "0"}}
+→ 200 {"Path": "vms/retention/2", "ModifyIndex": 1070}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-0?namespace=default&cas=1045
+{"Items": {"units": "3,5,7", "rev": "5"}}
+→ 200 {"Path": "vms/workers/w-0", "ModifyIndex": 1071}
+
+# vmscontroller
+PUT /v1/var/vms/placement/1?namespace=default&cas=1032
+{"Items": {"worker": "", "reason": "deleted", "at": "1757500000.0", "rev": "2"}}
+→ 200 {"Path": "vms/placement/1", "ModifyIndex": 1072}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1047
+{"Items": {"units": "4,6,8", "rev": "5"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1073}
+
+# vmscontroller
+PUT /v1/var/vms/placement/2?namespace=default&cas=1034
+{"Items": {"worker": "", "reason": "deleted", "at": "1757500000.0", "rev": "2"}}
+→ 200 {"Path": "vms/placement/2", "ModifyIndex": 1074}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=1064
+{"Items": {"units": "", "rev": "2"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1075}
+
+# vmscontroller
+PUT /v1/var/vms/placement/9?namespace=default&cas=1063
+{
+  "Items": {
+    "worker": "w-0",
+    "reason": "slot w-2 released; most free capacity (1); on srv-a",
+    "at": "1757500000.0",
+    "rev": "2"
+  }
+}
+→ 200 {"Path": "vms/placement/9", "ModifyIndex": 1076}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-0?namespace=default&cas=1071
+{"Items": {"units": "3,5,7,9", "rev": "6"}}
+→ 200 {"Path": "vms/workers/w-0", "ModifyIndex": 1077}
+
+# … and 415 GET requests, omitted

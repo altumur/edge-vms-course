@@ -58,9 +58,12 @@ class TraceLog:
                 return obj
         return obj
 
-    def render(self, since: int = 0, until: int | None = None, who: bool = True, width: int = 110) -> str:
+    def render(self, since: int = 0, until: int | None = None, who: bool = True, width: int = 110,
+               methods: tuple | None = None) -> str:
         out = []
         for c in self.calls[since:until]:
+            if methods and c.method not in methods:
+                continue
             if who:
                 out.append(f"# {c.who}")
             out.append(f"{c.method} {self._clean(c.url)}")
