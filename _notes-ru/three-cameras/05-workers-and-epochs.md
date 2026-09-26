@@ -2,8 +2,8 @@
 genre: записки
 kind: разбор кода
 subject: М11_ClusterVMS
-source-commit: 4099cd5
-date: 2026-09-23
+source-commit: e3b8f57
+date: 2026-09-26
 status: draft
 ---
 
@@ -13,7 +13,7 @@ status: draft
 > Это разбор: я читал код и восстанавливал по нему, как всё устроено, максимально простыми словами.
 > **Источник истины — код.** Где записки расходятся с кодом, прав код.
 > Проект описывает себя сам: [`README.md`](../../README.md) и указатели модулей.
-> Состояние: коммит `4099cd5`, 23 сентября 2026.
+> Состояние: коммит `e3b8f57`, 26 сентября 2026.
 
 [← карта разбора](README.md) · назад: [04-placement.md](04-placement.md) · вперёд: [06-confirmation.md](06-confirmation.md)
 
@@ -36,13 +36,16 @@ GET /v1/var/vms/cameras/1
     "name": "Ворота",
     "source": "driverpack://acme/10.2.0.11",
     "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
     "labels": "vlan:cctv",
+    "folders": "",
+    "alarms": "",
     "ref": "north-gate",
     "cred_username": "operator",
     "cred_secret": "hunter2",
-    "events_retention_days": "365",
-    "priority": "100",
-    "live": "always"
+    "live": "always",
+    "kind": "video"
   },
   "ModifyIndex": 4409
 }
@@ -165,6 +168,8 @@ Items.data:
     }
   ],
   "server": "srv-1",
+  "instance": "srv-1:1841:9f3c2a",
+  "alloc": "srv-1:1841:9f3c2a",
   "labels": "vlan:cctv",
   "assignment_rev": 1,
   "fenced": false,
@@ -172,7 +177,12 @@ Items.data:
   "passes": 3,
   "capacity": 50,
   "headroom": 49,
+  "started": 1757499910.1,
+  "previous_hb": 0.0,
+  "previous_instance": "",
   "archive": "/data/archive",
+  "devices": [],
+  "fetched": "",
   "schema": 1,
   "build": "dev"
 }
