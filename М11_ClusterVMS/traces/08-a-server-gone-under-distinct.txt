@@ -1,0 +1,83 @@
+# a crash — w-1 silent, srv-a's resource alive: gone_servers() = {}, redistribute() = [], PUT requests: 0
+# the power pull — w-1 AND srv-a's resource silent: gone_servers() = {'w-1': 'srv-a'}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1020
+{"Items": {"units": "2,3", "rev": "4"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1035}
+
+# vmscontroller
+PUT /v1/var/vms/placement/1?namespace=default&cas=1015
+{
+  "Items": {
+    "worker": "w-2",
+    "reason": "server srv-a gone: slot w-1 lapsed and its resource silent; most free capacity (50); on srv-b",
+    "at": "1757500186.0",
+    "rev": "2"
+  }
+}
+→ 200 {"Path": "vms/placement/1", "ModifyIndex": 1036}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=0
+{"Items": {"units": "1", "rev": "1"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1037}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1035
+{"Items": {"units": "3", "rev": "5"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1038}
+
+# vmscontroller
+PUT /v1/var/vms/placement/2?namespace=default&cas=1017
+{
+  "Items": {
+    "worker": "w-2",
+    "reason": "server srv-a gone: slot w-1 lapsed and its resource silent; most free capacity (49); on srv-b",
+    "at": "1757500186.0",
+    "rev": "2"
+  }
+}
+→ 200 {"Path": "vms/placement/2", "ModifyIndex": 1039}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=1037
+{"Items": {"units": "1,2", "rev": "2"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1040}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1038
+{"Items": {"units": "", "rev": "6"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1041}
+
+# vmscontroller
+PUT /v1/var/vms/placement/3?namespace=default&cas=1019
+{
+  "Items": {
+    "worker": "w-2",
+    "reason": "server srv-a gone: slot w-1 lapsed and its resource silent; most free capacity (48); on srv-b",
+    "at": "1757500186.0",
+    "rev": "2"
+  }
+}
+→ 200 {"Path": "vms/placement/3", "ModifyIndex": 1042}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=1040
+{"Items": {"units": "1,2,3", "rev": "3"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1043}
+
+# vmsworker (allocation 2 on srv-b)
+PUT /v1/var/vms/epoch/1?namespace=default&cas=1021
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/1", "ModifyIndex": 1044}
+
+# vmsworker (allocation 2 on srv-b)
+PUT /v1/var/vms/epoch/2?namespace=default&cas=1022
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/2", "ModifyIndex": 1045}
+
+# vmsworker (allocation 2 on srv-b)
+PUT /v1/var/vms/epoch/3?namespace=default&cas=1023
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/3", "ModifyIndex": 1046}

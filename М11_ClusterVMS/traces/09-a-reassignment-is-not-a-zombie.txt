@@ -1,0 +1,168 @@
+# vmscontroller
+GET /v1/vars?prefix=vms/workers/&namespace=default
+→ 200 [{"Path": "vms/workers/w-1", "ModifyIndex": 1020}]
+
+# vmscontroller
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "1,2,3", "rev": "3"}, "ModifyIndex": 1020}
+
+# vmscontroller
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "1,2,3", "rev": "3"}, "ModifyIndex": 1020}
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-1?namespace=default&cas=1020
+{"Items": {"units": "1,3", "rev": "4"}}
+→ 200 {"Path": "vms/workers/w-1", "ModifyIndex": 1027}
+
+# vmscontroller
+GET /v1/var/vms/placement/2?namespace=default
+→ 200 {
+  "Path": "vms/placement/2",
+  "Items": {
+    "worker": "w-1",
+    "reason": "most free capacity (49) among 1 worker(s); on srv-a, whose resource is live",
+    "at": "1757500000.0",
+    "rev": "1"
+  },
+  "ModifyIndex": 1017
+}
+
+# vmscontroller
+PUT /v1/var/vms/placement/2?namespace=default&cas=1017
+{"Items": {"worker": "w-2", "reason": "operator: srv-b sees that VLAN", "at": "1757500000.0", "rev": "2"}}
+→ 200 {"Path": "vms/placement/2", "ModifyIndex": 1028}
+
+# vmscontroller
+GET /v1/var/vms/workers/w-2?namespace=default
+→ 404
+
+# vmscontroller
+PUT /v1/var/vms/workers/w-2?namespace=default&cas=0
+{"Items": {"units": "2", "rev": "1"}}
+→ 200 {"Path": "vms/workers/w-2", "ModifyIndex": 1029}
+
+# vmsworker (allocation 2 on srv-b)
+GET /v1/var/vms/workers/w-2?namespace=default
+→ 200 {"Path": "vms/workers/w-2", "Items": {"units": "2", "rev": "1"}, "ModifyIndex": 1029}
+
+# vmsworker (allocation 2 on srv-b)
+GET /v1/var/vms/cameras/2?namespace=default
+→ 200 {
+  "Path": "vms/cameras/2",
+  "Items": {
+    "id": "2",
+    "revision": "1",
+    "name": "cam-2",
+    "source": "driverpack://file/2.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1008
+}
+
+# vmsworker (allocation 2 on srv-b)
+GET /v1/var/vms/epoch/2?namespace=default
+→ 200 {"Path": "vms/epoch/2", "Items": {"epoch": "1"}, "ModifyIndex": 1022}
+
+# vmsworker (allocation 2 on srv-b)
+PUT /v1/var/vms/epoch/2?namespace=default&cas=1022
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/2", "ModifyIndex": 1030}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/slots/w-1?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-1",
+  "Items": {
+    "holder": "alloc-A",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1013
+}
+
+# vmsworker (allocation 1 on srv-a)
+PUT /v1/var/vms/slots/w-1?namespace=default&cas=1013
+{"Items": {"holder": "alloc-A", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "vms/slots/w-1", "ModifyIndex": 1031}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/1?namespace=default
+→ 200 {"Path": "vms/epoch/1", "Items": {"epoch": "1"}, "ModifyIndex": 1021}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/2?namespace=default
+→ 200 {"Path": "vms/epoch/2", "Items": {"epoch": "2"}, "ModifyIndex": 1030}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/3?namespace=default
+→ 200 {"Path": "vms/epoch/3", "Items": {"epoch": "1"}, "ModifyIndex": 1023}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "1,3", "rev": "4"}, "ModifyIndex": 1027}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "1,3", "rev": "4"}, "ModifyIndex": 1027}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "cam-1",
+    "source": "driverpack://file/1.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1005
+}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/cameras/3?namespace=default
+→ 200 {
+  "Path": "vms/cameras/3",
+  "Items": {
+    "id": "3",
+    "revision": "1",
+    "name": "cam-3",
+    "source": "driverpack://file/3.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1011
+}
+
+# a.lease_pass() lost ['2']; a.recording_allowed = True; running [1, 3]

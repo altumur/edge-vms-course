@@ -1,0 +1,286 @@
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/platform/schema?namespace=default
+→ 404
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/vars?prefix=vms/slots/&namespace=default
+→ 200 [{"Path": "vms/slots/w-1", "ModifyIndex": 1013}]
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/slots/w-1?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-1",
+  "Items": {
+    "holder": "alloc-A",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1013
+}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/slots/w-1?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-1",
+  "Items": {
+    "holder": "alloc-A",
+    "until": "1757500045.0",
+    "released": "false",
+    "gen": "1"
+  },
+  "ModifyIndex": 1013
+}
+
+# vmsworker (allocation 1 on srv-b)
+PUT /v1/var/vms/slots/w-1?namespace=default&cas=1013
+{"Items": {"holder": "alloc-B", "until": "1757500093.0", "released": "false", "gen": "2"}}
+→ 200 {"Path": "vms/slots/w-1", "ModifyIndex": 1025}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/objects/vms/heartbeats/w-1?namespace=default
+→ 200 {
+  "Path": "objects/vms/heartbeats/w-1",
+  "Items": {
+    "data": {
+      "worker": "w-1",
+      "ts": 1757500000.0,
+      "status": [
+        {
+          "id": 1,
+          "ref": "",
+          "name": "cam-1",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/1",
+          "live_shm": "shm:///run/vms/1.shm"
+        },
+        {
+          "id": 2,
+          "ref": "",
+          "name": "cam-2",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/2",
+          "live_shm": "shm:///run/vms/2.shm"
+        },
+        {
+          "id": 3,
+          "ref": "",
+          "name": "cam-3",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/3",
+          "live_shm": "shm:///run/vms/3.shm"
+        }
+      ],
+      "server": "srv-a",
+      "instance": "alloc-A",
+      "alloc": "alloc-A",
+      "labels": "vlan:cctv-a",
+      "assignment_rev": 3,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 1,
+      "capacity": 50,
+      "headroom": 47,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
+  },
+  "ModifyIndex": 1024
+}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/workers/w-1?namespace=default
+→ 200 {"Path": "vms/workers/w-1", "Items": {"units": "1,2,3", "rev": "3"}, "ModifyIndex": 1020}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "cam-1",
+    "source": "driverpack://file/1.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1005
+}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/cameras/2?namespace=default
+→ 200 {
+  "Path": "vms/cameras/2",
+  "Items": {
+    "id": "2",
+    "revision": "1",
+    "name": "cam-2",
+    "source": "driverpack://file/2.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1008
+}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/cameras/3?namespace=default
+→ 200 {
+  "Path": "vms/cameras/3",
+  "Items": {
+    "id": "3",
+    "revision": "1",
+    "name": "cam-3",
+    "source": "driverpack://file/3.mp4",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1011
+}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/epoch/1?namespace=default
+→ 200 {"Path": "vms/epoch/1", "Items": {"epoch": "1"}, "ModifyIndex": 1021}
+
+# vmsworker (allocation 1 on srv-b)
+PUT /v1/var/vms/epoch/1?namespace=default&cas=1021
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/1", "ModifyIndex": 1026}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/epoch/2?namespace=default
+→ 200 {"Path": "vms/epoch/2", "Items": {"epoch": "1"}, "ModifyIndex": 1022}
+
+# vmsworker (allocation 1 on srv-b)
+PUT /v1/var/vms/epoch/2?namespace=default&cas=1022
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/2", "ModifyIndex": 1027}
+
+# vmsworker (allocation 1 on srv-b)
+GET /v1/var/vms/epoch/3?namespace=default
+→ 200 {"Path": "vms/epoch/3", "Items": {"epoch": "1"}, "ModifyIndex": 1023}
+
+# vmsworker (allocation 1 on srv-b)
+PUT /v1/var/vms/epoch/3?namespace=default&cas=1023
+{"Items": {"epoch": "2"}}
+→ 200 {"Path": "vms/epoch/3", "ModifyIndex": 1028}
+
+# vmsworker (allocation 1 on srv-b)
+PUT /v1/var/objects/vms/heartbeats/w-1?namespace=default
+{
+  "Items": {
+    "data": {
+      "worker": "w-1",
+      "ts": 1757500048.0,
+      "status": [
+        {
+          "id": 1,
+          "ref": "",
+          "name": "cam-1",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 2,
+          "live_url": "rtsp://srv-b:8554/1",
+          "live_shm": "shm:///run/vms/1.shm"
+        },
+        {
+          "id": 2,
+          "ref": "",
+          "name": "cam-2",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 2,
+          "live_url": "rtsp://srv-b:8554/2",
+          "live_shm": "shm:///run/vms/2.shm"
+        },
+        {
+          "id": 3,
+          "ref": "",
+          "name": "cam-3",
+          "enabled": true,
+          "phase": "running",
+          "position": "converged",
+          "revision": 1,
+          "observed_revision": 1,
+          "epoch": 2,
+          "live_url": "rtsp://srv-b:8554/3",
+          "live_shm": "shm:///run/vms/3.shm"
+        }
+      ],
+      "server": "srv-b",
+      "instance": "alloc-B",
+      "alloc": "alloc-B",
+      "labels": "vlan:cctv-a,vlan:cctv-b",
+      "assignment_rev": 3,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 1,
+      "capacity": 50,
+      "headroom": 47,
+      "started": 1757500048.0,
+      "previous_hb": 1757500000.0,
+      "previous_instance": "alloc-A",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/heartbeats/w-1", "ModifyIndex": 1029}
+
+# the controller reads the heartbeats: failover_seconds() = {'w-1': 48.0}

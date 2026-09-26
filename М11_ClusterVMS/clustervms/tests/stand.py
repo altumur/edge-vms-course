@@ -401,6 +401,82 @@ def the_events_mirror() -> str:
     return "\n".join(out) + "\n"
 
 
+def _recording(s, n=3):
+    """Lesson 8's starting point: w-1 on srv-a holds cameras 1..n under epoch 1, the servers' resources alive."""
+    s.resources_up()
+    con, ctl = s.console(), s.controller()
+    for i in range(n):
+        con.create_camera({"name": f"cam-{i + 1}", "source": f"driverpack://file/{i + 1}.mp4"})
+    a = s.worker(1, "srv-a", alloc="alloc-A")
+    a.heartbeat_once(); ctl.ensure_placed(); a.reconcile_once(); a.heartbeat_once()
+    return ctl, a
+
+
+def pull_the_power() -> str:
+    """Lesson 8: srv-a dies at t=0. Nomad's `disconnect { lost_after = 45s }` starts the replacement on srv-b
+    at t=48 (+ a placement). It claims w-1, finds its predecessor's heartbeat, reads its assignment, takes the
+    next epoch for every camera — asking nobody — and reports the failover it measured."""
+    s = Stand()
+    ctl, a = _recording(s)
+    s.wall.advance(45 + 3)
+    mark = s.log.mark()
+    b = s.worker(1, "srv-b", alloc="alloc-B")
+    b.reconcile_once(); b.heartbeat_once()
+    return s.log.render(since=mark) + f"\n# the controller reads the heartbeats: failover_seconds() = {ctl.failover_seconds()}\n"
+
+
+def a_server_gone_under_distinct() -> str:
+    """Lesson 8: the administrator chose `servers: distinct`. A crash (one silence: the slot) moves nothing; a
+    dead server (two silences: the slot, and the resource on its server) is a fact the controller acts on."""
+    s = Stand()
+    ctl, a = _recording(s)
+    s.console().set_policy({"servers": "distinct"})                    # the administrator, on the console: the controller may not
+    b = s.worker(2, "srv-b", alloc="alloc-C"); b.heartbeat_once()
+    rs = s.resources
+    s.wall.advance(2 * 45 + 3); b.heartbeat_once(); rs["srv-a"].heartbeat(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    crash = s.log.mark()
+    one = (ctl.gone_servers(), ctl.redistribute())
+    after_crash = s.log.mark()
+    s.wall.advance(2 * 45 + 3); b.heartbeat_once(); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    gone = ctl.gone_servers()
+    mark = s.log.mark()
+    ctl.redistribute()
+    b.reconcile_once()
+    writes_in_crash = sum(1 for c in s.log.calls[crash:after_crash] if c.method == "PUT")
+    return (f"# a crash — w-1 silent, srv-a's resource alive: gone_servers() = {one[0]}, redistribute() = {one[1]}, "
+            f"PUT requests: {writes_in_crash}\n"
+            f"# the power pull — w-1 AND srv-a's resource silent: gone_servers() = {gone}\n\n"
+            + s.log.render(since=mark, methods=("PUT",)))
+
+
+def the_old_instance_wakes_up() -> str:
+    """Lesson 9: srv-a was not dead — partitioned, or paused. It comes back with w-1 still holding three cameras
+    under epoch 1. Its next renewal finds the slot held by another; and every epoch says the same."""
+    s = Stand()
+    ctl, a = _recording(s)
+    s.wall.advance(45 + 3)
+    b = s.worker(1, "srv-b", alloc="alloc-B"); b.reconcile_once(); b.heartbeat_once()
+    mark = s.log.mark()
+    a.lease_pass()                                                     # kill -CONT
+    a.renew_leases()
+    a.heartbeat_once()
+    return s.log.render(since=mark) + f"\n# a.conflicts() = {a.conflicts()}, a.recording_allowed = {a.recording_allowed}\n"
+
+
+def a_reassignment_is_not_a_zombie() -> str:
+    """Lesson 9: the controller moves camera 2 from w-1 to w-2. w-1 loses the lease on 2 exactly as a zombie
+    would — and one read of its assignment tells it this is a move: it lets 2 go and keeps 1 and 3."""
+    s = Stand()
+    ctl, a = _recording(s)
+    b = s.worker(2, "srv-b", alloc="alloc-C"); b.heartbeat_once()
+    mark = s.log.mark()
+    ctl.move(2, "w-2", "operator: srv-b sees that VLAN")
+    b.reconcile_once()
+    lost = a.lease_pass()
+    a.reconcile_once()
+    return s.log.render(since=mark) + f"\n# a.lease_pass() lost {lost}; a.recording_allowed = {a.recording_allowed}; running {sorted(a.actuator.running)}\n"
+
+
 SCENES = {"01-worker-starts": worker_starts,
           "02-console-creates-a-camera": console_creates_a_camera,
           "02-two-editors-one-row": two_editors_one_row,
@@ -414,7 +490,11 @@ SCENES = {"01-worker-starts": worker_starts,
           "06-an-edit-during-the-failover": an_edit_during_the_failover,
           "06-a-timeline-across-two-resources": a_timeline_across_two_resources,
           "07-events-merged": events_merged,
-          "07-the-events-mirror": the_events_mirror}
+          "07-the-events-mirror": the_events_mirror,
+          "08-pull-the-power": pull_the_power,
+          "08-a-server-gone-under-distinct": a_server_gone_under_distinct,
+          "09-the-old-instance-wakes-up": the_old_instance_wakes_up,
+          "09-a-reassignment-is-not-a-zombie": a_reassignment_is_not_a_zombie}
 
 
 def main() -> None:

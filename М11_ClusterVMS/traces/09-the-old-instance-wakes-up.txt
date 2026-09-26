@@ -1,0 +1,97 @@
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/slots/w-1?namespace=default
+→ 200 {
+  "Path": "vms/slots/w-1",
+  "Items": {
+    "holder": "alloc-B",
+    "until": "1757500093.0",
+    "released": "false",
+    "gen": "2"
+  },
+  "ModifyIndex": 1025
+}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/1?namespace=default
+→ 200 {"Path": "vms/epoch/1", "Items": {"epoch": "2"}, "ModifyIndex": 1026}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/2?namespace=default
+→ 200 {"Path": "vms/epoch/2", "Items": {"epoch": "2"}, "ModifyIndex": 1027}
+
+# vmsworker (allocation 1 on srv-a)
+GET /v1/var/vms/epoch/3?namespace=default
+→ 200 {"Path": "vms/epoch/3", "Items": {"epoch": "2"}, "ModifyIndex": 1028}
+
+# vmsworker (allocation 1 on srv-a)
+PUT /v1/var/objects/vms/heartbeats/w-1?namespace=default
+{
+  "Items": {
+    "data": {
+      "worker": "w-1",
+      "ts": 1757500048.0,
+      "status": [
+        {
+          "id": 1,
+          "ref": "",
+          "name": "cam-1",
+          "enabled": true,
+          "phase": "pending",
+          "position": "lagging",
+          "revision": 1,
+          "observed_revision": 0,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/1",
+          "live_shm": "shm:///run/vms/1.shm"
+        },
+        {
+          "id": 2,
+          "ref": "",
+          "name": "cam-2",
+          "enabled": true,
+          "phase": "pending",
+          "position": "lagging",
+          "revision": 1,
+          "observed_revision": 0,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/2",
+          "live_shm": "shm:///run/vms/2.shm"
+        },
+        {
+          "id": 3,
+          "ref": "",
+          "name": "cam-3",
+          "enabled": true,
+          "phase": "pending",
+          "position": "lagging",
+          "revision": 1,
+          "observed_revision": 0,
+          "epoch": 1,
+          "live_url": "rtsp://srv-a:8554/3",
+          "live_shm": "shm:///run/vms/3.shm"
+        }
+      ],
+      "server": "srv-a",
+      "instance": "alloc-A",
+      "alloc": "alloc-A",
+      "labels": "vlan:cctv-a",
+      "assignment_rev": 3,
+      "fenced": true,
+      "conflicts": 3,
+      "passes": 1,
+      "capacity": 50,
+      "headroom": 47,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/heartbeats/w-1", "ModifyIndex": 1030}
+
+# a.conflicts() = 3, a.recording_allowed = False
