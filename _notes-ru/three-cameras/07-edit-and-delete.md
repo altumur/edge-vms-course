@@ -2,8 +2,8 @@
 genre: записки
 kind: разбор кода
 subject: М11_ClusterVMS
-source-commit: 4099cd5
-date: 2026-09-23
+source-commit: e3b8f57
+date: 2026-09-26
 status: draft
 ---
 
@@ -13,7 +13,7 @@ status: draft
 > Это разбор: я читал код и восстанавливал по нему, как всё устроено, максимально простыми словами.
 > **Источник истины — код.** Где записки расходятся с кодом, прав код.
 > Проект описывает себя сам: [`README.md`](../../README.md) и указатели модулей.
-> Состояние: коммит `4099cd5`, 23 сентября 2026.
+> Состояние: коммит `e3b8f57`, 26 сентября 2026.
 
 [← карта разбора](README.md) · назад: [06-confirmation.md](06-confirmation.md) · вперёд: [08-failures.md](08-failures.md)
 
@@ -29,7 +29,7 @@ status: draft
 PUT /cameras/2
 Idempotency-Key: 3f9c1e2a-…
 
-{"mask": "0,0 640,0 640,360 0,360"}
+{"name": "Парковка у въезда"}
 ```
 
 Консоль ходит в Nomad своим токеном четыре раза:
@@ -37,7 +37,7 @@ Idempotency-Key: 3f9c1e2a-…
 ```
 1. PUT /v1/var/vms/idem/3f9c1e2a-…?cas=0   занять ключ идемпотентности → 5130
 2. GET /v1/var/vms/cameras/2               прочитать строку, ModifyIndex → 4421
-3. PUT /v1/var/vms/cameras/2?cas=4421      записать: маска новая, revision 1 → 2 → 5133
+3. PUT /v1/var/vms/cameras/2?cas=4421      записать: имя новое, revision 1 → 2 → 5133
 4. PUT /v1/var/vms/idem/3f9c1e2a-…         положить ответ рядом с ключом → 5135
 ```
 
@@ -52,7 +52,7 @@ Idempotency-Key: 3f9c1e2a-…
 ### Все настройки камеры — в одной Variable
 
 ```json
-{"Items": {"id": "2", "revision": "2", "name": "Парковка",
+{"Items": {"id": "2", "revision": "2", "name": "Парковка у въезда",
            "source": "driverpack://acme/10.2.0.12", "enabled": "true", …}}
 ```
 
@@ -125,7 +125,7 @@ PUT /v1/var/vms/retention/2?cas=4424  {"days": "0"} → 5142
 
 Строка не удаляется, а помечается:
 
-```600:605:vmsserver/w2cplatform/spec.py
+```745:750:vmsserver/w2cplatform/spec.py
     def delete(self, uid) -> None:
         """The operator's half: the row is marked. Its placement is the controller's
         half, taken back on the next pass (`unplace_deleted`) — a console's token
@@ -140,7 +140,7 @@ PUT /v1/var/vms/retention/2?cas=4424  {"days": "0"} → 5142
 
 **Шаг 2. Воркер на следующем опросе — здесь гаснет поток.** Назначение всё ещё называет камеру 2, но её строка помечена, и воркер её пропускает:
 
-```348:352:vmsserver/vms/worker.py
+```438:442:vmsserver/vms/worker.py
         for unit in a.units:
             items, _ = self.vars.get(self.SUB.config(self.ROWS, unit))
             if items and items.get("deleted") != "true":
