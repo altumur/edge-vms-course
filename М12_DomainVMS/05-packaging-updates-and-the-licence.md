@@ -16,8 +16,8 @@ It is also where the course reads the licence it built on. The product runs on N
 
 - **М9 Lesson 2** — RAUC bundles and signatures; what an OS update is.
 - **М9 Lesson 3** — rollback, and the health-check ladder an update must pass.
-- **М11 Lesson 2** — the jobspec, the Variable it reads, the ACL policy that goes with it.
-- **М11 Lesson 5** and [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) — why Nomad, and its licence.
+- **М11 Lessons 3 and 5** — the jobspec, the Variable it reads, the ACL policy that goes with it.
+- **М11 Lesson 10** and [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) — why Nomad, and its licence.
 - **Lesson 4** — the domain cluster's Variables as the place the domain keeps small, consistent things.
 
 ## Learning objectives

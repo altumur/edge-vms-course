@@ -15,8 +15,8 @@ It is also the lesson where the course closes the arc it opened. М8 rented a cl
 ## Prerequisites
 
 - **М11 Lesson 1** — what a cluster is: servers on one network you would bet recording on.
-- **М11 Lesson 2** — the worker job, `deploy/vmsworker.nomad.hcl`.
-- **М11 Lesson 3** — the restore point in the cluster's own object store, and `s3+https://` from the S3 adapter.
+- **М11 Lesson 3** — the worker job, `deploy/vmsworker.nomad.hcl`.
+- **М11 Lesson 6** — the restore point in the cluster's own object store, and `s3+https://` from the S3 adapter.
 - **М9 Lesson 4** — the spool, and why an edge box survives an uplink outage.
 - **М8** — the cloud VMS this lesson rebuilds the customer's way.
 
@@ -33,7 +33,7 @@ It is also the lesson where the course closes the arc it opened. М8 rented a cl
 
 ## Step 1 — A cloud region is just a cluster
 
-Rented instances on one provider network: same LAN you would bet recording on, same Nomad servers, same Podman, same object store (theirs, this time, behind the `s3+https://` adapter from М11 Lesson 3). The domain cluster **provisions** it, using the customer's own cloud account — which is why this is a domain feature and not something above the domain: the account is the customer's, the root is the customer's, and the vendor is nowhere in the chain. Once the region joins the gossip pool it is one more entry in `Federation.clusters` with `reaches` naming whatever networks the provider's VPN gives it.
+Rented instances on one provider network: same LAN you would bet recording on, same Nomad servers, same Podman, same object store (theirs, this time, behind the `s3+https://` adapter from М11 Lesson 2). The domain cluster **provisions** it, using the customer's own cloud account — which is why this is a domain feature and not something above the domain: the account is the customer's, the root is the customer's, and the vendor is nowhere in the chain. Once the region joins the gossip pool it is one more entry in `Federation.clusters` with `reaches` naming whatever networks the provider's VPN gives it.
 
 ## Step 2 — The arithmetic, before the demo
 
@@ -80,7 +80,7 @@ diff local/rented:
 identical from `group` down: True
 ```
 
-Two lines differ, and neither is about the worker. Everything from `group` down — the constraint on the camera VLAN, the `disconnect` block with М11 Lesson 4's `lost_after`/`stop_on_client_after`, the reschedule policy, the task, its identity, its template, the lease numbers, the resources — is byte-identical. The worker cannot tell where it is running because nothing it reads says so. If the diff ever shows a third line, this lesson found a bug in М9 or М11, and the fix goes there, not here.
+Two lines differ, and neither is about the worker. Everything from `group` down — the constraint on the camera VLAN, the `disconnect` block with М11 Lesson 8's `lost_after`/`stop_on_client_after`, the reschedule policy, the task, its identity, its template, the lease numbers, the resources — is byte-identical. The worker cannot tell where it is running because nothing it reads says so. If the diff ever shows a third line, this lesson found a bug in М9 or М11, and the fix goes there, not here.
 
 ## Step 5 — What differs by placement, and what must never
 

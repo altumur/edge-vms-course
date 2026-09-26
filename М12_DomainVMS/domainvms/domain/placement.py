@@ -1,7 +1,7 @@
 """Lesson 1 — placement at the level above the one М11 built.
 
     Nomad     picks the SERVER   on resources        because it knows the servers — and how many workers, and where
-    Cluster   picks the WORKER   on capacity         because only its controller sees its workers' headroom (М11 Lesson 5)
+    Cluster   picks the WORKER   on capacity         because only its controller sees its workers' headroom (М11 Lesson 10)
     Domain    picks the CLUSTER  on REACHABILITY     because only it knows which clusters exist and what each can see
 
 Reachability, not capacity: a camera on the warehouse VLAN can be reached

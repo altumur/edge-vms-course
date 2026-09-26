@@ -6,7 +6,7 @@ front of that cluster's controller, the only writer of its vms/* — and that
 cluster's grants decide. The domain console owns nothing and never writes
 a camera row on its own account; a create goes to the cluster the
 placement service chose, and that cluster's controller places it on a
-worker (М11 Lesson 5). The domain never names a worker or a server.
+worker (М11 Lesson 10). The domain never names a worker or a server.
 
     idempotency keys    a retried PUT is the same PUT, not a second edit
     what it refuses     a client may not set placement at either level (cluster, worker, server), nor what
@@ -25,7 +25,7 @@ FORBIDDEN_FIELDS = ("cluster", "worker", "server", "placement", "epoch", "observ
 
 
 class ClusterConsole(Protocol):
-    """What the domain can ask of a cluster's console (М11 Lesson 5): the same
+    """What the domain can ask of a cluster's console (М11 Lesson 10): the same
     two writes its controller offers, with the caller's subject for its grants."""
     def update_camera(self, camera: int, fields: dict, subject: str | None) -> dict: ...
     def create_camera(self, fields: dict, subject: str | None) -> dict: ...

@@ -80,7 +80,7 @@ If a lesson does not move that wall forward, it does not belong here.
 - **М9 Lesson 4** — `spool_oldest_seconds`, and why age beats count.
 - **М9 Lesson 5** — events are not metrics; and the credential hiding in `rtsp_url`, which Lesson 4 collects on.
 - **М9 Lesson 9** — `camera_lag` and `camera_silent_seconds`, and positions versus reasons.
-- **М11 Lesson 4** and **М12 Lesson 1** — failover duration, epoch conflicts, replica lag.
+- **М11 Lessons 8–9** and **М12 Lesson 1** — failover duration, epoch conflicts, replica lag.
 - **М12 Lesson 8** — regions, because a fleet view spans them.
 
 ---

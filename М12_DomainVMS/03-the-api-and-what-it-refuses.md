@@ -15,10 +15,10 @@ The second half of the lesson is a question the single-box modules never had to 
 ## Prerequisites
 
 - **Lesson 1** — the directory of directories. Writes go through it to find the owner.
-- **М11 Lesson 4** — the heartbeat as an object, and why it left raft. This lesson is that object carrying its payload.
-- **М11 Lesson 3** — `replicated`. It stays the only place the UI learns an edit reached the cluster.
+- **М11 Lessons 1–2** — the heartbeat as an object, and why it left raft. This lesson is that object carrying its payload.
+- **М11 Lesson 6** — `replicated`. It stays the only place the UI learns an edit reached the cluster.
 - **М9 Lesson 9** — positions and reasons; the recorder's console; the login marked temporary.
-- **М10 Lesson 4** — the worker's heartbeat: status per camera, `server`, `epoch`; **М11 Lesson 5** — the cluster's snapshot and console.
+- **М10 Lesson 4** — the worker's heartbeat: status per camera, `server`, `epoch`; **М11 Lesson 10** — the cluster's snapshot and console.
 - **М9 Lesson 7** — `B + n·I`. The reason a worker must not serve browsers is that formula.
 
 ## Learning objectives
@@ -34,7 +34,7 @@ The second half of the lesson is a question the single-box modules never had to 
 
 ## Step 1 — Three ways to assemble a list, and the shape rule
 
-М11 Lesson 2's rule — small, rare and consistent is raft; frequent and never queried by key is an object; bulk stays on the resource — decides this before anything is built:
+М11 Lesson 5's rule — small, rare and consistent is raft; frequent and never queried by key is an object; bulk stays on the resource — decides this before anything is built:
 
 | | What it is | Why not |
 |---|---|---|
@@ -63,7 +63,7 @@ That is `VmsWorker.heartbeat_once()` in М10's `vmsserver/` — this module chan
  "worker_state": "live", "as_of": "as of 3 s ago"}
 ```
 
-Three properties, and each is a sentence in the design record. **It is not a database** — it holds nothing it cannot rebuild from the objects in one pass, and a restart of the console *is* that pass. **Staleness is shown, never hidden** — every row prints its age; a worker older than `lost_after` (45 s, М11 Lesson 4's `lost_after`) becomes *stale — last known state, 103 s old* with its cameras still listed, greyed. **A cluster that did not answer is reported as such**, its rows kept from the last successful pass — never rendered as an empty cluster, which is Lesson 1's *not mine* versus *not anywhere* applied to a screen:
+Three properties, and each is a sentence in the design record. **It is not a database** — it holds nothing it cannot rebuild from the objects in one pass, and a restart of the console *is* that pass. **Staleness is shown, never hidden** — every row prints its age; a worker older than `lost_after` (45 s, М11 Lesson 8's `lost_after`) becomes *stale — last known state, 103 s old* with its cameras still listed, greyed. **A cluster that did not answer is reported as such**, its rows kept from the last successful pass — never rendered as an empty cluster, which is Lesson 1's *not mine* versus *not anywhere* applied to a screen:
 
 ```
 clusters: {"north": "ok", "south": "unreachable"}   complete: false
@@ -103,7 +103,7 @@ def update_camera(self, camera, fields, idempotency_key, token=None):
 
 Read the refusals. A client may not set `cluster` — the domain's placement service decides that, stored with a reason — and may not set `worker` or `server` — the cluster's controller decides those, stored with a reason, and the domain does not even know the workers' names. It may not set `phase` or `observed_revision` — those are the worker's observations — nor `epoch`, which a worker takes, nor `revision`, which the controller bumps. Two levels of placement and three owners of columns, and the list is the union of everything none of them will take from a client. And a camera the directory cannot find gets a `404` only if the answer was complete; if a cluster was unreachable the honest code is `503`, because *not found* and *could not look* are different failures and a client that retries on one should not on the other.
 
-The idempotency key is what makes a PUT safe to retry over a link that drops: the retried request returns the first response and the owning cluster sees one edit. The edit reaches the cluster through *its* console and its controller, so the owner does not change and one-writer-per-key is untouched; it is acknowledged when the controller's CAS commits into that cluster's raft (М11 Lesson 3), and the domain's list shows it when the next heartbeat and snapshot carry it — with their age. A create is the same path with the cluster chosen by Lesson 1's placement: the domain forwards the fields and a `ref`, and the cluster's controller answers with the worker it chose.
+The idempotency key is what makes a PUT safe to retry over a link that drops: the retried request returns the first response and the owning cluster sees one edit. The edit reaches the cluster through *its* console and its controller, so the owner does not change and one-writer-per-key is untouched; it is acknowledged when the controller's CAS commits into that cluster's raft (М11 Lesson 6), and the domain's list shows it when the next heartbeat and snapshot carry it — with their age. A create is the same path with the cluster chosen by Lesson 1's placement: the domain forwards the fields and a `ref`, and the cluster's controller answers with the worker it chose.
 
 The API is unauthenticated in this lesson, and every response says so: `"authenticated": false`. Lesson 4 is where the `verifier` arrives.
 

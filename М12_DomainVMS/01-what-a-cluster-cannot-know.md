@@ -14,9 +14,9 @@ The lesson is built around the property that makes those three questions a diffe
 
 ## Prerequisites
 
-- **М11 Lesson 5** — the cluster directory: one scan of `vms/workers/*`, and why it is current inside one raft; and what a cluster publishes for a layer above — `vms/snapshot/<worker>`, one object per worker. This lesson aggregates several clusters' worth of those.
-- **М11 Lesson 2** — Variables belong to a region, and the three-stores rule.
-- **М11 Lesson 4** — the epoch is per camera, issued by check-and-set from the cluster's raft. This lesson shows why per-cluster raft is precisely the right scope for it.
+- **М11 Lesson 10** — the cluster directory: one scan of `vms/workers/*`, and why it is current inside one raft; and what a cluster publishes for a layer above — `vms/snapshot/<worker>`, one object per worker. This lesson aggregates several clusters' worth of those.
+- **М11 Lessons 2 and 5** — Variables belong to a region, and the three-stores rule.
+- **М11 Lesson 8** — the epoch is per camera, issued by check-and-set from the cluster's raft. This lesson shows why per-cluster raft is precisely the right scope for it.
 - **М9 Lesson 5** — `revision` as a monotonic integer. The convergence token here is that idea, one scope up.
 
 ## Learning objectives
@@ -67,7 +67,7 @@ class Cluster:
 
 ## Step 3 — The directory of directories
 
-`DomainDirectory` reads each cluster's `vms/snapshot/*` — one object per worker, the controller's copy of the camera rows placed on it with the server and a timestamp (М11 Lesson 5, М10A Lesson 25) — and merges. The shards are read the way the heartbeats beside them are read, a listing and a get per object; the age of a cluster's answer is the age of its *stalest* shard, because a directory is only as fresh as its oldest part. The rows themselves stay in each cluster's raft with one writer; what leaves is a copy with an age, and `ages()` shows it. The merge is ten lines; the part that matters is the return type:
+`DomainDirectory` reads each cluster's `vms/snapshot/*` — one object per worker, the controller's copy of the camera rows placed on it with the server and a timestamp (М11 Lesson 10, М10A Lesson 25) — and merges. The shards are read the way the heartbeats beside them are read, a listing and a get per object; the age of a cluster's answer is the age of its *stalest* shard, because a directory is only as fresh as its oldest part. The rows themselves stay in each cluster's raft with one writer; what leaves is a copy with an age, and `ages()` shows it. The merge is ten lines; the part that matters is the return type:
 
 ```python
 @dataclass
@@ -104,12 +104,12 @@ The one condition the directory refuses to merge is two clusters claiming one ca
 
 ## Step 4 — Placement, one level up
 
-М11 Lesson 5 placed cameras on workers by the workers' own capacity, under label constraints. This lesson adds the level above, and the division is about what each level *knows*:
+М11 Lesson 10 placed cameras on workers by the workers' own capacity, under label constraints. This lesson adds the level above, and the division is about what each level *knows*:
 
 | Level | Decides | On | Because only it knows |
 |---|---|---|---|
 | Nomad | which **server** runs a worker — and how many workers there are | resources, constraints, the autoscaler's metric | the servers |
-| Cluster (М11 Lesson 5) | which **worker** gets a camera | the workers' reported capacity, the server's labels | its own workers' headroom, accurately |
+| Cluster (М11 Lesson 10) | which **worker** gets a camera | the workers' reported capacity, the server's labels | its own workers' headroom, accurately |
 | **Domain** (here) | which **cluster** gets a camera | **reachability** | which clusters exist, and what each can see |
 
 Reachability is the whole reason the level exists. A camera on the warehouse VLAN can be reached from the warehouse cluster and from nowhere else; spare capacity in the cloud cluster is irrelevant. Capacity only breaks ties among clusters that can actually see the camera, and even then the domain does not measure it — it reads each cluster's `vms_headroom` from its console's `/metrics` and believes the answer.
@@ -166,13 +166,13 @@ And the level below does its own part without being asked: `test_the_cluster_the
 
 ## Step 7 — The epoch needs no domain
 
-A worry surfaces at this point: the fencing token from М11 Lesson 4 is issued from a per-cluster raft, and now there are several rafts. Does the domain need an issuer?
+A worry surfaces at this point: the fencing token from М11 Lesson 8 is issued from a per-cluster raft, and now there are several rafts. Does the domain need an issuer?
 
 No, and the reason is worth saying out loud because it looks like luck. The epoch only ever needs to be monotonic *for one camera*, and a camera lives in exactly one cluster for its whole life — its workers never cross one. So per-region raft is not a compromise; it is precisely the right scope. The failover rule was chosen in М11 for archive locality; it happens to make the fencing token's scope correct as well. When two independent arguments land on the same boundary, the boundary is usually real.
 
 ## Step 8 — Cold start
 
-М11 Lesson 4 walked a worker's failover. A domain's *first* start has a step that sequence never had: before the signer runs, no server in the domain can present a certificate. The order is
+М11 Lesson 8 walked a worker's failover. A domain's *first* start has a step that sequence never had: before the signer runs, no server in the domain can present a certificate. The order is
 
 ```
 Nomad up (its own install-time TLS) → the signer scheduled in the domain cluster

@@ -15,9 +15,9 @@ The lesson is in two halves that turn out to be one argument. The first is *what
 ## Prerequisites
 
 - **Lesson 3** — the console's write API and the `verifier` hook it left empty.
-- **М11 Lesson 2** — Variables and their ACL: one writer per prefix. The agent is that pattern with a new prefix.
-- **М11 Lesson 2** — one writer per prefix, enforced by a policy bound to a job's identity. The agent is one more such writer.
-- **М11 Lesson 5** — the cluster's console and its controller: the write path a forwarded edit takes.
+- **М11 Lesson 2** — Variables, and their `403`: one writer per prefix. The agent is that pattern with a new prefix.
+- **М11 Lesson 5** — one writer per prefix, enforced by a policy bound to a job's identity. The agent is one more such writer.
+- **М11 Lesson 10** — the cluster's console and its controller: the write path a forwarded edit takes.
 - **М9 Lesson 9** — the login marked temporary, and the `operators` and `grants` tables it left behind.
 
 ## Learning objectives

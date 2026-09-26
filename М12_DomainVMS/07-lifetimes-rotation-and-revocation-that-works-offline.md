@@ -17,7 +17,7 @@ None of that is fixed by choosing carefully. It is fixed by arithmetic — lifet
 - **Lesson 4** — the signer and the token key set with its overlap.
 - **Lesson 6** — the LDevID, which is the one long-lived certificate and the one slow case.
 - **М9 Lesson 2** — a chain, a signature, a bundle.
-- **М11 Lesson 3** — publish-then-point and the RPO. Users get the same treatment here.
+- **М11 Lesson 6** — publish-then-point and the RPO. Users get the same treatment here.
 
 ## Learning objectives
 

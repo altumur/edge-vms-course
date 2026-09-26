@@ -15,7 +15,7 @@ So the domain's first mode is one where it computes what it *would* do, observes
 ## Prerequisites
 
 - **Lesson 1** — the directory of directories and cluster placement; this lesson compares them to reality.
-- **М11 Lesson 4** — the epoch. One of the six kinds is a report under a superseded epoch, and it is the fencing rule catching a writer that should have stopped.
+- **М11 Lessons 8–9** — the epoch. One of the six kinds is a report under a superseded epoch, and it is the fencing rule catching a writer that should have stopped.
 - **М9 Lesson 6** — `observed_revision` and the `>=` rule. Shadow mode reads the same numbers, one level up.
 - **М9 Lesson 9** — positions and reasons. The report has kinds, not a health enum.
 
@@ -62,7 +62,7 @@ lagging=0  stalled=0  orphaned=1  unmanaged=1  conflict=1  stale_epoch=1
   orphaned     camera=9 where=north: placed, and no worker in the domain runs it
 ```
 
-Read the first and last lines together, because they are one story. w-2 reports camera 9 under epoch 1 while the cluster issued epoch 2 for it — the old instance of w-2 is still alive somewhere and still talking. Its claim counts for nothing (the code drops a stale-epoch claim before counting), which is why camera 9, placed in north, is then *orphaned*: the only thing claiming it was a zombie. That is М11 Lesson 4's fence, seen from the domain: a writer that should have stopped, caught by the number in its own report.
+Read the first and last lines together, because they are one story. w-2 reports camera 9 under epoch 1 while the cluster issued epoch 2 for it — the old instance of w-2 is still alive somewhere and still talking. Its claim counts for nothing (the code drops a stale-epoch claim before counting), which is why camera 9, placed in north, is then *orphaned*: the only thing claiming it was a zombie. That is М11 Lesson 9's fence, seen from the domain: a writer that should have stopped, caught by the number in its own report.
 
 The conflict is the other kind of wrong. Two live workers both say they run camera 3. Whatever caused it — a move that did not remove the camera from the source's assignment, an ACL that let two controllers write one key — it is never a tie to break and always a fault to raise. The other conflict, `placed in south, running in north`, is the domain's own level caught out: its placement row and a cluster's snapshot disagree.
 
@@ -100,7 +100,7 @@ def exit_criterion(rep, consecutive_clean, required=3):
 
 The criterion is code because a criterion that lives in someone's head is renegotiated at the moment it is inconvenient. Three consecutive clean reports is the default; the number is yours to defend.
 
-**Deliverable:** a divergence report against your own cluster from Lesson 1 — with a camera you never placed, a zombie you resumed with `kill -CONT` (М11 Lesson 4), and a worker whose reconcile loop you paused — and the written exit criterion, met.
+**Deliverable:** a divergence report against your own cluster from Lesson 1 — with a camera you never placed, a zombie you resumed with `kill -CONT` (М11 Lesson 9), and a worker whose reconcile loop you paused — and the written exit criterion, met.
 
 ---
 

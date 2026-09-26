@@ -35,7 +35,7 @@ The original question assumed it was, and two drafts of this record agreed. The 
 
 Putting Postgres on every Node and synchronising *bidirectionally* would still be wrong, and the reasons are worth keeping because they are what constrains the design:
 
-- **Multi-master** — for a desired-state store, conflicting writes are precisely what must not happen. "Camera 7 belongs to Node A" and "camera 7 belongs to Node B", merged, is the split-brain М11 Lesson 5 exists to prevent
+- **Multi-master** — for a desired-state store, conflicting writes are precisely what must not happen. "Camera 7 belongs to Node A" and "camera 7 belongs to Node B", merged, is the split-brain М11 Lesson 10 exists to prevent
 - **A consensus system** — which is what you would end up building, and Postgres is not one
 
 What makes the design work is that **neither is needed, because every row has exactly one writer by construction.** A Node writes its own configuration and nothing else writes it. The synchronisation is one-way and therefore not synchronisation at all — it is publication.
@@ -251,7 +251,7 @@ So split it by who wrote it:
 - **The domain holds a rollup only** — *"Node 3 has camera 7"*, in that Node's Variable beside its camera ids. Coarse enough to stay inside a key-value entry, which is the test for whether something belongs at the domain at all
 - **Playback asks the domain *where*, then the Node *what***
 
-Which extends the rule М11 Lesson 2 already teaches — *do not put video bulk on replicated storage; replicate metadata and let footage be local* — one level up: **replicate the summary, not the index.**
+Which extends the rule М11 Lesson 5 already teaches — *do not put video bulk on replicated storage; replicate metadata and let footage be local* — one level up: **replicate the summary, not the index.**
 
 ### The same shape, three times
 
@@ -332,7 +332,7 @@ So the verdict *one database, and it belongs to a Node* became **no database at 
 
 - [PostgreSQL HA: repmgr vs Patroni vs pg_auto_failover](https://tomasz-gintowt.medium.com/postgresql-high-availability-repmgr-vs-patroni-vs-pg-auto-failover-a16fd0bfbc1e) — external dependencies of each, witness versus monitor versus DCS, and the closing argument that a system the team understands beats a more advanced one it does not
 - `worker-and-process-model.md` — camera lifecycle must survive a control-plane outage, which is the rule this record generalises
-- М11 Lesson 2 — replicate metadata, let footage be local
+- М11 Lessons 5–6 — replicate metadata, let footage be local
 - [`module-design.md`](module-design.md) — the epoch issuer, the fencing argument it comes from, and М12 Lesson 4's mTLS on the Node↔directory streams
 - [Nomad Variables](https://developer.hashicorp.com/nomad/api-docs/variables) — check-and-set against `ModifyIndex`, which is what makes the epoch monotonic without a second database
 

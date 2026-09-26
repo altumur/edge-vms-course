@@ -7,7 +7,7 @@ partial, stale by a bounded amount, sometimes incomplete — and the honest
 response to "where is camera 7" when a cluster is unreachable is "not found
 in the clusters I could reach", never a short list rendered as complete.
 
-What a cluster publishes for the domain to read (М11 Lesson 5): one object
+What a cluster publishes for the domain to read (М11 Lesson 10): one object
 PER WORKER under `vms/snapshot/` — the controller's copy of the camera rows
 placed on that worker, with the server, carrying a timestamp — plus
 `vms/snapshot/unplaced` for the rows nobody holds, and the workers' own

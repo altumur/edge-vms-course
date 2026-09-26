@@ -66,8 +66,8 @@ The decisions about the servers underneath — camera ownership, worker identity
 ## Prerequisites
 
 - **М11 entire.** Workers that move between servers, the slot a worker claims, and the epoch that keeps two holders of one camera from corrupting an archive. This module adds a layer above that and must not weaken it.
-- **М10 Lesson 4 and М11 Lesson 4** — the worker's heartbeat as an object (`{worker, server, ts, epoch, capacity, headroom, cameras}`), and why it left raft. This module reads that object and adds nothing to it.
-- **М11 Lesson 5** — the controller's snapshot, the cluster directory in one scan, and the table of what the controller does not decide; this module aggregates several of those.
+- **М10 Lesson 4 and М11 Lessons 1–2** — the worker's heartbeat as an object (`{worker, server, ts, epoch, capacity, headroom, cameras}`), and why it left raft. This module reads that object and adds nothing to it.
+- **М11 Lesson 10** — the controller's snapshot, the cluster directory in one scan, and the table of what the controller does not decide; this module aggregates several of those.
 - **М9 Lesson 5** — `revision` as a monotonic integer. The convergence token here is that same idea, one scope up.
 - **М9 Lesson 9** — positions versus reasons. The console in Lesson 3 is that model at fleet scale.
 
@@ -96,9 +96,9 @@ A domain with one cluster is the common case and the boring one. The interesting
 
 ### What that does to the directory
 
-Inside a cluster the directory is one scan of `vms/workers/*` — the controller's assignments in one raft (М11 Lesson 5). Variables belong to a region, so with several clusters the domain's directory is **a federated read**, not one store: it reads each cluster's snapshot and heartbeats through Nomad's forwarding rather than holding a copy, and answers by `ref` rather than by a cluster-local id. Single-writer per key is unchanged, and so is the limit: tens of workers per cluster, low hundreds of clusters' worth before the scan stops being adequate.
+Inside a cluster the directory is one scan of `vms/workers/*` — the controller's assignments in one raft (М11 Lesson 10). Variables belong to a region, so with several clusters the domain's directory is **a federated read**, not one store: it reads each cluster's snapshot and heartbeats through Nomad's forwarding rather than holding a copy, and answers by `ref` rather than by a cluster-local id. Single-writer per key is unchanged, and so is the limit: tens of workers per cluster, low hundreds of clusters' worth before the scan stops being adequate.
 
-The **archive** is unaffected — it is on each cluster's resources, mirrored to a peer inside the same cluster (М11 Lesson 3), and only that cluster ever reads it.
+The **archive** is unaffected — it is on each cluster's resources, mirrored to a peer inside the same cluster (М11 Lesson 7), and only that cluster ever reads it.
 
 ### And it settles the epoch
 
@@ -120,7 +120,7 @@ So the domain's job is **honesty, not recovery**:
 
 ## Placement, at the level above the one М11 built
 
-М11 Lesson 5 placed cameras on **workers**, by the workers' own measured capacity under label constraints, with the stability rule and its property tests. That work is done and this module does not repeat it. What is added is the level above, and the division is about *what each level knows*:
+М11 Lesson 10 placed cameras on **workers**, by the workers' own measured capacity under label constraints, with the stability rule and its property tests. That work is done and this module does not repeat it. What is added is the level above, and the division is about *what each level knows*:
 
 | Level | Decides | On | Because only it knows |
 |---|---|---|---|
@@ -171,7 +171,7 @@ Placement and the read view can be re-provisioned in another cluster from nothin
 - **The domain's root is self-signed and it is the top.** There is no authority above it to re-issue from, and that is deliberate: a vendor-held root that signs the customer's CA is a vendor that can impersonate the customer's entire trust domain, and no serious security buyer accepts it. So recoverability comes from **backup**, not delegation: the key is kept somewhere the domain cluster's death cannot reach — another cluster's object store, or offline — and Lesson 7 makes students **rotate** it while the domain runs, because a backup nobody has restored from is a hope
 - **Lose it anyway and every server re-enrolls.** That is the honest cost of the customer owning their own trust, and the module says the number — how long a full re-enrollment takes at N servers — rather than leaving it as a feeling
 
-**The user records get the same treatment, by the mechanism М11 already built.** The signer publishes the whole identity set as one object into the domain cluster's object store and then moves a pointer Variable — object first, then the pointer, exactly М11 Lesson 3 — on every change and on a floor. That object is backed up wherever the key is. Re-hosting the domain in another cluster is then a restore with different nouns: the backed-up key, the identity object named by the pointer, then the domain agents pick up the new public key. The RPO for users is the publication interval, and it is stated, not discovered.
+**The user records get the same treatment, by the mechanism М11 already built.** The signer publishes the whole identity set as one object into the domain cluster's object store and then moves a pointer Variable — object first, then the pointer, exactly М11 Lesson 6 — on every change and on a floor. That object is backed up wherever the key is. Re-hosting the domain in another cluster is then a restore with different nouns: the backed-up key, the identity object named by the pointer, then the domain agents pick up the new public key. The RPO for users is the publication interval, and it is stated, not discovered.
 
 ### Who decides which server, and what that forces
 
@@ -181,7 +181,7 @@ The operator names the **domain cluster**. **Nomad names the server**, continuou
 
 **Which decides where the key lives.** A signer that can land on any server cannot keep its key on a server's disk — that disk just died. It lives in a **Nomad Variable in the domain cluster's raft**: encrypted, ACL'd, delivered to the task, the same mechanism М11 uses for every job's secrets. That is a *software* key, and the alternative should be named to be refused: sealing it in a TPM pins the signer to one server and **defeats the failover it just gained.** The tradeoff — hardware-bound keys cannot move, software keys can be stolen — is settled by lifetimes rather than by preference: **leaf certificates live hours to days**, so a stolen signing key is worth exactly as long as it takes to rotate it, and Lesson 7 makes rotation a drill rather than an emergency. A software key is acceptable *because* everything it signs is short-lived.
 
-**And the two-instances problem is here too.** `count = 1` does not mean exactly one during a reschedule — a partitioned server may still run the old instance, which is М11 Lesson 4's entire subject. Sort the services by what that does:
+**And the two-instances problem is here too.** `count = 1` does not mean exactly one during a reschedule — a partitioned server may still run the old instance, which is М11 Lesson 9's entire subject. Sort the services by what that does:
 
 | Service | Two instances briefly | Why |
 |---|---|---|
@@ -195,7 +195,7 @@ The operator names the **domain cluster**. **Nomad names the server**, continuou
 
 ### Cold start, which the rehydration lesson never had to face
 
-М11 Lesson 3 walks a cluster's restart step by step. A *domain's* first start has a step that sequence does not: **before the signer runs, no server in the domain can present a certificate.** The order is Nomad up on its own install-time TLS → the signer scheduled → certificates issued → the agents write `domain/*` → the domain reads snapshots and heartbeats. In that window a cluster records — that is the whole design — but cannot yet be seen by anything above it. Lesson 1 walks this sequence, because a student who has not seen it will build a signer that depends on a cluster that depends on the signer.
+М11 Lesson 6 walks a cluster's restart step by step. A *domain's* first start has a step that sequence does not: **before the signer runs, no server in the domain can present a certificate.** The order is Nomad up on its own install-time TLS → the signer scheduled → certificates issued → the agents write `domain/*` → the domain reads snapshots and heartbeats. In that window a cluster records — that is the whole design — but cannot yet be seen by anything above it. Lesson 1 walks this sequence, because a student who has not seen it will build a signer that depends on a cluster that depends on the signer.
 
 ---
 
@@ -203,12 +203,12 @@ The operator names the **domain cluster**. **Nomad names the server**, continuou
 
 The first screen any UI wants is the one the architecture so far cannot draw: *every camera, with its name, its site, whether it is recording, and when it was last seen* — across workers, and across clusters. The domain's directory does not have it: it answers **where** camera 7 is — which cluster, by `ref` — and nothing an operator would recognise as a camera. Inside a cluster, the rows are the controller's (name, source, labels, `ref`, revision) and the *actual* state — phase, epoch, `server`, `last_seen` — is in each worker's heartbeat, because М10 put it there. So the list is not stored anywhere. It has to be **assembled**, and the question is by whom and from what.
 
-Three ways to assemble it, and the shape rule from М11 Lesson 2 — *small, rare and consistent is raft; large, frequent and never queried by key is an object* — decides between them before any of them is built.
+Three ways to assemble it, and the shape rule from М11 Lesson 5 — *small, rare and consistent is raft; large, frequent and never queried by key is an object* — decides between them before any of them is built.
 
 | | What it is | Why not |
 |---|---|---|
 | **Fan-out** | the console discovers every cluster's console through Nomad's service catalogue and calls N of them per page | Every page waits for the slowest; the first dead cluster either hangs the list or forces partial-response logic into every screen; and each refresh is N network calls. Works at three clusters, fails at thirty. |
-| **Status in Variables** | every worker adds its camera phases to its own Variable | Two hundred cameras from fifty workers every ten seconds is a hundred raft commits a second replicated to every server, for data nobody looks up by key. This is precisely why the heartbeat was moved out of Variables (М11 Lesson 4). |
+| **Status in Variables** | every worker adds its camera phases to its own Variable | Two hundred cameras from fifty workers every ten seconds is a hundred raft commits a second replicated to every server, for data nobody looks up by key. This is precisely why the heartbeat was moved out of Variables (М11 Lesson 2). |
 | **The heartbeats** | every worker's heartbeat object already carries its status per camera and the server it runs on; the read view lists `vms/*/heartbeat` per cluster, reads N small objects and holds them in memory | Frequent, medium, never queried by key: **an object**. No worker is called. No raft is written. A dead worker costs nothing but a stale heartbeat. |
 
 The third is the decision, and it is not a new mechanism: **М10 Lesson 4 built it.** A worker's heartbeat is `{worker, server, ts, epoch, capacity, headroom, cameras: [{id, ref, phase, epoch, revision, …}]}`, at `HEARTBEAT_INTERVAL`; this module changed nothing downward. The arithmetic is the reason it is cheap: fifty cameras at roughly two hundred bytes each is a 10 kB object per worker every ten seconds; fifty workers are 50 kB/s into an object store that was sized for the events mirror. Beside the heartbeats the read view takes the controller's `vms/snapshot` — one object per cluster, with its own `ts` — for the *desired* side: which worker each row is placed on and why.
