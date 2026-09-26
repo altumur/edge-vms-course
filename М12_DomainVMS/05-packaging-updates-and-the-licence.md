@@ -1,70 +1,70 @@
-# Lesson 5 — Packaging, Updates, and the Licence
+# Урок 5 — Упаковка, обновления и лицензия
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** one pack for three clusters with per-cluster differences and no forks; an update path that works with the vendor unreachable; and an entitlement cache that degrades on a stated grace period without ever stopping a worker.
-**Time:** ~120 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** один пакет для трёх кластеров с различиями по кластерам и без форков; путь обновления, который работает при недоступном вендоре; и кэш лицензии, который деградирует по заявленному льготному периоду и никогда не останавливает воркер.
+**Время:** ~120 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-The first four lessons built things that run. This one is about how they *arrive* — at three clusters that differ in small, legitimate ways, at appliances that may not have seen the vendor in a month, and under a licence that the vendor issues and the customer has to keep working when the vendor is gone. Every one of those is a place where a reasonable engineer builds a push pipeline or a phone-home check, and every one of them is where an air-gapped or badly connected site stops updating.
+Первые четыре урока построили то, что работает. Этот — о том, как оно *прибывает*: на три кластера, которые различаются в мелочах, и законно; на устройства, которые, может быть, месяц не видели вендора; и под лицензией, которую выдаёт вендор и которая у заказчика должна продолжать работать, когда вендора нет. Каждое из этих мест — то, где разумный инженер строит конвейер с проталкиванием или проверку со звонком домой, и каждое — то место, где изолированная или плохо подключённая площадка перестаёт обновляться.
 
-It is also where the course reads the licence it built on. The product runs on Nomad, and Nomad's licence has terms that decide whether a VMS may embed it. A module about entitlement that did not check its own would be a poor teacher.
+Здесь же курс читает лицензию того, на чём он построен. Продукт работает на Nomad, а у лицензии Nomad есть условия, которые решают, можно ли VMS его встраивать. Модуль о лицензировании, который не проверил бы собственную лицензию, был бы плохим учителем.
 
-> **What you can verify without hardware.** The entitlement cache — verification against the vendor key, grace, degradation, and the property that recording is never refused — is `tests/test_lesson5_entitlement.py`. The four jobspecs and two policies in `deploy/` are written to the documentation and validated against nothing here. Nomad Pack rendering, hawkBit, and an OS bundle delivered through the domain's own update server are the bench's.
+> **Что проверяется без железа.** Кэш лицензии — проверка по ключу вендора, льготный период, деградация и свойство, что запись никогда не запрещается, — это `tests/test_lesson5_entitlement.py`. Четыре jobspec и две политики в `deploy/` написаны по документации и здесь ни на чём не проверены. Отрисовка Nomad Pack, hawkBit и бандл ОС, доставленный через собственный сервер обновлений домена, — это стенд.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **М9 Lesson 2** — RAUC bundles and signatures; what an OS update is.
-- **М9 Lesson 3** — rollback, and the health-check ladder an update must pass.
-- **М11 Lessons 3 and 5** — the jobspec, the Variable it reads, the ACL policy that goes with it.
-- **М11 Lesson 10** and [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) — why Nomad, and its licence.
-- **Lesson 4** — the domain cluster's Variables as the place the domain keeps small, consistent things.
+- **М9, урок 2** — бандлы RAUC и подписи; что такое обновление ОС.
+- **М9, урок 3** — откат и лестница проверок здоровья, которую должно пройти обновление.
+- **М11, уроки 3 и 5** — jobspec, Variable, которую он читает, и ACL-политика, которая к нему прилагается.
+- **М11, урок 10** и [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md) — почему Nomad и что с его лицензией.
+- **Урок 4** — Variables доменного кластера как место, где домен держит маленькое и согласованное.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Template one deployment for several clusters and say what may differ and what must not.
-2. Name the GitOps gap honestly: push against pull, and what a flaky link does to each.
-3. Explain why the domain runs its own update server and what that buys an air-gapped site.
-4. Cache the entitlement, verify it against the product's key, degrade it on a stated period, and prove recording never stops.
-5. Read Nomad's licence and apply its competitive test to a VMS.
+1. Сделать один шаблон развёртывания для нескольких кластеров и сказать, что может различаться, а что не должно.
+2. Честно назвать дыру GitOps: проталкивание против вытягивания и что ненадёжный канал делает с каждым из них.
+3. Объяснить, почему домен держит собственный сервер обновлений и что это даёт изолированной площадке.
+4. Кэшировать лицензию, проверять её по ключу продукта, деградировать по заявленному периоду и доказать, что запись никогда не останавливается.
+5. Прочитать лицензию Nomad и применить её тест на конкуренцию к VMS.
 
 ---
 
-## Step 1 — One pack, three clusters
+## Шаг 1 — Один пакет, три кластера
 
-The four processes this module added — the signer, the console, the live gateway, the agent — are four jobspecs in `deploy/`. Read them side by side and mark what changes per cluster:
+Четыре процесса, которые добавил этот модуль, — подписывающий, консоль, шлюз живого видео, агент — это четыре jobspec в `deploy/`. Прочитайте их рядом и отметьте, что меняется от кластера к кластеру:
 
-| | Same everywhere | Differs per cluster |
+| | Одинаково везде | Различается по кластерам |
 |---|---|---|
-| `domain-signer` | everything | runs in the **domain cluster only** — `region = "north"` is the stated decision |
-| `domain-agent` | everything | `DOMAIN_NOMAD_ADDR` — where the domain is, read through forwarding |
-| `console` | everything | `CLUSTERS=` — its own cluster, or all of them in the domain cluster's instance |
-| `live-gateway` | everything | which server satisfies its constraints (`meta.gpu`, `meta.public_addr`) |
+| `domain-signer` | всё | работает **только в доменном кластере** — `region = "north"` и есть заявленное решение |
+| `domain-agent` | всё | `DOMAIN_NOMAD_ADDR` — где домен, читается через пересылку |
+| `console` | всё | `CLUSTERS=` — свой кластер или все кластеры в экземпляре доменного кластера |
+| `live-gateway` | всё | какой сервер удовлетворяет его ограничениям (`meta.gpu`, `meta.public_addr`) |
 
-That is the whole per-cluster surface: a region name, an address, a list, and constraints Nomad resolves. Everything else — the image, the resources, the ACL policy, the environment names — is identical, and the right way to ship "identical with four variables" is a **Nomad Pack**: one template, a `variables.hcl` per cluster, a registry the clusters pull from. A fork per cluster is how the south cluster ends up six months behind north with nobody able to say why.
+Это вся поверхность различий между кластерами: имя региона, адрес, список и ограничения, которые разрешает Nomad. Всё остальное — образ, ресурсы, ACL-политика, имена переменных окружения — одинаково, и правильный способ поставлять «одинаковое с четырьмя переменными» — **Nomad Pack**: один шаблон, `variables.hcl` на кластер, реестр, из которого кластеры забирают. Форк на кластер — это то, как кластер south оказывается на полгода позади north, и никто не может сказать почему.
 
-The rule that decides what may be a variable is М11's: a **constraint**, never a server. `live-gateway`'s per-cluster difference is not "which host" but "a host with a GPU and a public address", and Nomad finds it.
+Правило, которое решает, что может быть переменной, — из М11: **ограничение**, никогда не сервер. Различие `live-gateway` между кластерами — не «какой хост», а «хост с GPU и публичным адресом», и Nomad его находит.
 
-## Step 2 — The honest GitOps gap
+## Шаг 2 — Честная дыра GitOps
 
-Two ways to get a pack onto a cluster, and they are not equivalent:
+Два способа доставить пакет на кластер, и они не равноценны:
 
-- **Pull.** A site catches up by itself: something on the cluster polls a registry and applies what is new. A link that was down for a week costs a week's delay and nothing else.
-- **Push.** CI renders the pack and runs `nomad job run` against each cluster. Your pipeline must *reach* each cluster, at the moment it runs, with credentials for each.
+- **Вытягивание.** Площадка догоняет сама: что-то на кластере опрашивает реестр и применяет новое. Канал, который лежал неделю, стоит недели задержки и ничего больше.
+- **Проталкивание.** CI отрисовывает пакет и запускает `nomad job run` против каждого кластера. Ваш конвейер должен *дотянуться* до каждого кластера в момент запуска, с учётными данными для каждого.
 
-Nomad Pack driven from CI is push. Fleet, which the course looked at for the OS plane, is pull. For a campus with three server rooms on one network, push is fine and simpler. For a fleet of sites on consumer uplinks, push is a pipeline that fails on Tuesday and nobody notices until the south cluster is three releases behind — which is *worse* than a site that updates late, because it is invisible. The module says so rather than glossing it, and the mitigation is the next step.
+Nomad Pack из CI — это проталкивание. Fleet, на который курс смотрел для плоскости ОС, — вытягивание. Для кампуса с тремя серверными в одной сети проталкивание годится и оно проще. Для парка площадок на бытовых каналах проталкивание — это конвейер, который падает во вторник, и никто не замечает, пока кластер south не отстанет на три релиза, — и это *хуже*, чем площадка, которая обновляется поздно, потому что этого не видно. Модуль это говорит, а не замазывает, а смягчение — следующий шаг.
 
-## Step 3 — The domain runs its own update server
+## Шаг 3 — Домен держит собственный сервер обновлений
 
-The OS plane already has the answer in the pull direction, and it is М9's: an appliance polls for a bundle, verifies its signature, installs it into the other slot, and rolls back if the health check fails. What М9 did not say is *what it polls*. If it polls the vendor, an air-gapped site never updates and a site behind a bad link updates when the link feels like it.
+У плоскости ОС ответ в направлении вытягивания уже есть, и он из М9: устройство опрашивает, нет ли бандла, проверяет его подпись, ставит его в другой слот и откатывается, если проверка здоровья не прошла. Чего М9 не сказал — *что* оно опрашивает. Если вендора, то изолированная площадка никогда не обновится, а площадка за плохим каналом обновится, когда каналу захочется.
 
-So **the domain runs its own update server** — Eclipse hawkBit, pull-based, hosted like every other domain service in the domain cluster. Appliances poll *it*; **the vendor publishes to it** and never reaches an appliance directly. That restores pull on the OS plane end to end, and it is what makes an air-gapped domain updatable at all: somebody carries a bundle to the update server, and the boxes fetch it as if nothing were unusual. The signer's role is unchanged — bundles are signed by the vendor's key from М9, and the domain's server merely stores and serves them.
+Поэтому **домен держит собственный сервер обновлений** — Eclipse hawkBit, на вытягивании, размещённый в доменном кластере, как любая другая служба домена. Устройства опрашивают *его*; **вендор публикует в него** и никогда не обращается к устройству напрямую. Это возвращает вытягивание на плоскость ОС от начала до конца, и именно это вообще делает изолированный домен обновляемым: кто-то приносит бандл на сервер обновлений, а коробки забирают его, как будто ничего необычного не происходит. Роль подписывающего не меняется — бандлы подписаны ключом вендора из М9, а сервер домена лишь хранит и отдаёт их.
 
-The licence rides the same path. It is a small signed document; it arrives through the same hawkBit as bundles, and it lands in the domain cluster's Variables, which is where the next step reads it from.
+Лицензия едет тем же путём. Это маленький подписанный документ; он приходит через тот же hawkBit, что и бандлы, и ложится в Variables доменного кластера — откуда его и читает следующий шаг.
 
-## Step 4 — Entitlement, from the domain's side
+## Шаг 4 — Лицензия со стороны домена
 
-The vendor issues the licence (М14 Lesson 3 is the issuing side — what it contains, what it binds to, why there is no revocation). The domain's side is a cache with a policy:
+Лицензию выдаёт вендор (выдающая сторона — что в ней, к чему она привязана, почему нет отзыва — это М14, урок 3). Сторона домена — это кэш с политикой:
 
 ```python
 class EntitlementCache:
@@ -75,7 +75,7 @@ class EntitlementCache:
     def recording_allowed():      # True. There is no code path that returns False.
 ```
 
-The test installs a thirty-day licence and moves the clock:
+Тест устанавливает лицензию на тридцать дней и двигает часы:
 
 ```
 +0d:   valid     (True,  'valid: 50 camera(s) left')                                        recording: True
@@ -83,49 +83,49 @@ The test installs a thirty-day licence and moves the clock:
 +61d:  degraded  (False, 'entitlement degraded: recording continues, adding cameras does not')  recording: True
 ```
 
-Three properties, each a sentence on the datasheet. **The licence server can be unreachable for a month and nothing changes**: the licence is cached, and the grace (`GRACE`, thirty days) starts only when it expires. **What degrades is decided here and stated**: record-but-don't-add-cameras is the usual answer, and the message says exactly that. **Nothing that is already recording stops** — `recording_allowed()` is a constant, on purpose, so that a licence dispute is never a customer's dark building. A licence the vendor did not sign, or one naming another domain, is refused at install and the previous one stays.
+Три свойства, каждое — фраза в техническом описании продукта. **Сервер лицензий может быть недоступен месяц, и ничего не меняется**: лицензия закэширована, а льготный период (`GRACE`, тридцать дней) начинается, только когда она истекает. **Что деградирует, решается здесь и заявлено**: «писать, но не добавлять камеры» — обычный ответ, и сообщение говорит ровно это. **Ничто, что уже пишет, не останавливается** — `recording_allowed()` намеренно константа, чтобы спор о лицензии никогда не оборачивался тёмным зданием заказчика. Лицензия, которую вендор не подписывал, или лицензия, называющая другой домен, отклоняется при установке, и предыдущая остаётся.
 
-This is the same shape as placement and identity: something cached from above, with an expiry, degrading on a stated period. Rights, placement and entitlement are not three mechanisms; they are one rule applied three times.
+Это та же форма, что у размещения и идентичности: что-то, кэшированное сверху, со сроком, деградирующее по заявленному периоду. Права, размещение и лицензия — не три механизма, а одно правило, применённое трижды.
 
-## Step 5 — Reading the licence you built on
+## Шаг 5 — Прочитать лицензию того, на чём вы построились
 
-Nomad Community Edition is under the **Business Source License 1.1**. The terms that matter, read from the file rather than remembered:
+Nomad Community Edition — под **Business Source License 1.1**. Условия, которые важны, — прочитанные из файла, а не по памяти:
 
-- **Licensor:** IBM. **Change Date:** four years after each version's release, after which that version is under **MPL 2.0**.
-- **Additional Use Grant:** production use is permitted — *unless* the work is offered to third parties as a hosted or **embedded** service that competes with the licensor's paid versions of the software.
+- **Лицензиар (Licensor):** IBM. **Дата смены (Change Date):** четыре года после выпуска каждой версии, после чего эта версия переходит на **MPL 2.0**.
+- **Дополнительное разрешение на использование (Additional Use Grant):** использование в продакшене разрешено — *если только* работу не предлагают третьим лицам как размещённый или **встроенный** сервис, конкурирующий с платными версиями ПО лицензиара.
 
-The question for a VMS is the competitive test. A VMS embeds Nomad to schedule its own workers; it does not offer Nomad, or a scheduler, to anyone. Its customers buy camera recording, and the orchestrator underneath is an implementation detail they cannot reach. That is the analysis in [`COURSE-PLAN.md`](../COURSE-PLAN.md) and [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md); the point of putting it in a lesson is that a student who ships a product should have read the licence of the thing it stands on, and should be able to say in one sentence why the product is on the right side of the line — and what would move it to the wrong side (selling "managed Nomad clusters" to the same customers would).
+Для VMS вопрос — тест на конкуренцию. VMS встраивает Nomad, чтобы планировать свои воркеры; она никому не предлагает ни Nomad, ни планировщик. Её заказчики покупают запись с камер, а оркестратор под ней — деталь реализации, до которой они не могут дотянуться. Это разбор из [`COURSE-PLAN.md`](../COURSE-PLAN.md) и [`kubernetes-vs-nomad.md`](../М11_ClusterVMS/kubernetes-vs-nomad.md); смысл вносить его в урок в том, что студент, который поставляет продукт, должен прочитать лицензию того, на чём продукт стоит, и уметь одной фразой сказать, почему продукт по правильную сторону черты, — и что переместило бы его на неправильную (продажа «управляемых кластеров Nomad» тем же заказчикам — переместила бы).
 
-**Deliverable:** one pack, three clusters, the four variables above and nothing else different; an OS bundle delivered through the domain's own update server with the vendor's endpoint blocked at the firewall; and a written analysis of what degrades when the licence server is unreachable for a month — and what does not — with the two numbers (licence lifetime, grace) on it.
+**Результат:** один пакет, три кластера, четыре переменные выше и больше никаких различий; бандл ОС, доставленный через собственный сервер обновлений домена, когда адрес вендора заблокирован на файрволе; и письменный разбор того, что деградирует, когда сервер лицензий недоступен месяц, — и что нет, — с двумя числами (срок лицензии, льготный период).
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| The south cluster runs an older console than north | Push, and the pipeline failed for south without anyone noticing. Either make it pull (a registry the cluster polls) or alarm on the pipeline, not the symptom. |
-| An appliance never updates | It polls the vendor, not the domain's server — or the domain's server has no bundle because nobody published to it. `hawkBit`'s target list says which. |
-| `LicenceError: signature does not verify` on a real licence | The product's vendor key changed (a new product release) or the licence was re-signed. The key ships in the product; the licence must match the product's generation. |
-| `may_add_camera` false on a valid licence | The count. Fifty licensed, fifty configured. The message says so. |
-| A licence dispute stops recording | It cannot. If it did, someone added a code path; find it and delete it. |
+| На кластере south консоль старее, чем на north | Проталкивание, и конвейер упал для south, а никто не заметил. Либо сделайте вытягивание (реестр, который кластер опрашивает), либо поставьте тревогу на конвейер, а не на симптом. |
+| Устройство никогда не обновляется | Оно опрашивает вендора, а не сервер домена, — или на сервере домена нет бандла, потому что в него никто не публиковал. Какое из двух — скажет список целей `hawkBit`. |
+| `LicenceError: signature does not verify` на настоящей лицензии | Ключ вендора в продукте сменился (новый релиз продукта), или лицензию переподписали. Ключ поставляется в продукте; лицензия должна соответствовать поколению продукта. |
+| `may_add_camera` ложно при действующей лицензии | Счёт. Лицензировано пятьдесят, настроено пятьдесят. Сообщение так и говорит. |
+| Спор о лицензии останавливает запись | Не может. Если остановил, кто-то добавил такой путь в коде; найдите его и удалите. |
 
-## Recap
+## Итог
 
-- One pack, per-cluster variables, no forks. What differs is a region, an address, a list and constraints; everything else is identical by construction.
-- Push reaches; pull catches up. Nomad Pack from CI is push, and the module says what that costs on a bad link.
-- The domain runs its own pull-based update server; the vendor publishes to it and never touches an appliance. That is what makes air-gap work.
-- Entitlement is cached, verified against the product's key, graceful for a stated period, and degrades to *record but do not add*. Recording is never refused.
-- Nomad's BUSL is fine for a VMS that embeds it and does not sell it. Read the file.
+- Один пакет, переменные на кластер, никаких форков. Различаются регион, адрес, список и ограничения; всё остальное одинаково по построению.
+- Проталкивание дотягивается; вытягивание догоняет. Nomad Pack из CI — проталкивание, и модуль говорит, чего это стоит на плохом канале.
+- Домен держит собственный сервер обновлений на вытягивании; вендор публикует в него и никогда не касается устройства. Благодаря этому работает изолированная площадка.
+- Лицензия кэшируется, проверяется по ключу продукта, действует с льготным периодом заявленной длины и деградирует до *писать, но не добавлять*. Запись никогда не запрещается.
+- BUSL Nomad подходит для VMS, которая его встраивает и не продаёт. Прочитайте файл.
 
-## Exercises
+## Упражнения
 
-1. Write the `variables.hcl` for a fourth cluster that is the rented one from Lesson 8. Which of the four variables change, and does anything new appear?
-2. Make the pipeline push to three clusters and cut the link to one. Say what tells you, and when.
-3. Change `GRACE` to seven days and rewrite the datasheet sentence. Then argue for thirty against a sales team that wants ninety.
-4. Add a feature flag to the licence (`features: ["record", "analytics"]`) and decide what degrades when it lapses: recording, analytics, or adding cameras? Defend the order.
-5. Find the sentence in Nomad's BUSL that would apply if the product offered "your own VMS cluster, hosted" to other integrators. Say whether that is a product you would build on Nomad.
+1. Напишите `variables.hcl` для четвёртого кластера — арендованного из урока 8. Какие из четырёх переменных меняются и появляется ли что-то новое?
+2. Заставьте конвейер проталкивать на три кластера и перережьте канал к одному. Скажите, что вам об этом сообщит и когда.
+3. Поменяйте `GRACE` на семь дней и перепишите фразу технического описания. Затем отстаивайте тридцать дней перед отделом продаж, который хочет девяносто.
+4. Добавьте в лицензию флаг функций (`features: ["record", "analytics"]`) и решите, что деградирует, когда он истекает: запись, аналитика или добавление камер? Защитите порядок.
+5. Найдите в BUSL Nomad фразу, которая применилась бы, если бы продукт предлагал другим интеграторам «ваш собственный кластер VMS, размещённый у нас». Скажите, стали бы вы строить такой продукт на Nomad.
 
-## Where this is going
+## Что дальше
 
-Everything the domain ships now arrives without the vendor. One thing still arrives by hand: the credential a server uses on the mTLS channel, typed in Lesson 4 and marked temporary. [**Lesson 6**](06-secure-introduction-a-box-joins-the-domain.md) is where a server earns it instead — the hardest problem in the course, and it belongs here because a box joins a *domain*.
+Всё, что поставляет домен, теперь прибывает без вендора. Одно по-прежнему прибывает руками: учётные данные, которыми сервер пользуется на канале mTLS, введённые в уроке 4 и помеченные временными. [**Урок 6**](06-secure-introduction-a-box-joins-the-domain.md) — место, где сервер вместо этого их зарабатывает: самая трудная задача курса, и её место здесь, потому что коробка вступает в *домен*.

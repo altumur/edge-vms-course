@@ -1,43 +1,43 @@
-# Lesson 8 — A Cluster You Rent, and a Worker That Does Not Know Where It Is
+# Урок 8 — Кластер, который вы арендуете, и воркер, который не знает, где он
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a second cluster the domain provisions from the customer's own cloud account; the bandwidth-and-cost arithmetic that decides what should live there; and a proof, by diffing, that a worker cannot tell.
-**Time:** ~120 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** второй кластер, который домен заводит с облачного аккаунта самого заказчика; арифметику полосы и стоимости, которая решает, что должно там жить; и доказательство сравнением, что воркер разницы не видит.
+**Время:** ~120 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-М11 built clusters from servers in a room. This lesson changes exactly one thing — where the servers come from — and the point is that nothing else changes. A cloud region is a cluster: rented instances on one provider network satisfy М11's definition exactly as a rack does, and Nomad cannot tell the difference. If the software *can* tell, that is a bug in М9 or М11, and the lesson's method is to go looking for it with a diff.
+М11 строил кластеры из серверов в комнате. Этот урок меняет ровно одно — откуда берутся серверы, — и смысл в том, что больше ничего не меняется. Облачный регион — это кластер: арендованные экземпляры в сети одного провайдера удовлетворяют определению М11 так же, как стойка, и Nomad разницы не видит. Если программа разницу *видит*, это ошибка в М9 или М11, и метод урока — искать её сравнением.
 
-It is also the lesson where the course closes the arc it opened. М8 rented a cloud VMS from Kinesis with hand-provisioned AWS keys. Here the shape is rebuilt the customer's way — their workers, their object storage, their cloud account, provisioned by their domain — and М9's hand-provisioned credentials are retired by no longer being needed. And before any of that is demonstrated, the arithmetic is done, because the demo is cheap and the decision it invites is not.
+Это ещё и урок, в котором курс замыкает дугу, которую открыл. М8 арендовал облачную VMS у Kinesis с выданными руками ключами AWS. Здесь та же форма строится заново так, как нужно заказчику, — его воркеры, его объектное хранилище, его облачный аккаунт, заведено его доменом, — а выданные руками учётные данные М9 уходят, потому что больше не нужны. И прежде чем что-то из этого показывать, делается арифметика: демонстрация дешёвая, а решение, к которому она подталкивает, — нет.
 
-> **What you can verify without hardware.** The arithmetic and the diff: `tests/test_lesson8_cloud.py` computes the numbers below and renders the same worker job for a rack, a rented instance and a split site, then asserts the worker's part is byte-identical. Provisioning a real cluster from a real cloud account — and pulling the uplink on a cloud-recorded site — is the bench's, and the deliverable.
+> **Что проверяется без железа.** Арифметика и сравнение: `tests/test_lesson8_cloud.py` считает числа ниже и собирает одно и то же задание воркера для стойки, арендованного экземпляра и раздельной площадки, а затем проверяет, что часть воркера побайтово одинакова. Завести настоящий кластер с настоящего облачного аккаунта — и выдернуть канал у площадки, пишущей в облако, — это дело стенда и результата урока.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **М11 Lesson 1** — what a cluster is: servers on one network you would bet recording on.
-- **М11 Lesson 3** — the worker job, `deploy/vmsworker.nomad.hcl`.
-- **М11 Lesson 6** — the restore point in the cluster's own object store, and `s3+https://` from the S3 adapter.
-- **М9 Lesson 4** — the spool, and why an edge box survives an uplink outage.
-- **М8** — the cloud VMS this lesson rebuilds the customer's way.
+- **М11, урок 1** — что такое кластер: серверы в одной сети, на которую вы поставили бы запись.
+- **М11, урок 3** — задание воркера, `deploy/vmsworker.nomad.hcl`.
+- **М11, урок 6** — точка восстановления в собственном хранилище объектов кластера и `s3+https://` из адаптера S3.
+- **М9, урок 4** — спул, и почему коробка на краю переживает отказ канала.
+- **М8** — облачная VMS, которую этот урок строит заново так, как нужно заказчику.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Say why a cloud region is a cluster and what the domain does to get one.
-2. Do the bandwidth and cost arithmetic before recommending anything.
-3. Name the three shapes — edge, cloud, mixed — and which a real fifty-camera site takes.
-4. Deploy a worker three ways and prove the artifacts identical.
-5. List what differs by placement and what must never differ.
-6. Say what a cloud site has no spool for, and what becomes the buffer.
+1. Сказать, почему облачный регион — это кластер и что делает домен, чтобы его получить.
+2. Сделать арифметику полосы и стоимости, прежде чем что-либо рекомендовать.
+3. Назвать три формы — край, облако, смешанная — и какую принимает настоящая площадка на пятьдесят камер.
+4. Развернуть воркер тремя способами и доказать, что артефакты одинаковы.
+5. Перечислить, что различается в зависимости от размещения и что не должно различаться никогда.
+6. Сказать, для чего у облачной площадки нет спула и что становится буфером.
 
 ---
 
-## Step 1 — A cloud region is just a cluster
+## Шаг 1 — Облачный регион — просто кластер
 
-Rented instances on one provider network: same LAN you would bet recording on, same Nomad servers, same Podman, same object store (theirs, this time, behind the `s3+https://` adapter from М11 Lesson 2). The domain cluster **provisions** it, using the customer's own cloud account — which is why this is a domain feature and not something above the domain: the account is the customer's, the root is the customer's, and the vendor is nowhere in the chain. Once the region joins the gossip pool it is one more entry in `Federation.clusters` with `reaches` naming whatever networks the provider's VPN gives it.
+Арендованные экземпляры в сети одного провайдера: та же локальная сеть, на которую вы поставили бы запись, те же серверы Nomad, тот же Podman, то же хранилище объектов (на этот раз провайдера, за адаптером `s3+https://` из М11, урок 2). Доменный кластер **заводит** его сам, с облачного аккаунта заказчика, — поэтому это возможность домена, а не чего-то над доменом: аккаунт заказчика, корень заказчика, и вендора в цепочке нет нигде. Как только регион входит в пул gossip, он становится ещё одной записью в `Federation.clusters`, а `reaches` называет те сети, которые ему даёт VPN провайдера.
 
-## Step 2 — The arithmetic, before the demo
+## Шаг 2 — Арифметика, до демонстрации
 
-Fifty cameras at 4 Mbit/s, the number `domain/cloud.py` prints:
+Пятьдесят камер по 4 Мбит/с — число, которое печатает `domain/cloud.py`:
 
 ```
 50 cams × 4 Mbit/s: 200 Mbit/s sustained upstream; 2.16 TB/day; 30 days = 64.8 TB
@@ -45,7 +45,7 @@ Fifty cameras at 4 Mbit/s, the number `domain/cloud.py` prints:
 6 cams:  7.8 TB;  cloud ≈ $171/month         edge ≈ $3/month
 ```
 
-The prices are parameters (`Prices`) and yours to replace; the *shape* of the result is not. Two hundred megabits sustained upstream is a link most sites cannot buy, and even where they can, hot object storage for footage costs more per month than the disk costs once. So `recommend()` returns three shapes, and the reasons are the sentences for the customer:
+Цены — параметры (`Prices`), и заменять их вам; *форма* результата — нет. Двести мегабит постоянно наверх — канал, который большинство площадок купить не может, и даже там, где может, горячее объектное хранилище для записей стоит в месяц больше, чем диск стоит один раз. Поэтому `recommend()` возвращает три формы, а причины — это фразы для заказчика:
 
 ```
 50 cams, 100 Mbit uplink   → mixed:  200 Mbit/s exceeds 70% of the uplink: recording stays at the edge, operation moves to the cloud
@@ -53,23 +53,23 @@ The prices are parameters (`Prices`) and yours to replace; the *shape* of the re
 50 cams, 10 Gbit uplink    → edge:   the uplink could carry it, but 64.8 TB hot costs 50× the disks; a datasheet implying otherwise loses money per camera
 ```
 
-**Mixed is the shape a real deployment takes**: recording at the edge, where the bits are, and the domain services, the console, the read model in the cloud, where the operators are. A cloud-only site is for a handful of cameras with no hardware to install. The cloud option is not cheaper; it is *operationally simpler*, and the datasheet must say which.
+**Смешанная — та форма, которую принимает настоящая установка**: запись на краю, где лежат биты, а службы домена, консоль и модель чтения — в облаке, где операторы. Площадка только в облаке — для горстки камер, когда ставить железо не на что. Облачный вариант не дешевле; он *проще в эксплуатации*, и спецификация обязана сказать, какое из двух.
 
-## Step 3 — A cloud site has no spool
+## Шаг 3 — У облачной площадки нет спула
 
-М9 gave an edge box a spool: an uplink outage is buffered locally and drained when the link returns. A camera streaming over the internet to a worker in a rented cluster has no such thing — the worker records into the resource on its rented server, *in the cloud*, and an uplink outage at the site is not buffered, it is lost. So **the camera becomes the buffer**: most IP cameras record to an SD card or an edge NVR, and ONVIF's replay profile lets the worker backfill the gap when the link returns. That is a real feature to build and a real sentence to say to the customer before they choose the shape: *for a cloud-recorded site, outage footage lives on the camera until the link returns, and cameras without local storage lose it.*
+М9 дал коробке на краю спул: отказ канала буферизуется на месте и досылается, когда канал возвращается. У камеры, которая шлёт поток через интернет воркеру в арендованном кластере, ничего такого нет — воркер пишет в ресурс своего арендованного сервера, *в облаке*, и отказ канала на площадке не буферизуется, а теряется. Поэтому **буфером становится камера**: большинство IP-камер пишут на SD-карту или на NVR на краю, а профиль воспроизведения ONVIF позволяет воркеру дозаписать пробел, когда канал возвращается. Это настоящая функция, которую надо построить, и настоящая фраза, которую надо сказать заказчику, прежде чем он выберет форму: *на площадке, пишущей в облако, запись за время отказа живёт на камере, пока не вернётся канал, а камеры без локального хранилища её теряют.*
 
-## Step 4 — Three ways, one artifact
+## Шаг 4 — Три способа, один артефакт
 
-Now the proof. `render_three_ways()` takes М11's `deploy/vmsworker.nomad.hcl` — the worker job as written — and produces three placements:
+Теперь доказательство. `render_three_ways()` берёт `deploy/vmsworker.nomad.hcl` из М11 — задание воркера в том виде, в каком оно написано, — и строит три размещения:
 
-| | Datacenter | Object store |
+| | Датацентр | Хранилище объектов |
 |---|---|---|
-| **local** — a rack in room A | `room-a` | `http://minio.room-a:9000/cluster-restore` |
-| **rented** — the customer's cloud region | `cloud-eu-1` | `s3+https://s3.eu-1.example/cluster-restore?region=eu-1` |
-| **split** — the site's workers local, the domain in the cloud | `room-a` | `variables://objects` — nothing rented needed |
+| **local** — стойка в комнате A | `room-a` | `http://minio.room-a:9000/cluster-restore` |
+| **rented** — облачный регион заказчика | `cloud-eu-1` | `s3+https://s3.eu-1.example/cluster-restore?region=eu-1` |
+| **split** — воркеры площадки локальны, домен в облаке | `room-a` | `variables://objects` — ничего арендовать не нужно |
 
-and diffs them:
+и сравнивает их:
 
 ```
 diff local/rented:
@@ -80,54 +80,54 @@ diff local/rented:
 identical from `group` down: True
 ```
 
-Two lines differ, and neither is about the worker. Everything from `group` down — the constraint on the camera VLAN, the `disconnect` block with М11 Lesson 8's `lost_after`/`stop_on_client_after`, the reschedule policy, the task, its identity, its template, the lease numbers, the resources — is byte-identical. The worker cannot tell where it is running because nothing it reads says so. If the diff ever shows a third line, this lesson found a bug in М9 or М11, and the fix goes there, not here.
+Различаются две строки, и ни одна не про воркер. Всё от `group` и ниже — ограничение на VLAN камер, блок `disconnect` с `lost_after`/`stop_on_client_after` из М11, урок 8, политика переноса, задача, её идентичность, её шаблон, числа аренды слота, ресурсы — побайтово одинаково. Воркер не может сказать, где он работает, потому что ничто из того, что он читает, этого не говорит. Если сравнение когда-нибудь покажет третью строку, этот урок нашёл ошибку в М9 или М11, и исправлять её надо там, а не здесь.
 
-## Step 5 — What differs by placement, and what must never
+## Шаг 5 — Что различается в зависимости от размещения, и что не должно никогда
 
-| Differs by placement | Must never differ |
+| Различается в зависимости от размещения | Не должно различаться никогда |
 |---|---|
-| storage class and its cost curve | configuration ownership — the cluster controller's, in the cluster's raft |
-| how the camera's stream reaches the worker (LAN, VPN, internet) | the epoch, and where it is issued (the cluster's raft) |
-| who is paged when hardware dies (you, or the provider) | the certificate chain — the domain's root, everywhere |
-| whether there is a spool, and what the buffer is | the update mechanism — the domain's server, pulled |
+| класс хранения и его кривая стоимости | владение конфигурацией — у контроллера кластера, в raft кластера |
+| как поток камеры доходит до воркера (локальная сеть, VPN, интернет) | эпоха и то, где её выдают (raft кластера) |
+| кого будят, когда умирает железо (вас или провайдера) | цепочка сертификатов — корень домена, везде |
+| есть ли спул и что служит буфером | механизм обновления — сервер домена, на вытягивании |
 
-The left column is real and belongs on the deployment sheet. The right column is the module's thesis, and every row of it has a test somewhere in М9–М12.
+Левый столбец реален, и ему место в листе развёртывания. Правый столбец — тезис модуля, и у каждой его строки где-то в М9–М12 есть тест.
 
-## Step 6 — Closing the arc with М8
+## Шаг 6 — Замыкая дугу с М8
 
-The course opened by renting a cloud VMS: cameras into Kinesis, playback from HLS, keys typed into an environment file. Rebuild that shape here with the pieces you now own: your workers in a cluster you rented, footage on the rented servers' resources — and, if you choose S3 for events and heartbeats there, an object store in your account, live view through the gateway, playback from the resource's segments through the gateway — and no vendor's keys anywhere, because the domain provisioned the cluster with the customer's account and the signer issued every certificate in it. The hand-provisioned AWS credentials from М9 are not migrated; they are retired by having nothing left to do.
+Курс начался с аренды облачной VMS: камеры в Kinesis, воспроизведение из HLS, ключи, вписанные в файл окружения. Постройте ту же форму здесь из частей, которыми вы теперь владеете: ваши воркеры в кластере, который вы арендовали, записи на ресурсах арендованных серверов — и, если вы выберете там S3 для событий и heartbeat'ов, хранилище объектов в вашем аккаунте, живое видео через шлюз, воспроизведение из сегментов ресурса через шлюз — и нигде никаких ключей вендора, потому что кластер завёл домен с аккаунта заказчика, а каждый сертификат в нём выдал подписывающий. Выданные руками учётные данные AWS из М9 не переносятся; они уходят, потому что им больше нечего делать.
 
-**Deliverable:** one domain, two clusters — one local, one rented from the customer's cloud account by the domain itself — both recording, both in one directory, `where()` finding a camera in each; and a written bandwidth-and-cost estimate for a fifty-camera site saying which shape it should be and why, with the two sentences the customer needs to hear (the uplink, and the camera as the buffer).
+**Результат:** один домен, два кластера — один локальный, другой арендованный самим доменом с облачного аккаунта заказчика, — оба пишут, оба в одном каталоге, `where()` находит камеру в каждом; и письменная оценка полосы и стоимости для площадки на пятьдесят камер с выводом, какой формы ей быть и почему, с двумя фразами, которые заказчик должен услышать (про канал и про камеру как буфер).
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| The rented cluster joins gossip but `where()` says unreachable | The provider's security group allows the gossip port and not the RPC port that forwarding uses. Both. |
-| Heartbeats fail in the rented cluster with a signature error | You chose `s3+https://` for the object store there and `AWS_ACCESS_KEY_ID`/`SECRET` are not in the jobs' Variable — the template renders them empty. М11's `s3.py` signs with what it is given; `variables://objects` needs no keys at all. |
-| A cloud-recorded site shows gaps after every uplink blip | Expected: no spool. Either the camera has local storage and backfill is not wired, or it has none and the sentence in Step 3 was not said. |
-| The diff shows a third line | A placement-specific value crept into the worker's stanza. That is the bug this lesson exists to find; fix `vmsworker.nomad.hcl` in М11. |
-| The cloud bill is higher than the estimate | Egress. The arithmetic counts storage; playback out of the cloud is billed too, and a wall showing sixteen streams all day is a number to add. |
+| Арендованный кластер входит в gossip, но `where()` говорит «недоступен» | Группа безопасности провайдера пропускает порт gossip, но не порт RPC, которым пользуется пересылка. Нужны оба. |
+| В арендованном кластере heartbeat'ы падают с ошибкой подписи | Вы выбрали там `s3+https://` для хранилища объектов, а `AWS_ACCESS_KEY_ID`/`SECRET` нет в Variable заданий — шаблон подставляет их пустыми. `s3.py` из М11 подписывает тем, что ему дали; `variables://objects` ключи вообще не нужны. |
+| Площадка, пишущая в облако, показывает пробелы после каждого моргания канала | Ожидаемо: спула нет. Либо у камеры есть локальное хранилище, а дозапись не подключена, либо его нет, и фразу из шага 3 не сказали. |
+| Сравнение показывает третью строку | В блок воркера пролезло значение, зависящее от размещения. Это та самая ошибка, ради поиска которой урок существует; исправьте `vmsworker.nomad.hcl` в М11. |
+| Счёт за облако выше оценки | Исходящий трафик. Арифметика считает хранение; воспроизведение из облака тоже тарифицируется, а стена, показывающая шестнадцать потоков весь день, — число, которое надо добавить. |
 
-## Recap
+## Итог
 
-- A cloud region is a cluster. The domain provisions it from the customer's account, and Nomad cannot tell.
-- Do the arithmetic first: bits per second up, terabytes per day, hot storage per month against disks once. Mixed is the shape.
-- Cloud is operationally simpler, not cheaper. Say which.
-- A cloud site has no spool; the camera is the buffer, or the footage is gone.
-- A worker deployed three ways is one artifact from `group` down. Two lines differ and neither is the worker's.
-- Ownership, the epoch, the chain and the update path never differ by placement.
+- Облачный регион — это кластер. Домен заводит его с аккаунта заказчика, и Nomad разницы не видит.
+- Сначала арифметика: биты в секунду наверх, терабайты в сутки, горячее хранилище в месяц против дисков один раз. Форма — смешанная.
+- Облако проще в эксплуатации, а не дешевле. Скажите, какое из двух.
+- У облачной площадки нет спула; буфер — камера, иначе запись пропала.
+- Воркер, развёрнутый тремя способами, — один артефакт от `group` и ниже. Различаются две строки, и ни одна не принадлежит воркеру.
+- Владение, эпоха, цепочка и путь обновления никогда не различаются в зависимости от размещения.
 
-## Exercises
+## Упражнения
 
-1. Re-run `recommend()` with a sub-stream at 1 Mbit/s for recording. Which shapes change, and what did the customer give up to get there?
-2. Add egress to `Prices` — a fee per TB played back out of the cloud — and a wall of sixteen streams for eight hours a day. Recompute the six-camera cloud site.
-3. Write the ONVIF backfill as a reconcile-loop concern (М9 Lesson 6): what is desired, what is actual, what closes the gap, and what the backoff is for a camera that has no local storage.
-4. Take the split shape and cut the site's uplink for a day. List what the operators can and cannot do, hour by hour, from the failure arithmetic in Lesson 3.
-5. Find one thing М8's Kinesis deployment did that this shape does not. Decide whether it was a feature or a dependency.
+1. Перезапустите `recommend()` с дополнительным потоком 1 Мбит/с для записи. Какие формы меняются и чем заказчик за это заплатил?
+2. Добавьте в `Prices` исходящий трафик — плату за ТБ, воспроизведённый из облака, — и стену на шестнадцать потоков по восемь часов в день. Пересчитайте облачную площадку на шесть камер.
+3. Опишите дозапись по ONVIF как задачу цикла сверки (М9, урок 6): что желаемое, что фактическое, что закрывает разрыв и каким должно быть отступление для камеры без локального хранилища.
+4. Возьмите раздельную форму и отрежьте канал площадки на сутки. Перечислите по часам, что операторы могут и чего не могут делать, по арифметике отказов из урока 3.
+5. Найдите одну вещь, которую делало развёртывание М8 на Kinesis и не делает эта форма. Решите, была ли это функция или зависимость.
 
-## Where this is going
+## Что дальше
 
-The module is complete. A domain sits over any number of clusters — in server rooms, in the customer's cloud, or both — knows what it does not know, places by reachability, serves people without ever serving them from a worker, issues and rotates its own trust, admits boxes with nobody typing a secret, and can be switched off without a single camera noticing. Every signal it emits — replica lag, the read model's ages, the outage arithmetic — is collected by [**М13 — Observability**](../М13_Observability/module-design.md), whose remote observer is one more domain service, hosted here.
+Модуль завершён. Домен стоит над любым числом кластеров — в серверных, в облаке заказчика или и там и там, — знает, чего он не знает, размещает по достижимости, обслуживает людей, ни разу не обслуживая их с воркера, выдаёт и меняет собственное доверие, принимает коробки без того, чтобы кто-то вводил секрет, и может быть выключен так, что ни одна камера этого не заметит. Каждый сигнал, который он испускает, — отставание реплик, возраст модели чтения, арифметика отказов, — собирает [**М13 — Observability**](../М13_Observability/module-design.md), чей удалённый наблюдатель — ещё одна служба домена, размещённая здесь.

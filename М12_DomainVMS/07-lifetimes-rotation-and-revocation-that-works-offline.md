@@ -1,39 +1,39 @@
-# Lesson 7 — Lifetimes, Rotation, and Revocation That Works Offline
+# Урок 7 — Сроки жизни, смена ключей и отзыв, работающий офлайн
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a lifetime table chosen from the outage you must survive; renewal that overlaps so nothing drops; a root rotation the domain runs through without stopping; and revocation that needs no list and no network — plus the two pieces of state that make all of it recoverable.
-**Time:** ~150 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** таблицу сроков жизни, выбранную из отказа, который обязаны пережить; обновление с перекрытием, при котором ничего не обрывается; смену корня, через которую домен проходит не останавливаясь; и отзыв, которому не нужны ни список, ни сеть, — плюс два куска состояния, которые делают всё это восстановимым.
+**Время:** ~150 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-The domain's root is self-signed and it is the top. That was decided in Lesson 4 for a security reason — a vendor-held root above it would be a vendor that can impersonate the customer's whole trust domain — and it has a consequence the module has to face rather than defer: **nobody above will re-issue anything.** If the domain loses its key, every server re-enrolls. If a certificate expires during an outage, the outage becomes a dark building. If a stolen device's certificate is valid for a year, it is valid for a year.
+Корень домена самоподписан, и он — вершина. Это решено в уроке 4 по соображениям безопасности — корень над ним, который держит вендор, был бы вендором, способным выдать себя за весь домен доверия заказчика, — и у этого есть следствие, с которым модуль должен разобраться, а не отложить: **сверху никто ничего не перевыпустит.** Если домен теряет свой ключ, каждый сервер регистрируется заново. Если сертификат истекает во время отказа, отказ превращается в тёмное здание. Если сертификат украденного устройства действителен год, он действителен год.
 
-None of that is fixed by choosing carefully. It is fixed by arithmetic — lifetimes derived from the autonomy the product promises — and by drills: a rotation nobody has run is a plan, and a backup nobody has restored from is a hope. Everything in this lesson takes a `now` parameter so the drills run in milliseconds instead of years.
+Аккуратный выбор ничего из этого не исправляет. Исправляет арифметика — сроки жизни, выведенные из автономии, которую обещает продукт, — и учения: смена, которую никто не проводил, — это план, а резервная копия, из которой никто не восстанавливался, — это надежда. Всё в этом уроке принимает параметр `now`, поэтому учения идут миллисекунды, а не годы.
 
-> **What you can verify without hardware.** All of it: `tests/test_lesson7_lifetimes.py` issues certificates with real Ed25519 signatures and moves time — a thirty-day outage, a renewal inside the margin, a root rotation with an overlap window and a cross-certificate, a peer whose clock is an hour behind. The identity restore on another cluster is in Lesson 4's tests. The `openssl`-on-the-wire version of the same chain is М9 Lesson 2's and the bench's.
+> **Что проверяется без железа.** Всё: `tests/test_lesson7_lifetimes.py` выдаёт сертификаты с настоящими подписями Ed25519 и двигает время — тридцатидневный отказ, обновление внутри запаса, смена корня с окном перекрытия и перекрёстным сертификатом, узел, чьи часы отстают на час. Восстановление идентичностей в другом кластере — в тестах урока 4. Версия той же цепочки с `openssl` на проводе — это М9, урок 2, и стенд.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 4** — the signer and the token key set with its overlap.
-- **Lesson 6** — the LDevID, which is the one long-lived certificate and the one slow case.
-- **М9 Lesson 2** — a chain, a signature, a bundle.
-- **М11 Lesson 6** — publish-then-point and the RPO. Users get the same treatment here.
+- **Урок 4** — подписывающий и набор ключей токенов с его перекрытием.
+- **Урок 6** — LDevID, единственный долгоживущий сертификат и единственный медленный случай.
+- **М9, урок 2** — цепочка, подпись, бандл.
+- **М11, урок 6** — сначала публикация, потом указатель, и RPO. Пользователи получают здесь то же обращение.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Split certificates by job and state each one's lifetime, margin, and tolerable outage.
-2. Show a thirty-day outage taking the service certificates dark and leaving devices alone.
-3. Renew with overlapping validity and say why that is what lets a process reload without dropping a connection.
-4. Rotate the root of a live domain: overlap window, cross-certificate, retirement on a date.
-5. Argue that revocation is a lifetime problem, not a list problem — and name the one slow case.
-6. Recognise clock skew as a named failure and bound it.
-7. Back up and restore the two pieces of state the domain cannot regenerate.
+1. Разделить сертификаты по работе и назвать для каждого срок жизни, запас и терпимый отказ.
+2. Показать, как тридцатидневный отказ гасит сертификаты служб и не трогает устройства.
+3. Обновлять с перекрывающимися сроками действия и сказать, почему именно это позволяет процессу перезагрузиться, не оборвав ни одного соединения.
+4. Сменить корень работающего домена: окно перекрытия, перекрёстный сертификат, снятие в назначенный день.
+5. Обосновать, что отзыв — задача сроков, а не списков, и назвать единственный медленный случай.
+6. Распознать расхождение часов как названный отказ и ограничить его.
+7. Сделать резервную копию двух кусков состояния, которые домен не может создать заново, и восстановиться из неё.
 
 ---
 
-## Step 1 — The tension, with an arithmetic answer
+## Шаг 1 — Натяжение, и ответ на него арифметический
 
-Short certificates revoke by expiring but a cluster offline longer than the lifetime goes dark. Long ones survive outages and keep a stolen device trusted for months. There is no lifetime good at both, so do not look for one — **split the certificates by job**:
+Короткие сертификаты отзываются истечением, но кластер, отключённый дольше срока жизни, гаснет. Длинные переживают отказы и месяцами держат доверие к украденному устройству. Срока, хорошего для обоих, нет, так что не ищите его — **делите сертификаты по работе**:
 
 ```
 root     lifetime    3650 d  margin   365 d  tolerable outage   3285 d
@@ -41,49 +41,49 @@ service  lifetime       3 d  margin     1 d  tolerable outage      2 d
 ldevid   lifetime     730 d  margin    90 d  tolerable outage    640 d
 ```
 
-That is `LIFETIMES` in `domain/signer.py`, printed by `max_tolerable_outage()`, and the formula is the sentence to put on the datasheet:
+Это `LIFETIMES` из `domain/signer.py`, напечатанные `max_tolerable_outage()`, а формула — та фраза, которую надо поставить в спецификацию продукта:
 
-> **maximum tolerable outage = certificate lifetime − renewal margin**
+> **максимальный терпимый отказ = срок жизни сертификата − запас на обновление**
 
-Pick lifetimes from the outage you must survive, not the other way round. A product promising thirty days of autonomy cannot issue three-day service certificates — and the table above says so: `max_tolerable_outage("service")` is two days. That is *correct* for service-to-service certificates, because they never need anything outside the cluster to renew (the signer is in the domain cluster, and a cluster that cannot reach its own signer for two days has bigger problems). It would be wrong for a device, and devices get 640 days.
+Выбирайте сроки жизни из отказа, который обязаны пережить, а не наоборот. Продукт, обещающий тридцать дней автономии, не может выдавать трёхдневные сертификаты служб — и таблица выше это говорит: `max_tolerable_outage("service")` — два дня. Для сертификатов служба-служба это *верно*, потому что для обновления им никогда не нужно ничего вне кластера (подписывающий — в доменном кластере, а у кластера, который два дня не может достучаться до собственного подписывающего, проблемы посерьёзнее). Для устройства это было бы неверно, и устройства получают 640 дней.
 
-| Certificate | Lifetime | Renewed by | Needs anything outside the cluster? |
+| Сертификат | Срок жизни | Кто обновляет | Нужно ли что-то вне кластера? |
 |---|---|---|---|
-| The domain root | years | a rotation drill | — |
-| Service-to-service | hours to days | the signer | **never** |
-| Device identity (LDevID) | long | the signer, on enrollment and renewal | never |
+| Корень домена | годы | учения по смене | — |
+| Служба-служба | от часов до дней | подписывающий | **никогда** |
+| Идентичность устройства (LDevID) | долгий | подписывающий, при регистрации и продлении | никогда |
 
-## Step 2 — Thirty days, offline
+## Шаг 2 — Тридцать дней офлайн
 
-Issue one of each, then advance the clock a month:
+Выдайте по одному сертификату каждого вида и сдвиньте часы на месяц:
 
 ```
 after 30 d  service: expired 2332800s ago
 after 30 d  ldevid:  ok, issuer acme root g1
 ```
 
-The read view's service certificate is dark: exactly what the table predicted, and exactly what the console would show as *cluster unreachable* while the other clusters carried on. The box's identity is fine. When the link returns, the service renews against the signer in one round trip and the cluster reappears; the device never noticed. If the outage was instead the *domain cluster* — the signer itself gone — every other cluster's service certificates go dark on day two, and that is the number the datasheet has to say about the domain cluster's own availability.
+Сертификат службы у представления для чтения погас — ровно как предсказывала таблица, и ровно это консоль показала бы как *кластер недоступен*, пока остальные кластеры работали дальше. С идентичностью коробки всё в порядке. Когда канал возвращается, служба обновляется у подписывающего за один обмен, и кластер появляется снова; устройство ничего не заметило. Если же отказал *доменный кластер* — пропал сам подписывающий, — сертификаты служб всех остальных кластеров гаснут на второй день, и это то число, которое спецификация обязана назвать о доступности самого доменного кластера.
 
-## Step 3 — Renewal without downtime
+## Шаг 3 — Обновление без простоя
 
-`Signer.needs_renewal(cert, kind)` is true once `now` is inside the margin, and `renew()` issues a fresh window for the **same key and the same name**:
+`Signer.needs_renewal(cert, kind)` истинно, как только `now` попадает внутрь запаса, а `renew()` выдаёт новое окно для **того же ключа и того же имени**:
 
 ```python
 c2 = s.renew(c1, "service")
 assert bundle.verify(c1, now) and bundle.verify(c2, now)     # both valid: reload without dropping
 ```
 
-Overlapping validity is the whole trick. A process holding `c1` fetches `c2`, loads it for *new* connections, and lets existing connections run out on `c1` — no listener restart, no dropped stream. The margin is how long you have to do that; one day out of three is generous on purpose, because the renewal is a job that can fail and retry.
+Весь фокус — в перекрывающихся сроках действия. Процесс, держащий `c1`, получает `c2`, загружает его для *новых* соединений, а существующие доживают на `c1` — без перезапуска слушателя, без оборванного потока. Запас — это время, которое у вас есть на это; один день из трёх щедр намеренно, потому что обновление — это задание, которое может упасть и повториться.
 
-## Step 4 — Root rotation as a drill
+## Шаг 4 — Смена корня как учения
 
-The root's lifetime is years, and a root that has never been rotated is a root nobody knows how to rotate. So the domain rotates its root *while running*, and the mechanism is an overlap in the **trust bundle** every server and service holds:
+Срок жизни корня — годы, а корень, который ни разу не меняли, — корень, который никто не умеет менять. Поэтому домен меняет свой корень *на ходу*, и механизм — перекрытие в **бандле доверия**, который держит каждый сервер и каждая служба:
 
 ```python
 new_root, cross = signer.rotate_root(bundle, overlap=7 * DAY)
 ```
 
-Four things happen in that call. A new root is generated with its own name — `acme root g2`; each generation has its own subject, because a bundle keys on the subject and two roots that share a name are one root to it. The bundle gains the new root and marks the old one **retired at** now + overlap. New leaves are signed by the new root from now on. And a **cross-certificate** is returned: the new root's public key, signed by the old root, for peers that have not yet received the new bundle and only trust `g1`:
+В этом вызове происходят четыре вещи. Создаётся новый корень со своим именем — `acme root g2`; у каждого поколения свой субъект, потому что бандл ключуется по субъекту, и два корня с одним именем для него — один корень. Бандл получает новый корень и помечает старый как **снимаемый в** момент now + overlap. Новые конечные сертификаты с этого момента подписывает новый корень. И возвращается **перекрёстный сертификат**: публичный ключ нового корня, подписанный старым, — для узлов, которые ещё не получили новый бандл и доверяют только `g1`:
 
 ```
 bundle: {'CN=acme root g1': retires in 7.0 d, 'CN=acme root g2': current}
@@ -91,63 +91,63 @@ verify(old_leaf)  -> acme root g1        verify(new_leaf) -> acme root g2
 old-only peer, verify(new_leaf, cross=[cross]) -> acme root g2
 ```
 
-During the window everything verifies everywhere. On the date, `g1` is retired — a leaf it signed fails with *was retired at …* even if its own dates are fine — and by then every leaf that mattered was renewed under `g2` in Step 3's normal course. The signer persists the new root to `domain/signer` with its generation, so a signer rescheduled to another server mid-drill comes up as `g2`. Students rotate a live domain's root because a backup nobody has restored from is a hope and a rotation nobody has run is a plan.
+Пока идёт окно, всё проверяется везде. В назначенный день `g1` снимается — конечный сертификат, который он подписал, не проходит с *was retired at …* (снят в …), даже если его собственные даты в порядке, — а к тому времени каждый конечный сертификат, который имел значение, уже обновлён под `g2` обычным ходом шага 3. Подписывающий сохраняет новый корень в `domain/signer` вместе с поколением, так что подписывающий, перенесённый на другой сервер посреди учений, поднимается как `g2`. Студенты меняют корень работающего домена, потому что резервная копия, из которой никто не восстанавливался, — это надежда, а смена, которую никто не проводил, — это план.
 
-## Step 5 — Revocation is a lifetime problem
+## Шаг 5 — Отзыв — задача сроков
 
-CRLs and OCSP both assume you can reach something. The design's revocation is: **let short certificates expire.** A compromised service key is worth exactly the hours until its certificate lapses and the signer declines to renew. A revoked token is on a list the agent carries (Lesson 4) and that list prunes itself as tokens expire. The one slow case is the device certificate — 640 days is a long time to trust a stolen box — and it is compensated by the layer above: the box's *entitlement* and *grants* are short, so a stolen box keeps its identity and loses everything it could do with it. The test issues a device certificate with a three-day lifetime and shows it dark on day four with nobody having done anything: revocation on a schedule stated in advance.
+И CRL, и OCSP предполагают, что до чего-то можно дотянуться. Отзыв в этом проекте такой: **дайте коротким сертификатам истечь.** Скомпрометированный ключ службы стоит ровно столько часов, сколько осталось до истечения его сертификата, после чего подписывающий откажется его обновлять. Отозванный токен лежит в списке, который несёт агент (урок 4), и этот список сам себя чистит по мере истечения токенов. Единственный медленный случай — сертификат устройства: 640 дней — долгий срок доверия к украденной коробке, — и его компенсирует слой выше: *лицензия* и *права* коробки короткие, так что украденная коробка сохраняет идентичность и теряет всё, что могла бы с ней делать. Тест выдаёт сертификат устройства со сроком жизни три дня и показывает, что на четвёртый день он погас, хотя никто ничего не делал: отзыв по расписанию, заявленному заранее.
 
-## Step 6 — Clock skew, named
+## Шаг 6 — Расхождение часов, названное
 
-A certificate is valid from *not before* to *not after* according to the verifier's clock. A server whose clock is an hour behind rejects a freshly issued certificate as *not yet valid* and the symptom looks like every other TLS failure. `TrustBundle.verify()` names it:
+Сертификат действителен от *not before* до *not after* по часам того, кто его проверяет. Сервер, чьи часы отстают на час, отвергает только что выданный сертификат как *ещё не действительный*, и симптом выглядит как любой другой сбой TLS. `TrustBundle.verify()` называет его:
 
 ```
 skew: not yet valid: starts in 3540s — clock skew?
 ```
 
-and tolerates five minutes either side, which is the number NTP keeps a healthy box well inside. Beyond that, the message points at the clock, because the alternative is an engineer re-issuing certificates that were never wrong.
+и терпит пять минут в обе стороны — число, в пределах которого NTP с запасом держит здоровую коробку. Дальше сообщение указывает на часы, потому что иначе инженер будет перевыпускать сертификаты, которые никогда не были неверными.
 
-## Step 7 — The two pieces of state, and why they are recoverable
+## Шаг 7 — Два куска состояния, и почему они восстановимы
 
-Everything at the domain can be re-provisioned in another cluster from nothing — placement, the read view, the agents — except two things: the **signer's key**, which every certificate in the domain chains to, and, where the customer has no IdP, the **local user records**. Losing the domain cluster loses both, and there is nobody above to re-issue from. So recoverability is **backup, not delegation**:
+Всё на уровне домена можно поднять в другом кластере из ничего — размещение, представление для чтения, агентов, — кроме двух вещей: **ключа подписывающего**, к которому сводится каждый сертификат домена, и, если у заказчика нет IdP, **локальных записей пользователей**. Потеря доменного кластера теряет и то и другое, и сверху перевыпустить некому. Поэтому восстановимость — это **резервная копия, а не делегирование**:
 
-- `Signer.backup()` is the keys and the root, kept where the domain cluster's death cannot reach — another cluster's object store, or offline. `Signer.restore()` on another cluster brings the same root back, and Lesson 4's test shows old tokens still verifying afterwards.
-- The identity set is published object-first with a pointer (Lesson 4), backed up beside the key, and `IdentityStore.restore()` follows the pointer. The RPO for users is the publication interval.
+- `Signer.backup()` — это ключи и корень, хранящиеся там, куда не дотянется смерть доменного кластера, — в хранилище объектов другого кластера или офлайн. `Signer.restore()` в другом кластере возвращает тот же корень, и тест урока 4 показывает, что старые токены после этого по-прежнему проходят проверку.
+- Набор идентичностей публикуется сначала объектом, потом указателем (урок 4), резервируется рядом с ключом, и `IdentityStore.restore()` идёт по указателю. RPO для пользователей — интервал публикации.
 
-Re-hosting the domain is then М11's restore with different nouns: the backed-up key, the identity object the pointer names, then the domain agents pick up the new public key from the new domain cluster's Variables. And the honest cost, said with a number: **lose the key anyway and every server re-enrolls** — Lesson 6's path, times N, and the module asks how long that takes at your N rather than leaving it as a feeling.
+Перенос домена тогда — восстановление из М11 с другими существительными: ключ из резервной копии, объект идентичностей, который называет указатель, а затем агенты домена подхватывают новый публичный ключ из Variables нового доменного кластера. И честная цена, названная числом: **всё равно потеряли ключ — каждый сервер регистрируется заново** — путь урока 6, умноженный на N, и модуль спрашивает, сколько это занимает при вашем N, а не оставляет это ощущением.
 
-**Deliverable:** simulate a thirty-day cluster outage — service certificates dark, devices fine, everything back on reconnection. Rotate the root under load, with the old-root-only peer served by the cross-certificate and the old root retired on its date. Revoke a device and show it losing access on the schedule stated in advance. Then restore the signer and the users on another cluster from the backup.
+**Результат:** смоделировать тридцатидневный отказ кластера — сертификаты служб погасли, устройства в порядке, после восстановления связи всё вернулось. Сменить корень под нагрузкой: узел, знающий только старый корень, обслужен перекрёстным сертификатом, старый корень снят в назначенный день. Отозвать устройство и показать, что оно теряет доступ по расписанию, заявленному заранее. Затем восстановить подписывающего и пользователей в другом кластере из резервной копии.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| Everything expires at once on a Monday | Every certificate was issued in the same minute at install and has the same lifetime. Stagger renewals, or accept that the first renewal cycle is the last synchronised one. |
-| A leaf fails right after rotation | The peer has the new bundle but the leaf was issued by `g1` and the overlap was set to zero. Overlap ≥ the longest service lifetime, or the drill is a cutover. |
-| *was retired at* on a leaf you renewed | Renewed under the old root because the signer had not persisted `g2` yet — a reschedule mid-rotation. `Signer.__init__` reloads the generation; check `domain/signer`'s `gen`. |
-| *no trusted root named …* after a re-host | The restore brought the key but the agents still serve the old bundle. Agents sync from the *new* domain cluster's Variables; point them there. |
-| Half the cluster says *not yet valid* | NTP. Always NTP. Then the five-minute tolerance. |
+| Всё истекает разом в понедельник | Каждый сертификат выдан в одну и ту же минуту при установке и имеет один и тот же срок жизни. Разнесите обновления или примите, что первый цикл обновления — последний синхронный. |
+| Конечный сертификат не проходит сразу после смены | У узла новый бандл, но сертификат выдан `g1`, а перекрытие поставили в ноль. Перекрытие ≥ самого длинного срока жизни службы, иначе учения — это переключение без перекрытия. |
+| *was retired at* на сертификате, который вы обновили | Обновлён под старым корнем, потому что подписывающий ещё не сохранил `g2`, — перенос посреди смены. `Signer.__init__` перечитывает поколение; проверьте `gen` в `domain/signer`. |
+| *no trusted root named …* после переноса домена | Восстановление вернуло ключ, но агенты по-прежнему раздают старый бандл. Агенты синхронизируются из Variables *нового* доменного кластера; направьте их туда. |
+| Половина кластера говорит *not yet valid* | NTP. Всегда NTP. Потом допуск в пять минут. |
 
-## Recap
+## Итог
 
-- Split certificates by job. Root: years. Service: days, renewed inside the cluster, never needing the outside. Device: long.
-- **Tolerable outage = lifetime − margin.** Derive lifetimes from the autonomy promised; put the number on the datasheet.
-- Renewal overlaps; the margin is the time to reload without dropping.
-- Root rotation is an overlap in the bundle, a cross-certificate for slow peers, and a retirement date. Run it on a live domain.
-- Revocation is expiry. The device certificate is the slow case and entitlement compensates.
-- Clock skew is a named failure with a tolerance.
-- Two pieces of state; backup, not delegation; lose the key and every server re-enrolls.
+- Делите сертификаты по работе. Корень — годы. Служба — дни, обновляется внутри кластера, никогда не нуждаясь во внешнем мире. Устройство — долгий срок.
+- **Терпимый отказ = срок жизни − запас.** Выводите сроки жизни из обещанной автономии; ставьте число в спецификацию.
+- Обновление перекрывается; запас — время перезагрузиться, ничего не оборвав.
+- Смена корня — это перекрытие в бандле, перекрёстный сертификат для медленных узлов и дата снятия. Проводите её на работающем домене.
+- Отзыв — это истечение. Сертификат устройства — медленный случай, и его компенсирует лицензия.
+- Расхождение часов — названный отказ с допуском.
+- Два куска состояния; резервная копия, а не делегирование; потеряли ключ — каждый сервер регистрируется заново.
 
-## Exercises
+## Упражнения
 
-1. Set the service lifetime to thirty days to "survive the outage". Steal a service key and say how long it is useful, and what you would tell the customer.
-2. Rotate the root with an overlap shorter than the LDevID lifetime. Which boxes fall off, and when?
-3. Add an OCSP responder to the design. Say which outage it does not survive and why the module did not.
-4. Write the runbook for restoring the domain in another cluster: the order of the six steps, and the one you cannot do without a human.
-5. The token key set (Lesson 4) and the root (here) rotate independently. Argue for rotating them together on one drill, and then for keeping them separate.
+1. Поставьте срок жизни службы в тридцать дней, чтобы «пережить отказ». Украдите ключ службы и скажите, сколько он полезен и что вы скажете заказчику.
+2. Смените корень с перекрытием короче срока жизни LDevID. Какие коробки отваливаются и когда?
+3. Добавьте в проект OCSP-респондер. Скажите, какой отказ он не переживает и почему модуль без него обошёлся.
+4. Напишите регламент восстановления домена в другом кластере: порядок шести шагов и тот, который нельзя сделать без человека.
+5. Набор ключей токенов (урок 4) и корень (здесь) меняются независимо. Обоснуйте, почему их стоит менять вместе на одних учениях, а потом — почему раздельно.
 
-## Where this is going
+## Что дальше
 
-The domain can now look after its own trust with nothing above it. [**Lesson 8**](08-a-cluster-you-rent-and-a-worker-that-does-not-know-where-it-is.md) changes one thing — where the servers come from — and proves the software cannot tell: a cluster rented from the customer's own cloud account, the bandwidth arithmetic done before the demo, and the same worker deployed three ways with identical artifacts.
+Теперь домен может сам следить за своим доверием, и над ним ничего нет. [**Урок 8**](08-a-cluster-you-rent-and-a-worker-that-does-not-know-where-it-is.md) меняет одно — откуда берутся серверы — и доказывает, что программа этого различить не может: кластер, арендованный с облачного аккаунта самого заказчика, арифметика полосы, сделанная до демонстрации, и один и тот же воркер, развёрнутый тремя способами с одинаковыми артефактами.

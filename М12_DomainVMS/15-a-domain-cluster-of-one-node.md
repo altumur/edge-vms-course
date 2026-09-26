@@ -1,44 +1,44 @@
-# Lesson 15 — A Domain Cluster of One Node
+# Урок 15 — Доменный кластер из одного узла
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** the domain's services hosted on a camera, holding a **term**; a signed backup of the domain's state kept by other members, carried by their agents; re-hosting from the signer's key and the newest backup any member holds, as an ordinary operation — and, when the host is alive, a planned handover that strands nothing; members that follow the larger term and never carry a smaller one; and an old host that comes back, steps down, and lists what it alone held instead of losing it or applying it.
-**Time:** ~120 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** службы домена, размещённые на камере и держащие **срок** (срок полномочий); подписанную резервную копию состояния домена, которую хранят другие члены и несут их агенты; перенос домена по ключу подписывающего и самой новой резервной копии, какая есть у любого члена, как обычную операцию — а когда хост жив, плановую передачу, которая ничего не бросает; членов, которые следуют за большим сроком и никогда не несут меньший; и старый хост, который возвращается, уступает и перечисляет то, что держал только он, вместо того чтобы это потерять или применить.
+**Время:** ~120 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-A site of cameras and no server still has a domain: someone signs tokens, holds the grants, keeps Lesson 9's edits, publishes Lesson 12's settings. This module decided long ago where that runs — in **one designated cluster**, with nothing to fail over to, its key backed up beyond it (*The domain services* in the module design; Lessons 4 and 7). The alternative — the domain's services replicated across clusters by consensus — is raft spanning clusters, which the module refused in its first paragraph.
+У площадки из камер без сервера домен всё равно есть: кто-то подписывает токены, держит права, хранит правки урока 9, публикует настройки урока 12. Этот модуль давно решил, где это работает, — в **одном назначенном кластере**, переключаться с которого некуда, а его ключ сохранён за его пределами (*Службы домена* в проекте модуля; уроки 4 и 7). Альтернатива — службы домена, реплицированные между кластерами консенсусом, — это raft поперёк кластеров, от которого модуль отказался в первом же абзаце.
 
-On a server room, re-hosting the domain was a drill: done once a year, by a runbook, on the day the designated cluster burned. On a site of cameras the designated cluster is **a camera**, and cameras are unplugged by electricians, worn out by their flash, and stolen. Moving the domain has to become ordinary — something an operator does from any other camera's page without a runbook — and three things follow from that, each of which the brief anticipated under the name "primary camera":
+В серверной перенос домена был учениями: раз в год, по регламенту, в тот день, когда назначенный кластер сгорел. На площадке из камер назначенный кластер — это **камера**, а камеры выдёргивают электрики, изнашивают их флеш и крадут. Перенос домена должен стать обычным делом — тем, что оператор делает со страницы любой другой камеры без регламента, — и из этого следуют три вещи, каждую из которых проектное задание предвидело под именем «главная камера»:
 
-- **A term.** Every re-host takes a larger number, and a host that comes back after being replaced must step down rather than split the site. The brief: *two primaries are resolved as everywhere in the platform — the larger number wins, and the loser learns it on its first read.*
-- **State beyond the host.** Whatever the domain alone holds dies with its camera unless it was published. Lesson 9's exercise 4 asked where the kept edits go; this is the answer.
-- **Nothing lost silently.** The brief again: an old primary's changes that did not propagate *are not silently lost: the console shows them as "not in term N+1 — apply again?"*
+- **Срок.** Каждый перенос берёт больший номер, и хост, который вернулся после замены, должен уступить, а не расколоть площадку. Задание: *два хоста сразу разрешаются как везде в платформе: побеждает больший номер, а проигравший узнаёт об этом при первом чтении.*
+- **Состояние за пределами хоста.** Всё, что держит только домен, умирает вместе с его камерой, если не было опубликовано. Упражнение 4 урока 9 спрашивало, куда деваются сохранённые правки; вот ответ.
+- **Ничего не теряется молча.** Снова задание: изменения старой главной камеры, которые не разошлись, *не пропадают молча и не применяются сами: консоль показывает их списком «не вошло в срок N+1 — применить заново?»*
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson15_domain_of_one.py`: four cameras from Lesson 10, the domain on one; an edit kept for a camera that is off; a backup carried by two others; the host dying and the domain re-hosted with the edit; the old host returning; a forged backup; a host restored from the wrong key; two re-hosts in a month; and a planned handover — clean, called off, and with a write slipping past its freeze.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson15_domain_of_one.py`: четыре камеры из урока 10, домен на одной из них; правка, сохранённая для выключенной камеры; резервная копия, которую несут две другие; хост умирает, и домен переносится вместе с правкой; старый хост возвращается; поддельная резервная копия; хост, восстановленный не с тем ключом; два переноса за месяц; и плановая передача — чистая, отменённая и с записью, проскочившей мимо заморозки.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 4** — the signer, the key set, the agent and `domain/*`.
-- **Lesson 7** — the signer's key backed up beyond the domain cluster, and restored.
-- **Lesson 9** — the edit kept for a member that is off.
-- **Lesson 10** — a camera as a cluster of one; its durable store.
-- **Lesson 12** — a signed document behind a pointer, carried by agents, ordered by `(term, rev)`.
-- **М10A Lesson 1** — the epoch: a number from one issuer that only grows, the loser finding out on its next read.
+- **Урок 4** — подписывающий, набор ключей, агент и `domain/*`.
+- **Урок 7** — ключ подписывающего, сохранённый за пределами доменного кластера и восстановленный.
+- **Урок 9** — правка, сохранённая для выключенного члена.
+- **Урок 10** — камера как кластер из одного; её долговременное хранилище.
+- **Урок 12** — подписанный документ за указателем, который несут агенты, упорядоченный по `(term, rev)`.
+- **М10A, урок 1** — эпоха: число от одного выдающего, которое только растёт, а проигравший узнаёт об этом при следующем чтении.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Hold the domain with a term, and make a returning host step down by reading, not by being told.
-2. Say exactly which of the domain's state lives only on the host, and publish it beyond the host.
-3. Re-host from the signer's key and the newest verified backup, with a term larger than any member has seen.
-4. Carry the host record so that it never goes backwards.
-5. Show the returning host's un-backed-up changes to a person.
-6. Hand the domain over from a live host without stranding anything, and call the handover off safely when the target cannot take it.
+1. Держать домен со сроком и заставлять вернувшийся хост уступать через чтение, а не по команде.
+2. Точно сказать, какое состояние домена живёт только на хосте, и опубликовать его за пределами хоста.
+3. Переносить домен по ключу подписывающего и самой новой проверенной резервной копии, со сроком больше любого, какой видел хоть один член.
+4. Нести запись о хосте так, чтобы она никогда не шла назад.
+5. Показывать человеку изменения вернувшегося хоста, не попавшие в резервную копию.
+6. Передавать домен с живого хоста, ничего не бросая, и безопасно отменять передачу, когда цель не может его принять.
 
 ---
 
-## Step 1 — The host holds a term
+## Шаг 1 — Хост держит срок
 
-The host writes a record into its own Variables — `{term, host, at}`, signed by the domain's key — and every member's agent carries it home, as it carries the keys:
+Хост пишет запись в свои собственные Variables — `{term, host, at}`, подписанную ключом домена, — и агент каждого члена несёт её домой, как несёт ключи:
 
 ```python
     def claim(self) -> None:
@@ -47,13 +47,13 @@ The host writes a record into its own Variables — `{term, host, at}`, signed b
         self.vars.put(HOST, {"doc": json.dumps(doc, sort_keys=True)}, cas=idx)
 ```
 
-The term is the epoch one level up. A worker holds an epoch for a camera; the host holds a term for the domain. Neither is given out by a vote — there is nothing to vote with, because no raft spans clusters. The operator's re-host takes the next number, and the number decides.
+Срок — это эпоха уровнем выше. Воркер держит эпоху для камеры; хост держит срок для домена. Ни то, ни другое не раздаётся голосованием — голосовать нечем, потому что ни один raft не охватывает кластеры. Перенос, сделанный оператором, берёт следующий номер, и номер решает.
 
-## Step 2 — What only the host holds
+## Шаг 2 — Что держит только хост
 
-Most of the domain's state already lives on members, because agents put it there. Each cluster's grants are in that cluster. The shared settings are on every member. The keys are on every member. If the host camera dies, all of that survives it.
+Большая часть состояния домена уже живёт на членах, потому что туда её кладут агенты. Права каждого кластера — в этом кластере. Общие настройки — на каждом члене. Ключи — на каждом члене. Если камера-хост умрёт, всё это её переживёт.
 
-Not everything. **Lesson 9's kept edit for a camera that is off** is, by definition, on no camera that could carry it home: its cluster is the one that is off. Nor is the crossing decision of Lesson 13, or the mirror plan of Lesson 14, or the grants of a member that has been off since they changed. So the host publishes its state beyond itself, the way Lesson 12 publishes settings — one signed document in the host's durable store, a pointer for each member chosen to keep it, carried home by that member's agent:
+Но не всё. **Сохранённая правка урока 9 для выключенной камеры** по определению не лежит ни на одной камере, которая могла бы унести её домой: её кластер — как раз тот, что выключен. Как и решение о переходе из урока 13, план зеркал из урока 14 или права члена, выключенного с тех пор, как они поменялись. Поэтому хост публикует своё состояние за своими пределами так же, как урок 12 публикует настройки, — один подписанный документ в долговременном хранилище хоста и указатель для каждого члена, выбранного его хранить, который агент этого члена несёт домой:
 
 ```python
     def backup(self, targets: list[str], objects) -> int:
@@ -64,13 +64,13 @@ Not everything. **Lesson 9's kept edit for a camera that is off** is, by definit
         ...
 ```
 
-`export()` is every item under `EXPORTED`: pending edits, grants, crossings, source books, the mirror plan, the settings pointer. The agent's carry is Lesson 12's `carry`, called with other names — `domain/backup/<member>` in the host, `domain/backup` in the member.
+`export()` — это каждый элемент под `EXPORTED`: сохранённые правки, права, переходы, книги источников, план зеркал, указатель настроек. Перенос агентом — это `carry` урока 12, вызванный с другими именами: `domain/backup/<member>` на хосте, `domain/backup` на члене.
 
-What is **not** in the backup is the signer's key. It is the one thing that must never sit beside the rest: whoever holds a backup and the key can be the domain. It stays where Lesson 7 put it — offline, or in the recovery file the installer handed over.
+Чего в резервной копии **нет** — так это ключа подписывающего. Это единственное, что никогда не должно лежать рядом с остальным: тот, у кого есть резервная копия и ключ, может стать доменом. Ключ остаётся там, куда его положил урок 7, — офлайн или в файле восстановления, который выдал установщик.
 
-## Step 3 — Re-hosting
+## Шаг 3 — Перенос домена
 
-The host camera dies. From any other camera's page, the operator re-hosts on SN1 with the recovery file:
+Камера-хост умирает. Со страницы любой другой камеры оператор переносит домен на SN1 с файлом восстановления:
 
 ```python
 def rehost(fed, new: str, signer_backup: bytes, domain_id: str, objects_of, wall=time.time):
@@ -83,13 +83,13 @@ def rehost(fed, new: str, signer_backup: bytes, domain_id: str, objects_of, wall
     host.claim()
 ```
 
-Three details carry the weight. The backup is chosen by `(term, rev)` among those that **verify** against the restored key — a backup is believed by its signature, as a settings document is. The new term is one more than the largest term **any reachable member** carries, not one more than the dead host's — so a second re-host in the same month takes term 3, and the host from the first re-host, when it returns, cannot tie with the second (the last test). And the report says what the operator is getting: *term 2 on cam-SN1: the domain's state from backup rev 1, held by cam-SN1; anything the old host changed after rev 1 is not here.*
+Вес несут три детали. Резервная копия выбирается по `(term, rev)` среди тех, что **проходят проверку** восстановленным ключом, — резервной копии верят по подписи, как и документу настроек. Новый срок на единицу больше самого большого срока, который несёт **любой достижимый член**, а не на единицу больше срока умершего хоста, — поэтому второй перенос в том же месяце берёт срок 3, и хост первого переноса, вернувшись, не может сравняться со вторым (последний тест). И отчёт говорит, что оператор получает: *term 2 on cam-SN1: the domain's state from backup rev 1, held by cam-SN1; anything the old host changed after rev 1 is not here.* («срок 2 на cam-SN1: состояние домена из резервной копии rev 1 с cam-SN1; того, что старый хост изменил после rev 1, здесь нет»).
 
-The first test runs the whole story. SN3 is off; the domain on SN0 keeps an edit for it; SN0 backs up to SN1 and SN2; SN0 dies; the domain is re-hosted on SN1 with the edit in its state; SN3 boots, its agent finds the host with the larger term, carries the edit home, and SN3's console applies it.
+Первый тест прогоняет всю историю. SN3 выключена; домен на SN0 сохраняет для неё правку; SN0 делает резервную копию на SN1 и SN2; SN0 умирает; домен переносится на SN1 с правкой в состоянии; SN3 загружается, её агент находит хост с большим сроком, несёт правку домой, и консоль SN3 её применяет.
 
-## Step 4 — Members follow the larger term, and never a smaller one
+## Шаг 4 — Члены следуют за большим сроком и никогда за меньшим
 
-A member works out who the host is from what it can verify: its own carried record, and the claims reachable members make **about themselves**. The largest term wins:
+Член определяет, кто хост, по тому, что может проверить: по своей перенесённой записи и по заявлениям, которые достижимые члены делают **о себе**. Побеждает самый большой срок:
 
 ```python
 def find_host(fed, member_vars, keys, now: float) -> str | None:
@@ -100,9 +100,9 @@ def find_host(fed, member_vars, keys, now: float) -> str | None:
             continue                                     # a member's CARRIED record is hearsay; only the host's own claim counts here
 ```
 
-A host that is off is still the host if nobody holds a larger term — the agent waits for it rather than wandering to a smaller one. And a claim signed by a key the member does not trust counts for nothing, which is why a host set up from the wrong key is followed by nobody (the fifth test): losing the signer's key does not lose the site, it loses the ability to move the domain.
+Выключенный хост остаётся хостом, если ни у кого нет большего срока, — агент ждёт его, а не уходит к меньшему. А заявление, подписанное ключом, которому член не доверяет, не значит ничего, поэтому за хостом, поднятым не с тем ключом, не следует никто (пятый тест): потеря ключа подписывающего не теряет площадку — она теряет возможность перенести домен.
 
-The record is carried like the keys with one rule the keys never needed: **it never goes backwards.**
+Запись несут как ключи, с одним правилом, которое ключам никогда не было нужно: **она никогда не идёт назад.**
 
 ```python
     have = read_host(member_vars, keys, now)
@@ -110,11 +110,11 @@ The record is carried like the keys with one rule the keys never needed: **it ne
         return "holding" if ... else "holding a larger term"
 ```
 
-Without it, an agent still pointed at the old host, when the old host came back, would carry term 1 over term 2 on its member — and undo the re-host one member at a time.
+Без него агент, всё ещё направленный на старый хост, при возвращении старого хоста понёс бы на свой член срок 1 поверх срока 2 — и отменял бы перенос по одному члену за раз.
 
-## Step 5 — The old host comes back
+## Шаг 5 — Старый хост возвращается
 
-SN0 was not dead, only unplugged, and an electrician plugs it back in. It still believes it is the host at term 1. On its next look it reads the members' records, finds term 2, and steps down:
+SN0 не умерла, её только выдернули, и электрик втыкает её обратно. Она всё ещё считает себя хостом на сроке 1. При следующем взгляде она читает записи членов, находит срок 2 и уступает:
 
 ```python
     def check(self) -> bool:
@@ -124,25 +124,25 @@ SN0 was not dead, only unplugged, and an electrician plugs it back in. It still 
                 return False
 ```
 
-From then on every write it tries is refused with where the writes go: *cam-SN0 held the domain at term 1; cam-SN1 holds it at term 2 — edits go there.* No message told it; it read. That is М10A's fence, the same shape exactly.
+С этого момента каждая запись, которую она пробует сделать, отклоняется с указанием, куда идут записи: *cam-SN0 held the domain at term 1; cam-SN1 holds it at term 2 — edits go there.* («cam-SN0 держала домен на сроке 1; cam-SN1 держит его на сроке 2 — правки туда»). Никакое сообщение ей этого не говорило; она прочитала. Это ограждение М10A, точно той же формы.
 
-## Step 6 — What it alone held
+## Шаг 6 — Что держала только она
 
-Between its last backup and its death, SN0 kept one more edit — for SN2, which was off. The new term was restored from the backup and cannot have it: it was on no other camera. Two wrong answers are available. Drop it, and an operator's edit vanishes with no trace. Apply it — have the returning host push its state into the new one — and a host that was replaced gets to write into its replacement, which is exactly what the term exists to prevent.
+Между последней резервной копией и своей смертью SN0 сохранила ещё одну правку — для SN2, которая была выключена. Новый срок восстановлен из резервной копии, и этой правки в нём быть не может: её не было ни на одной другой камере. Есть два неверных ответа. Отбросить её — и правка оператора исчезнет без следа. Применить — пусть вернувшийся хост протолкнёт своё состояние в новый — и хост, которого заменили, получит право писать в свою замену, а именно этому срок и призван мешать.
 
-So it is **listed**, for a person:
+Поэтому она **перечисляется** — для человека:
 
 ```python
 def stranded(old_vars, restored_state: dict) -> list[tuple[str, str, str]]:
 ```
 
-returns every exported item on the old host that differs from what the new term was restored from — here, `domain/pending/cam-SN2` with the edit's value. The console shows it as the brief asked: *not in term 2 — apply again?* A person applying it makes an ordinary edit on the new host, which Lesson 9 then keeps and delivers.
+возвращает каждый экспортируемый элемент на старом хосте, который отличается от того, из чего восстановлен новый срок, — здесь это `domain/pending/cam-SN2` со значением правки. Консоль показывает его так, как просило задание: *не вошло в срок 2 — применить заново?* Человек, который его применяет, делает обычную правку на новом хосте, а урок 9 её сохраняет и доставляет.
 
-## Step 7 — A planned handover
+## Шаг 7 — Плановая передача
 
-Most moves are not emergencies. A camera is being replaced; a server room has arrived and should host the domain from now on. The host is alive, and the operator presses the same button with a different intent: *move the domain to SN1.*
+Большинство переносов — не аварии. Камеру меняют; появилась серверная, и с этого момента домен должен жить на ней. Хост жив, и оператор нажимает ту же кнопку с другим намерением: *перенести домен на SN1.*
 
-The emergency path of Step 3 would work, and would strand whatever the host changed after its last backup — Step 6's list, made on purpose for no reason. The planned path takes that loss out, and it is the same operation with two steps in front:
+Аварийный путь шага 3 сработал бы — и бросил бы всё, что хост изменил после последней резервной копии: список шага 6, созданный нарочно и без всякой причины. Плановый путь убирает эту потерю, и это та же операция с двумя шагами впереди:
 
 ```python
 def handover(host, to, signer_backup, domain_id, objects_of, carry_to, wall=time.time):
@@ -157,45 +157,45 @@ def handover(host, to, signer_backup, domain_id, objects_of, carry_to, wall=time
     new, report = rehost(host.fed, to, signer_backup, domain_id, objects_of, wall)
 ```
 
-**Freeze.** The host refuses writes to the domain's state for the seconds the handover takes. The kept edit of Lesson 9 is the write that matters, and `GuardedPending` puts the host's guard in front of it: an operator who edits in those seconds gets `503` — *cam-SN0 is handing the domain over to cam-SN1; edits are refused until it has — seconds, not minutes — and then go there.* Refused, with the reason, rather than accepted into the gap between the last backup and the new term.
+**Заморозка.** Хост отклоняет записи в состояние домена на те секунды, что длится передача. Сохранённая правка урока 9 — это та запись, которая важна, и `GuardedPending` ставит перед ней охрану хоста: оператор, который правит в эти секунды, получает `503` — *cam-SN0 is handing the domain over to cam-SN1; edits are refused until it has — seconds, not minutes — and then go there.* («cam-SN0 передаёт домен на cam-SN1; правки отклоняются, пока передача не завершится, — секунды, не минуты, — а потом идут туда»). Отклонена, с причиной, а не принята в зазор между последней резервной копией и новым сроком.
 
-**Last backup, to the target itself.** Not to the usual keepers: to `to`, so that the new host restores from a copy that has everything. The backup is still carried by `to`'s own agent and verified like any other; a planned handover gets no shortcut around the signature.
+**Последняя резервная копия — самой цели.** Не обычным хранителям, а `to`, чтобы новый хост восстановился из копии, в которой есть всё. Резервную копию по-прежнему несёт собственный агент `to` и проверяет, как любую другую; у плановой передачи нет обходного пути мимо подписи.
 
-**Called off, not half-done.** If `to` did not take that backup — it went off in the middle, its agent refused it — re-hosting now would start the new term from an older copy: the emergency path's loss, taken on for no emergency. So the host unfreezes and remains the host at its term, nothing has been claimed anywhere, and the operator is told why.
+**Отменена, а не сделана наполовину.** Если `to` не принял эту резервную копию — выключился посередине, его агент её отклонил, — перенос сейчас начал бы новый срок с более старой копии: потеря аварийного пути, взятая на себя без всякой аварии. Поэтому хост размораживается и остаётся хостом на своём сроке, нигде ничего не заявлено, а оператору говорят почему.
 
-**Re-host, and step down.** Then Step 3's `rehost`, unchanged. The old host is reachable, reads the larger term on `to`, and is deposed on the spot. And the report ends with *nothing stranded* — which is computed, not asserted: `stranded` runs against the restored state like after any re-host. The last test writes the domain's state on a path that skips the guard during the handover, and the report says *1 item(s) stranded* and names it. The freeze is what makes the list empty; the list is what proves it was.
+**Перенос — и уступить.** Затем `rehost` шага 3 без изменений. Старый хост достижим, читает больший срок на `to` и смещается на месте. А отчёт заканчивается словами *nothing stranded* («ничего не брошено») — и это вычисляется, а не утверждается: `stranded` прогоняется по восстановленному состоянию, как после любого переноса. Последний тест пишет состояние домена по пути, который обходит охрану во время передачи, и отчёт говорит *1 item(s) stranded* («брошен 1 элемент») и называет его. Заморозка — то, что делает список пустым; список — то, что доказывает, что так и было.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| After a re-host, some members still follow the old host | They cannot verify the new host's claim — a different key was restored — or their agents were never pointed at a reachable member. |
-| An old host that came back undoes the re-host on some members | The host record is carried without the term check. Never carry it backwards. |
-| A kept edit for a camera that was off is gone after re-hosting | The backup left out `domain/pending/`, or no member kept a backup. Export it; choose at least two keepers. |
-| A second re-host produced two hosts with the same term | The new term was computed from the dead host's term, not from the largest any member carries. |
-| A planned handover left items stranded | A write path does not ask the host's guard. Put `GuardedPending` (or the guard) in front of every write to the domain's state. |
-| Edits made on the old host just before it died reappeared on their own | The returning host pushed its state into the new one. List it; a person decides. |
+| После переноса некоторые члены всё ещё следуют за старым хостом | Они не могут проверить заявление нового хоста — восстановлен другой ключ, — или их агенты так и не были направлены на достижимого члена. |
+| Вернувшийся старый хост отменяет перенос на некоторых членах | Запись о хосте несут без проверки срока. Никогда не несите её назад. |
+| Сохранённая правка для выключенной камеры пропала после переноса | Резервная копия не включала `domain/pending/`, или ни один член не хранил резервную копию. Экспортируйте её; выбирайте не меньше двух хранителей. |
+| Второй перенос дал два хоста с одним сроком | Новый срок вычислен из срока умершего хоста, а не из самого большого, какой несёт хоть один член. |
+| Плановая передача оставила брошенные элементы | Какой-то путь записи не спрашивает охрану хоста. Ставьте `GuardedPending` (или охрану) перед каждой записью в состояние домена. |
+| Правки, сделанные на старом хосте прямо перед его смертью, появились снова сами собой | Вернувшийся хост протолкнул своё состояние в новый. Перечислите их; решает человек. |
 
-## Recap
+## Итог
 
-- On a camera, the domain's host is replaced often; re-hosting becomes ordinary, and needs a term.
-- The term is the epoch one level up: larger wins, the loser learns it by reading.
-- What only the host holds — kept edits above all — is published beyond it as a signed backup, carried by chosen members.
-- The signer's key is never in the backup; without it nothing verifies and nobody follows.
-- Re-host: the key, the newest verified backup, a term larger than any member carries.
-- The host record never goes backwards on a member.
-- A returning host steps down and lists what it alone held, for a person.
-- A planned handover freezes, backs up to the target, re-hosts, and strands nothing — or is called off and changes nothing.
+- На камере хост домена меняется часто; перенос становится обычным делом, и ему нужен срок.
+- Срок — это эпоха уровнем выше: больший побеждает, проигравший узнаёт об этом через чтение.
+- То, что держит только хост, — прежде всего сохранённые правки, — публикуется за его пределами подписанной резервной копией, которую несут выбранные члены.
+- Ключа подписывающего никогда нет в резервной копии; без него ничего не проходит проверку и никто не следует.
+- Перенос: ключ, самая новая проверенная резервная копия, срок больше любого, какой несёт хоть один член.
+- Запись о хосте никогда не идёт назад на члене.
+- Вернувшийся хост уступает и перечисляет то, что держал только он, — для человека.
+- Плановая передача замораживает, делает резервную копию на цель, переносит домен и ничего не бросает — или отменяется и ничего не меняет.
 
-## Exercises
+## Упражнения
 
-1. A network split leaves SN0 (the host) with half the site and SN1 with the other half, and an operator in the second half re-hosts on SN1. What does each half do until the split heals, and what happens in the first minute after?
-2. The brief suggests automatic re-hosting: "the live camera with the smallest serial". Without a quorum, show the split that produces two hosts with the same term, and say why this lesson leaves the button to a person.
-3. How many members should keep the backup, and which? Weigh flash, the chance that the keepers die with the host (same switch, same power), and Lesson 14's mirror plan.
-4. The site grows a server room, which should now host the domain. Write the re-host that moves the domain from a camera to the server cluster — the same operation, or a different one?
+1. Разрыв сети оставляет SN0 (хост) с половиной площадки, а SN1 — с другой половиной, и оператор во второй половине переносит домен на SN1. Что делает каждая половина, пока разрыв не зарастёт, и что происходит в первую минуту после?
+2. Задание предлагает автоматический перенос: «живая камера с наименьшим серийником». Покажите, как без кворума разрыв даёт два хоста с одним и тем же сроком, и скажите, почему этот урок оставляет кнопку человеку.
+3. Сколько членов должны хранить резервную копию, и какие? Взвесьте флеш, вероятность того, что хранители умрут вместе с хостом (тот же коммутатор, то же питание), и план зеркал урока 14.
+4. На площадке появилась серверная, которая теперь должна быть хостом домена. Напишите перенос, который перемещает домен с камеры на серверный кластер, — это та же операция или другая?
 
-## Where this is going
+## Что дальше
 
-This closes Part two, and with it the module. Every mechanism in the second half turned out to be a mechanism of the first, applied to members that are small, many and often off: the kept edit is the forwarded write that waits; the cluster of one is a cluster that publishes two objects; the shared settings are the identity set's pointer; the crossing is the grants' carry; the alarm list is the directory's honesty; the term is the epoch. The brief that started it proposed a module of its own. It did not need one.
+Этим закрывается вторая часть, а с ней и модуль. Каждый механизм второй половины оказался механизмом первой, применённым к членам, которые малы, многочисленны и часто выключены: сохранённая правка — это пересылаемая запись, которая ждёт; кластер из одного — кластер, который публикует два объекта; общие настройки — указатель набора идентичностей; переход — перенос прав; список тревог — честность каталога; срок — эпоха. Задание, с которого всё началось, предлагало отдельный модуль. Он не понадобился.

@@ -1,44 +1,44 @@
-# Lesson 9 — An Edit for a Cluster That Is Off
+# Урок 9 — Правка для кластера, который выключен
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a place for the domain to keep an edit when the owning cluster does not answer — per field, beside the grants — carried home by that cluster's agent when it is back, applied by the cluster's own console as the operator who made it, and reported back so the domain can clear what landed and show what did not.
-**Time:** ~120 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** место, где домен хранит правку, когда кластер-владелец не отвечает, — по полям, рядом с правами; агент этого кластера несёт её домой, когда кластер вернулся, собственная консоль кластера применяет её от имени оператора, который её сделал, и отчитывается обратно, чтобы домен убрал то, что дошло, и показал то, что нет.
+**Время:** ~120 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-Lesson 3's write API forwards an edit to the owning cluster and, when that cluster does not answer, says `503`: *could not look*. That was honest, and for a server room in your own building it is also enough. A cluster is several servers on a LAN; for the whole of it to be unreachable is an incident, rare and noticed, and an operator who gets `503` is looking at a real outage.
+API записи урока 3 пересылает правку кластеру-владельцу и, когда этот кластер не отвечает, говорит `503`: *не смог посмотреть*. Это было честно, а для серверной в вашем собственном здании — ещё и достаточно. Кластер — это несколько серверов в локальной сети; чтобы он был недоступен целиком — это инцидент, редкий и замеченный, и оператор, получивший `503`, смотрит на настоящий отказ.
 
-Not every cluster is a server room in your own building. A retail chain runs one small cluster per shop — a box or two behind a VPN over whatever link the shop has — and a fuel-station network, a bank's branches and a logistics company's depots look the same. For them a cluster that does not answer is not an incident; it is Tuesday night, a flapping LTE modem, a shop whose router is rebooted by the cleaner. Lesson 8's rented cluster is another: the link to the customer's cloud account is a link like any other. And the edits that matter to such a customer are made in bulk: *retention thirty days for every shop in the North region*. Forty shops, three of them unreachable, and the edit is `503` three times, which means an operator who has to remember three names and come back — tomorrow, when two of them are up and a different one is not.
+Не каждый кластер — серверная в вашем собственном здании. Розничная сеть держит по маленькому кластеру на магазин — коробка-другая за VPN поверх того канала, какой в магазине есть, — и так же выглядят сеть заправок, отделения банка и склады логистической компании. Для них кластер, который не отвечает, — не инцидент; это обычный вечер вторника, моргающий LTE-модем, магазин, где уборщица перезагрузила роутер. Арендованный кластер урока 8 — ещё один такой: канал до облачного аккаунта заказчика — канал как любой другой. А правки, которые важны такому заказчику, делаются пачкой: *хранение тридцать дней для всех магазинов региона «Север»*. Сорок магазинов, три из них недоступны, и правка трижды получает `503` — значит, оператор должен запомнить три имени и вернуться — завтра, когда два из них поднимутся, а лежать будет какой-то другой.
 
-The extreme of the same shape is Part two's member: a cluster that is **one device**. A camera running the platform is a cluster of its own (Lesson 10), and it is off often for reasons that are not incidents at all — its power, the PoE switch it hangs from, a maintenance window. What the branch has sometimes, the camera has as its normal state.
+Крайний случай той же формы — член домена из второй части: кластер, который состоит из **одного устройства**. Камера, на которой работает платформа, — сама себе кластер (урок 10), и она часто выключена по причинам, которые вовсе не инциденты: питание, PoE-коммутатор, на котором она висит, окно обслуживания. То, что у филиала бывает иногда, у камеры — нормальное состояние.
 
-So the domain keeps the edit. Nothing in this lesson knows whether the silent cluster is a shop or a camera — the tests happen to use a camera, because that is where it is most often needed. The rest of the lesson is what "keep" has to mean for that to be safe, because the cheap versions of it are wrong in ways that do not show up until somebody asks why a shop, or a camera, has the setting it has.
+Поэтому домен сохраняет правку. Ничто в этом уроке не знает, магазин молчащий кластер или камера, — в тестах просто оказалась камера, потому что там это нужно чаще всего. Остальная часть урока — о том, что должно значить «сохранить», чтобы это было безопасно, потому что дешёвые варианты неверны так, что это не видно, пока кто-нибудь не спросит, почему у магазина или камеры такая настройка, какая есть.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson9_pending.py`: a camera that goes off, an edit kept for it, the camera coming back and taking it from its own agent, a field changed on site meanwhile, a grant revoked meanwhile, the same edit carried home twice, and an edit made before the previous one was confirmed. The clusters are Lesson 1's fakes with a link you can pull.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson9_pending.py`: камера, которая выключается, правка, сохранённая для неё, камера, которая возвращается и забирает правку у собственного агента, поле, изменённое тем временем на месте, право, отозванное тем временем, одна и та же правка, принесённая домой дважды, и правка, сделанная до того, как подтвердилась предыдущая. Кластеры — подделки урока 1 с каналом, который можно выдернуть.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 3** — the write API, the owner it forwards to, and the `503` this lesson replaces.
-- **Lesson 4** — the domain agent: one small job per cluster whose only right is `domain/*` in that cluster's Variables, carrying what the signer publishes under `domain/grants/<cluster>`. This lesson is one more thing it carries.
-- **Lesson 1** — an answer that knows it is incomplete, and the difference between *not found* and *could not look*.
-- **М10 Lesson 6** — the controller's CAS on a row, and why a row has exactly one writer.
+- **Урок 3** — API записи, владелец, которому он пересылает, и `503`, который этот урок заменяет.
+- **Урок 4** — агент домена: маленькое задание на кластер, чьё единственное право — `domain/*` в Variables этого кластера; он несёт то, что подписывающий публикует под `domain/grants/<cluster>`. Этот урок — ещё одна вещь, которую он несёт.
+- **Урок 1** — ответ, который знает, что он неполон, и разница между *не найдено* и *не смог посмотреть*.
+- **М10, урок 6** — CAS контроллера на строке, и почему у строки ровно один писатель.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Say why `503` is right for a server room and wrong for a branch on a weak link — or a camera — without changing who owns anything.
-2. Keep an edit where the domain keeps everything a cluster needs from it — with no database.
-3. Keep it **per field**, against the value last seen, merged rather than queued.
-4. Apply it in the cluster, by the cluster's console, as the operator, with that operator's grant checked *then*.
-5. Tell *applied*, *already there* and *conflict* apart, and show the third rather than decide it.
-6. Match an outcome to the edit it was about by version, never by clock.
+1. Сказать, почему `503` верен для серверной и неверен для филиала на слабом канале — или для камеры, — не меняя ничьего владения.
+2. Хранить правку там, где домен хранит всё, что нужно от него кластеру, — без базы данных.
+3. Хранить её **по полям**, относительно последнего увиденного значения, сливая, а не ставя в очередь.
+4. Применять её в кластере, консолью кластера, от имени оператора, проверяя право этого оператора *в тот момент*.
+5. Различать *применено*, *уже на месте* и *конфликт* и показывать третье, а не решать его.
+6. Сопоставлять исход с правкой, к которой он относится, по версии и никогда по часам.
 
 ---
 
-## Step 1 — Keep it, without changing the owner
+## Шаг 1 — Сохранить, не меняя владельца
 
-The first design anyone reaches for is to move the row: while the camera is off, let the domain — or the server cluster — hold the camera's settings, and have the camera pull them when it is back. That is two writers of one row over time, a stream of changes to carry them, and the camera writing into somebody else's store to report. Every piece of the platform so far is built on the opposite rule.
+Первое, за что хватается любой, — перенести строку: пока камера выключена, пусть настройки камеры держит домен — или серверный кластер, — а камера заберёт их, когда вернётся. Это два писателя одной строки во времени, поток изменений, чтобы их переносить, и камера, пишущая отчёт в чужое хранилище. Каждая часть платформы до сих пор построена на обратном правиле.
 
-So the owner does not change. The camera's console remains the only writer of the camera's rows. What changes is only that the domain, instead of refusing an edit it cannot deliver, **holds it until it can**, and the cluster applies it the way it applies any other edit — through its console.
+Поэтому владелец не меняется. Консоль камеры остаётся единственным писателем строк камеры. Меняется только одно: домен, вместо того чтобы отказать в правке, которую не может доставить, **держит её, пока не сможет**, а кластер применяет её так же, как любую другую правку, — через свою консоль.
 
 ```python
     def update_camera(self, camera, fields, idempotency_key, token=None):
@@ -52,39 +52,39 @@ So the owner does not change. The camera's console remains the only writer of th
             raise ApiError(404 if ans.complete else 503, ans.sentence())
 ```
 
-`_keep` keeps an edit only for a cluster that **did not answer**, and only when the domain knows it is that cluster's camera. A complete answer that found nothing is still `404` — the camera is not anywhere. A camera missing from a cluster that *did* answer is gone, not waiting. And a domain with nowhere to keep edits answers exactly as Lesson 3 did — `503` — rather than pretend.
+`_keep` сохраняет правку только для кластера, который **не ответил**, и только когда домен знает, что это камера этого кластера. Полный ответ, который ничего не нашёл, — по-прежнему `404`: камеры нет нигде. Камера, пропавшая из кластера, который *ответил*, ушла, а не ждёт. А домен, которому негде хранить правки, отвечает ровно так, как урок 3, — `503`, — а не делает вид.
 
-Where does the domain know the owner from, when the owner is silent? Not from the directory: Lesson 1's directory never copies rows, and a silent cluster's cameras are simply not found. From the **read view**, which keeps a silent cluster's last snapshot and says how old it is. `ReadView.last_known(camera)` is that copy, and it is also the value the edit will be measured against.
+Откуда домен знает владельца, когда владелец молчит? Не из каталога: каталог урока 1 никогда не копирует строки, и камеры молчащего кластера просто не находятся. Из **представления для чтения**, которое хранит последний снапшот молчащего кластера и говорит, сколько ему лет. `ReadView.last_known(camera)` — эта копия, и она же — значение, относительно которого будут мерить правку.
 
-## Step 2 — Where it lives: beside the grants
+## Шаг 2 — Где она живёт: рядом с правами
 
-The domain has no database, and that was a decision, not an omission. It does not need one here either, because it already has a pattern for *something the domain decides, that a cluster needs, carried by the cluster's agent when the cluster can be reached*: the grants. The signer writes `domain/grants/<cluster>` in the domain cluster's Variables; the cluster's agent copies it into its own.
+У домена нет базы данных, и это было решение, а не упущение. Здесь она ему тоже не нужна, потому что у него уже есть шаблон для *того, что решает домен, что нужно кластеру и что несёт агент кластера, когда до кластера можно достучаться*: права. Подписывающий пишет `domain/grants/<cluster>` в Variables доменного кластера; агент кластера копирует это в свои.
 
-A kept edit is the same shape:
+Сохранённая правка — той же формы:
 
 ```
-domain/pending/<cluster>      in the domain cluster     one item per camera, by the domain's name for it
-domain/pending                in the member cluster     the agent's copy, carried home
-domain/outcomes               in the member cluster     what happened, written by the agent
+domain/pending/<cluster>      в доменном кластере       по элементу на камеру, под именем, которое ей дал домен
+domain/pending                в кластере-члене          копия агента, принесённая домой
+domain/outcomes               в кластере-члене          что произошло; пишет агент
 ```
 
-The agent's right does not grow. It writes `domain/*` in its own cluster and nothing else — it does not write the camera's row. It carries the edit home, hands it to the cluster's console, and writes down what the console did.
+Право агента не растёт. Он пишет `domain/*` в собственном кластере и больше ничего — строку камеры он не пишет. Он несёт правку домой, передаёт её консоли кластера и записывает, что консоль сделала.
 
-## Step 3 — Per field, against the value last seen
+## Шаг 3 — По полям, относительно последнего увиденного значения
 
-A kept edit is not the row the operator saw with the new values pasted in, and it is not a list of edits to replay. It is, **per field**, two values:
+Сохранённая правка — это не строка, которую видел оператор, со вставленными новыми значениями, и не список правок для повторного проигрывания. Это **для каждого поля** два значения:
 
 ```json
 {"events_retention_days": {"old": 30, "new": 7}, "name": {"old": "gate", "new": "main-gate"}}
 ```
 
-`old` is what the domain last saw — the read view's copy. `new` is what the operator wants. That pair is what makes it safe to apply later, and the next step is why.
+`old` — то, что домен видел последним, копия представления для чтения. `new` — то, чего хочет оператор. Именно эта пара делает безопасным применение позже, и почему — следующий шаг.
 
-Two edits made while the camera is still off **merge**: the camera needs the last value of each field, not a history. The field keeps its `old` — while the camera is off nothing new arrives to move it — and takes the latest `new`.
+Две правки, сделанные, пока камера ещё выключена, **сливаются**: камере нужно последнее значение каждого поля, а не история. Поле сохраняет свой `old` — пока камера выключена, ничего нового, что сдвинуло бы его, не приходит — и берёт последний `new`.
 
-## Step 4 — Applied, already there, or a conflict
+## Шаг 4 — Применено, уже на месте или конфликт
 
-The camera comes back. Its agent carries the edit home and, field by field, compares it with what the camera holds now:
+Камера возвращается. Её агент несёт правку домой и поле за полем сравнивает её с тем, что камера держит сейчас:
 
 ```python
         for f, d in e["fields"].items():
@@ -97,29 +97,29 @@ The camera comes back. Its agent carries the edit home and, field by field, comp
                 conflicts[f] = {"old": d["old"], "new": d["new"], "current": cur}
 ```
 
-- **Still `old`** — nothing happened to that field while the camera was off. It takes `new`.
-- **Already `new`** — the edit was carried home once already and the domain has not cleared it yet. Nothing is written. Carrying it twice applies it once.
-- **Anything else** — somebody changed that field on the camera while it was off, on the camera's own page, which is still its console. The domain's edit was based on a value that is no longer there. That is a **conflict**, and it is shown, not decided.
+- **Всё ещё `old`** — пока камера была выключена, с этим полем ничего не случилось. Оно получает `new`.
+- **Уже `new`** — правку уже приносили домой один раз, а домен её ещё не убрал. Ничего не пишется. Принесённая дважды, она применяется один раз.
+- **Что угодно другое** — кто-то изменил это поле на камере, пока она была выключена, на собственной странице камеры, которая по-прежнему её консоль. Правка домена основывалась на значении, которого больше нет. Это **конфликт**, и его показывают, а не решают.
 
-Why not the two simpler rules. *Last writer wins* would overwrite the change made on site — a change nobody at the domain ever saw — and nothing would record that it had been there. *Compare the whole row* would refuse the whole edit because the name moved, throwing away the retention change for the sake of a field it never touched. Per field is the rule that loses neither.
+Почему не два правила попроще. *Побеждает последний писатель* затёр бы изменение, сделанное на месте, — изменение, которого никто на уровне домена не видел, — и ничто не записало бы, что оно было. *Сравнивать строку целиком* отвергло бы всю правку из-за того, что сдвинулось имя, и выбросило бы изменение срока хранения ради поля, которого оно не касалось. По полям — правило, которое не теряет ни того ни другого.
 
-## Step 5 — As the operator, with the grant checked then
+## Шаг 5 — От имени оператора, с проверкой права в тот момент
 
-The console applies the edit **as the operator who made it** — the kept edit carries the subject — not as the agent. The row has one writer, and the edit is that person's.
+Консоль применяет правку **от имени оператора, который её сделал**, — сохранённая правка несёт субъект, — а не от имени агента. У строки один писатель, и правка принадлежит этому человеку.
 
-An edit can wait a week, and a week is long enough for an operator to lose the right to make it. So the grant is checked **when the edit is applied**, by the cluster's console against the cluster's own grants — exactly the check a live edit gets. A refusal is recorded as a refusal and kept on the domain with its reason. It is not retried as if the network were at fault, and it is not forced.
+Правка может ждать неделю, а за неделю оператор вполне может потерять право её делать. Поэтому право проверяется **в момент применения правки** — консолью кластера по собственным правам кластера, ровно та же проверка, что у живой правки. Отказ записывается как отказ и остаётся на домене со своей причиной. Его не повторяют, как будто виновата сеть, и не продавливают силой.
 
-## Step 6 — How it comes back: by version, never by clock
+## Шаг 6 — Как она возвращается: по версии, никогда по часам
 
-The agent writes what happened into its own cluster's `domain/outcomes`. The domain reads that the way it reads a snapshot — through the cluster's stores — and folds it in: applied and already-there fields go, a conflict stays annotated with what the camera holds, a refusal stays with its reason, a camera the cluster no longer has takes its edit with it.
+Агент записывает, что произошло, в `domain/outcomes` своего кластера. Домен читает это так же, как снапшот, — через хранилища кластера — и вносит у себя: применённые поля и поля, которые уже на месте, уходят; конфликт остаётся, помеченный тем, что держит камера; отказ остаётся со своей причиной; камера, которой у кластера больше нет, забирает свою правку с собой.
 
-The outcome must be matched to the edit it was about, and the obvious key is wrong. The agent's clock is the camera's; the domain's is the domain cluster's; comparing the two decides nothing. Each camera's kept edit has a **`rev`**, bumped by every change to it, and the outcome names the `rev` it applied. Only an outcome for the current `rev` clears anything. An old report can never clear a newer edit.
+Исход надо сопоставить с правкой, к которой он относится, и очевидный ключ неверен. Часы агента — часы камеры; часы домена — часы доменного кластера; сравнение одних с другими ничего не решает. У сохранённой правки каждой камеры есть **`rev`**, который растёт при каждом её изменении, и исход называет `rev`, который он применил. Что-то убирает только исход для текущего `rev`. Старый отчёт никогда не может убрать более новую правку.
 
-## Step 7 — An edit made before the last one was confirmed
+## Шаг 7 — Правка, сделанная до того, как подтвердилась предыдущая
 
-There is a race between the two sides, and it is the one this lesson's tests found in its own first design. The camera takes an edit and reports it; the domain reads the report later. In between, the camera can go off again, and the operator can edit the same field again. The merged edit is still based on the value from before the *first* edit — but the camera took the first edit, and now holds a value **the domain itself sent**. Read by Step 4's rule as it stood, that is somebody else's change: a conflict about nothing.
+Между двумя сторонами есть гонка, и это та, которую тесты этого урока нашли в его собственном первом проекте. Камера берёт правку и отчитывается; домен читает отчёт позже. В промежутке камера может снова выключиться, а оператор — снова поправить то же поле. Слитая правка по-прежнему основана на значении, которое было до *первой* правки, — но камера первую правку взяла и теперь держит значение, **которое прислал сам домен**. По правилу шага 4 в том виде, как оно было, это чужое изменение: конфликт на пустом месте.
 
-So a field remembers the values it has already wanted — `via` — and a camera holding one of them holds a base, not a surprise:
+Поэтому поле помнит значения, которых уже хотело, — `via`, — и камера, держащая одно из них, держит основу, а не сюрприз:
 
 ```python
                 elif have["new"] != new:
@@ -128,47 +128,47 @@ So a field remembers the values it has already wanted — `via` — and a camera
                     have["new"] = new
 ```
 
-And the report about the first edit, read after the second was made, clears nothing, because its `rev` is not the current one. Both halves are one test.
+А отчёт о первой правке, прочитанный после того, как сделана вторая, ничего не убирает, потому что его `rev` не текущий. Обе половины — один тест.
 
-## Step 8 — Resolving a conflict
+## Шаг 8 — Разрешение конфликта
 
-A conflict waits for a person. *Apply again* means apply against **what is there now**: a new edit to a conflicted field takes the value the camera reported as its `old`. Measured against the original value, it would conflict again for ever.
+Конфликт ждёт человека. *Применить снова* значит применить относительно **того, что там сейчас**: новая правка конфликтного поля берёт в качестве своего `old` значение, о котором сообщила камера. Если мерить относительно исходного значения, она будет конфликтовать снова и снова, вечно.
 
-## Step 9 — Accepted is not applied
+## Шаг 9 — Принято — не значит применено
 
-A kept edit returns `202`, not `200`, and the response says `pending: true` and why. A bulk edit reports per camera, so the client can say *applied to 47 of 50, 3 waiting*. The domain's list shows a waiting edit with its age. An operator who reads *accepted* must never be able to believe *done*.
+Сохранённая правка возвращает `202`, а не `200`, и ответ говорит `pending: true` и почему. Пакетная правка отчитывается по каждой камере, так что клиент может сказать *применено к 47 из 50, 3 ждут*. Список домена показывает ждущую правку с её возрастом. Оператор, прочитавший *принято*, ни в коем случае не должен поверить, что *сделано*.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| An edit for a camera that is off is refused with `503` | The API was built without `pending=` and `last_known=` — Lesson 3's API. Correct for it; wire both. |
-| A kept edit overwrote a change made on the camera | The comparison is not per field, or it compares with `new` only. The field must still hold `old` (or a `via`) to be applied. |
-| A camera shows a conflict on a field nobody touched on site | The field was edited again before the previous edit's outcome was read, and `via` is missing — the camera holds a value the domain sent. |
-| A newer edit disappeared after the camera came back | Outcomes are matched by time, or not matched at all. Match by `rev`. |
-| An operator whose grant was revoked still changed a camera | The grant was checked when the edit was accepted, not when it was applied — or the agent applied it as itself. |
-| A cleared edit is applied again and again | The agent does not carry an EMPTY pending set home, so the cluster's copy never clears. Carry it even when there is nothing left. |
+| Правка для выключенной камеры отвергается с `503` | API собран без `pending=` и `last_known=` — это API урока 3. Для него это верно; подключите оба. |
+| Сохранённая правка затёрла изменение, сделанное на камере | Сравнение не по полям, или сравнивает только с `new`. Чтобы правку применили, поле должно по-прежнему держать `old` (или значение из `via`). |
+| Камера показывает конфликт на поле, которое на месте никто не трогал | Поле поправили снова до того, как прочитали исход предыдущей правки, а `via` нет — камера держит значение, которое прислал домен. |
+| Более новая правка пропала после того, как камера вернулась | Исходы сопоставляются по времени или не сопоставляются вовсе. Сопоставляйте по `rev`. |
+| Оператор, у которого отозвали право, всё равно изменил камеру | Право проверили, когда правку приняли, а не когда её применили, — или агент применил её от своего имени. |
+| Убранная правка применяется снова и снова | Агент не несёт домой ПУСТОЙ набор ожидающих правок, поэтому копия в кластере никогда не очищается. Несите его, даже когда ничего не осталось. |
 
-## Recap
+## Итог
 
-- `503` is honest and, for a cluster that is one device and often off, useless. The domain keeps the edit — **without changing the owner**.
-- It lives beside the grants: `domain/pending/<cluster>` in the domain cluster, carried home by the cluster's agent, which still writes nothing but `domain/*`.
-- Kept **per field**, against the value last seen; merged while the camera is off.
-- Applied by the cluster's own console, as the operator, with the grant checked **then**.
-- *Applied*, *already there*, *conflict* — and the conflict is shown, not decided.
-- Outcomes come back through the cluster's own `domain/outcomes`, matched by **`rev`**, never by clock; `via` covers the edit made before the last one was confirmed.
-- Accepted is not applied: `202`, per-camera results, age on every waiting edit.
+- `503` честен, а для кластера, который состоит из одного устройства и часто выключен, бесполезен. Домен сохраняет правку — **не меняя владельца**.
+- Она живёт рядом с правами: `domain/pending/<cluster>` в доменном кластере, домой её несёт агент кластера, который по-прежнему не пишет ничего, кроме `domain/*`.
+- Хранится **по полям**, относительно последнего увиденного значения; сливается, пока камера выключена.
+- Применяется собственной консолью кластера, от имени оператора, с проверкой права **в тот момент**.
+- *Применено*, *уже на месте*, *конфликт* — и конфликт показывают, а не решают.
+- Исходы возвращаются через собственный `domain/outcomes` кластера и сопоставляются по **`rev`**, никогда по часам; `via` покрывает правку, сделанную до того, как подтвердилась предыдущая.
+- Принято — не значит применено: `202`, результаты по каждой камере, возраст у каждой ждущей правки.
 
-## Exercises
+## Упражнения
 
-1. Replace the per-field comparison with *last writer wins* and write the support call that follows a month later: which setting, who set it, and why nobody can tell.
-2. Match outcomes by the agent's `at` instead of `rev`. Put the camera's clock ten minutes behind the domain's and find the edit that is lost.
-3. Remove `via` and run the race test. Then describe, in one sentence, what an operator sees and why they would conclude the site staff are interfering.
-4. The domain cluster is itself a camera (Lesson 15). Say where the kept edits live, what is lost if that camera dies, and what the domain must therefore publish beyond itself — then compare with how it already publishes the identity set.
-5. An edit waits for a camera that is never coming back. Should it expire? Argue both ways, and say which failure each choice makes silent.
+1. Замените сравнение по полям на *побеждает последний писатель* и напишите обращение в поддержку, которое последует через месяц: какая настройка, кто её поставил и почему никто не может сказать.
+2. Сопоставляйте исходы по `at` агента вместо `rev`. Поставьте часы камеры на десять минут позади часов домена и найдите потерянную правку.
+3. Уберите `via` и прогоните тест гонки. Затем одной фразой опишите, что видит оператор и почему он решит, что персонал на площадке вмешивается.
+4. Доменный кластер сам является камерой (урок 15). Скажите, где живут сохранённые правки, что теряется, если эта камера умрёт, и что поэтому домен должен публиковать за пределами себя, — а затем сравните с тем, как он уже публикует набор идентичностей.
+5. Правка ждёт камеру, которая никогда не вернётся. Должна ли она истекать? Приведите доводы за и против и скажите, какой отказ каждый выбор делает молчаливым.
 
-## Where this is going
+## Что дальше
 
-This lesson closes Part one: every piece of it — the directory, the read view that keeps a silent cluster's last copy, the agent, the grants — was already there, and it holds for any member that is often away. [**Part two**](10-a-cluster-of-one.md) takes that member to its extreme. Lesson 10 builds a camera as a cluster of one, with a unit pinned to its hardware and the domain agent as its only link upward; the lessons after it take the domain to hundreds of such members, give it shared settings without a database, let a server's recorder read a stream from a camera's cluster, merge alarms from every member, and host the domain itself on a camera — where the kept edits of this lesson become one more thing the domain must not keep only on itself.
+Этот урок закрывает первую часть: каждая его деталь — каталог, представление для чтения, хранящее последнюю копию молчащего кластера, агент, права — уже была на месте, и всё это верно для любого члена домена, который часто отсутствует. [**Вторая часть**](10-a-cluster-of-one.md) доводит такого члена до предела. Урок 10 строит камеру как кластер из одного, с единицей, прибитой к её железу, и агентом домена как единственной связью наверх; уроки после него доводят домен до сотен таких членов, дают ему общие настройки без базы данных, позволяют регистратору сервера читать поток из кластера камеры, сливают тревоги со всех членов и размещают сам домен на камере — где сохранённые правки этого урока становятся ещё одной вещью, которую домен не должен хранить только у себя.

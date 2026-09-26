@@ -1,40 +1,40 @@
-# Lesson 10 — A Cluster of One
+# Урок 10 — Кластер из одного
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a camera that runs the platform as a cluster of its own — one store on its flash, one writer, a unit pinned to its hardware, no controller, its own epoch — publishing exactly what a cluster publishes, so that the directory, the read view, the forwarded write, the agent and Lesson 9's kept edits treat it like any server room. And the two things that are new because it is a device: flash that wears, and a boot whose order is a correctness question.
-**Time:** ~90 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** камеру, которая запускает платформу как собственный кластер — одно хранилище на её флеше, один писатель, единица, закреплённая за её железом, без контроллера, со своей эпохой, — и публикует ровно то, что публикует кластер, так что каталог, представление для чтения, пересылаемая запись, агент и сохранённые правки урока 9 обращаются с ней как с любой серверной. И две вещи, которые новы потому, что это устройство: флеш, который изнашивается, и загрузка, порядок которой — вопрос корректности.
+**Время:** ~90 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-The vendor this part is written for makes cameras, and the code in them is the same platform that runs on the servers. Two deployments follow: cameras **with** a server room, and cameras **alone** — no server, no NAS, footage on SD cards. The design brief for them ([`КАМЕРЫ-НА-ПЛАТФОРМЕ.md`](../КАМЕРЫ-НА-ПЛАТФОРМЕ.md)) started by inventing mechanisms: a routing store, a change stream, per-unit ACLs, a "primary camera" with copies of everything on every other. Laid against this module, most of them turned out to be the domain under another name. What was left is the question this lesson answers: **what is a camera, to the domain?**
+Вендор, для которого написана эта часть, делает камеры, и код в них — та же платформа, что работает на серверах. Отсюда два варианта развёртывания: камеры **с** серверной и камеры **одни** — без сервера, без NAS, с записями на SD-картах. Проектное задание для них ([`КАМЕРЫ-НА-ПЛАТФОРМЕ.md`](../КАМЕРЫ-НА-ПЛАТФОРМЕ.md)) начиналось с изобретения механизмов: хранилище маршрутов, поток изменений, ACL на отдельную единицу, «главная камера» с копиями всего на каждой другой. Приложенные к этому модулю, большинство из них оказались доменом под другим именем. Остался вопрос, на который отвечает этот урок: **что такое камера для домена?**
 
-Not a worker in somebody's cluster. A cluster in М11's sense is servers close enough to share a raft, an orchestrator that restarts what dies, and units that move from one server to another. A set of cameras has none of the three: nothing moves off a camera, because the video comes from its own sensor. Treat all the cameras as **one** cluster and they need one consistent store among them — raft among cameras, on flash, over PoE that fails, which the brief refused on good grounds.
+Не воркер в чьём-то кластере. Кластер в смысле М11 — это серверы, стоящие достаточно близко, чтобы делить raft, оркестратор, который перезапускает упавшее, и единицы, которые переезжают с одного сервера на другой. У набора камер нет ни одного из трёх: с камеры ничего не переезжает, потому что видео идёт с её собственного сенсора. Считайте все камеры **одним** кластером — и им нужно одно согласованное хранилище на всех: raft среди камер, на флеше, поверх PoE, который отказывает. Задание от этого отказалось, и по веским причинам.
 
-So each camera is **its own cluster**: a cluster of one. Its store is consistent for free — one flash, one writer. The domain's founding rule, *no raft spans clusters*, is exactly the brief's *no consensus between cameras*. And everything the domain already does — find a camera, forward an edit, carry grants, keep an edit for a member that is off — applies unchanged, provided the camera publishes what a cluster publishes. This lesson makes sure it does, and finds the two places where a device is not just a small server.
+Поэтому каждая камера — **свой собственный кластер**: кластер из одного. Её хранилище согласовано даром — один флеш, один писатель. Основное правило домена, *ни один raft не охватывает кластеры*, — это ровно *никакого консенсуса между камерами* из задания. И всё, что домен уже делает, — найти камеру, переслать правку, нести права, сохранить правку для выключенного члена — работает без изменений, если камера публикует то, что публикует кластер. Этот урок следит, чтобы публиковала, и находит два места, где устройство — не просто маленький сервер.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson10_cluster_of_one.py`: a server room and two cameras in one domain, found by serial; the epoch across reboots; a day of heartbeats against a flash-write counter; a camera's store after its agent has synced; an edit forwarded to a camera and refused for a subject with no grant; the boot order, by hand, in the wrong order and the right one; and Lesson 9 end to end on a real device.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson10_cluster_of_one.py`: серверная и две камеры в одном домене, найденные по серийному номеру; эпоха через перезагрузки; сутки heartbeat'ов против счётчика записей на флеш; хранилище камеры после синхронизации её агента; правка, пересланная на камеру и отклонённая для субъекта без права; порядок загрузки, вручную, в неправильном порядке и в правильном; и урок 9 целиком на настоящем устройстве.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 1** — the directory of directories, `ref` as the domain's name for a camera, and a complete answer versus an incomplete one.
-- **Lesson 3** — the read view over heartbeats and snapshot shards, and the forwarded write.
-- **Lesson 4** — the agent that writes `domain/*` and nothing else, and grants checked by the cluster's console.
-- **Lesson 9** — an edit kept for a cluster that is off.
-- **М10A** — the epoch (`w2cplatform/epoch.py`), and the heartbeat and snapshot shapes (`vms/heartbeats/<worker>`, `vms/snapshot/<worker>`).
+- **Урок 1** — каталог каталогов, `ref` как имя камеры для домена, полный ответ против неполного.
+- **Урок 3** — представление для чтения поверх heartbeat'ов и срезов снапшота, пересылаемая запись.
+- **Урок 4** — агент, который пишет `domain/*` и больше ничего, и права, которые проверяет консоль кластера.
+- **Урок 9** — правка, сохранённая для выключенного кластера.
+- **М10A** — эпоха (`w2cplatform/epoch.py`), формы heartbeat'а и снапшота (`vms/heartbeats/<worker>`, `vms/snapshot/<worker>`).
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Say why a camera is a cluster of its own, and why "all cameras, one cluster" is raft among cameras.
-2. List what a device must publish for the domain to read it unchanged — and what it need not have.
-3. Take an epoch with no one to fence, and say why it must still grow on every boot.
-4. Put what changes every few seconds in RAM, and count what reaches flash.
-5. Order a boot so that a camera never gives the domain a complete answer that is false.
+1. Сказать, почему камера — отдельный кластер и почему «все камеры — один кластер» означает raft среди камер.
+2. Перечислить, что устройство должно публиковать, чтобы домен читал его без изменений, — и чего у него может не быть.
+3. Брать эпоху, когда ограждать некого, и сказать, почему она всё равно должна расти при каждой загрузке.
+4. Держать в RAM то, что меняется каждые несколько секунд, и сосчитать, что доходит до флеша.
+5. Упорядочить загрузку так, чтобы камера никогда не давала домену полный ответ, который ложен.
 
 ---
 
-## Step 1 — What the domain reads, and nothing more
+## Шаг 1 — Что домен читает, и больше ничего
 
-The domain reads two things from a cluster, and has since Lesson 1: its workers' heartbeats under `vms/heartbeats/`, and its snapshot shards under `vms/snapshot/`. It never reads rows. So the whole contract between a camera and the domain is two objects:
+Домен читает у кластера две вещи, и так с урока 1: heartbeat'ы его воркеров под `vms/heartbeats/` и срезы его снапшота под `vms/snapshot/`. Строки он не читает никогда. Поэтому весь контракт между камерой и доменом — два объекта:
 
 ```python
     def publish(self) -> None:
@@ -51,27 +51,27 @@ The domain reads two things from a cluster, and has since Lesson 1: its workers'
         self.ram.put(f"vms/snapshot/{self.serial}", json.dumps(snap).encode())
 ```
 
-The worker is the camera, and so is the server. That is not a trick: the heartbeat names the server so that the read view can group silence by failure domain (Lesson 3), and a camera's failure domain is the camera.
+Воркер — это камера, и сервер — тоже она. Это не трюк: heartbeat называет сервер, чтобы представление для чтения могло группировать молчание по доменам отказа (урок 3), а домен отказа камеры — сама камера.
 
-The first test puts a server room — М11's real controller and worker — and two cameras in one domain and asks for camera `SN4471`. The answer comes back from `cam-SN4471`, on worker `SN4471`, on server `SN4471`, complete. Nothing in `federation.py` or `readview.py` was written for devices.
+Первый тест помещает в один домен серверную — настоящие контроллер и воркер М11 — и две камеры и спрашивает камеру `SN4471`. Ответ приходит от `cam-SN4471`, с воркера `SN4471`, с сервера `SN4471`, полный. Ничего в `federation.py` или `readview.py` не писалось для устройств.
 
-## Step 2 — A pinned unit, and the keys nobody writes
+## Шаг 2 — Закреплённая единица и ключи, которые никто не пишет
 
-In a server cluster a controller places a camera on a worker: it writes an assignment, the worker claims a slot, takes a lease. On a camera there is nothing to decide — the camera **is** the unit. So there is no controller, and the keys a placer would write simply do not exist. The test lists the camera's store after its agent has synced:
+В серверном кластере контроллер размещает камеру на воркер: пишет назначение, воркер захватывает слот, берёт аренду. На камере решать нечего — камера **и есть** единица. Поэтому контроллера нет, а ключей, которые писал бы размещающий, просто не существует. Тест перечисляет хранилище камеры после синхронизации её агента:
 
 ```
 domain/grants    vms/cameras/1    vms/epoch/1
 ```
 
-Its row, its epoch, and what the agent carried. No slot, no assignment — not forbidden by an ACL, just absent, because it is nobody's job to write them.
+Её строка, её эпоха и то, что принёс агент. Ни слота, ни назначения — не запрещены ACL, а просто отсутствуют, потому что писать их — ничья работа.
 
-The row is made **once**, at the first boot, by the camera's own console, with `ref` set to its serial. The cluster-local id stays `1`, an integer, as in every cluster: the domain has always asked by `ref`, and making the serial the id would ripple through every integer camera id below, the event index's `cam INTEGER` among them.
+Строка создаётся **один раз**, при первой загрузке, собственной консолью камеры, с `ref`, равным её серийному номеру. Локальный номер в кластере остаётся `1`, целым, как в любом кластере: домен всегда спрашивал по `ref`, а если сделать серийник номером, это протянется через каждый целый номер камеры ниже, включая `cam INTEGER` в индексе событий.
 
-## Step 3 — An epoch with no one to fence
+## Шаг 3 — Эпоха, когда ограждать некого
 
-The epoch exists to fence: when two instances of a worker think they hold a camera, the newer epoch wins (М10A Lesson 1). A camera has no second instance. Why take one?
+Эпоха существует, чтобы ограждать: когда два экземпляра воркера считают, что держат камеру, побеждает более новая эпоха (М10A, урок 1). У камеры второго экземпляра нет. Зачем брать эпоху?
 
-Because the epoch is also in the **paths**. The archive is `rec/<cam>/e<epoch>/`, the event buckets are `vms/<unit>/e<epoch>/…`, and a reboot must never write into the directory of the life before it. So the camera takes its epoch itself, once per boot, from its flash, by the same CAS every worker uses:
+Потому что эпоха есть ещё и в **путях**. Архив — `rec/<cam>/e<epoch>/`, корзины событий — `vms/<unit>/e<epoch>/…`, и перезагрузка никогда не должна писать в каталог предыдущей жизни. Поэтому камера берёт эпоху сама, раз за загрузку, со своего флеша, тем же CAS, что и каждый воркер:
 
 ```python
     def boot(self, first_name: str | None = None) -> int:
@@ -83,23 +83,23 @@ Because the epoch is also in the **paths**. The archive is `rec/<cam>/e<epoch>/`
         ...
 ```
 
-A crash straight after `next_epoch` costs a number and nothing else; the next boot takes the one after it.
+Падение сразу после `next_epoch` стоит одного номера и больше ничего; следующая загрузка возьмёт номер после него.
 
-## Step 4 — What flash can afford
+## Шаг 4 — Что может позволить себе флеш
 
-A heartbeat every ten seconds is 8 640 writes a day. On a server's SSD that is noise. On a camera's flash, rated in erase cycles and expected to last the life of the camera, it is the thing that kills it.
+Heartbeat каждые десять секунд — это 8 640 записей в сутки. Для SSD сервера это шум. Для флеша камеры, чей ресурс измеряется циклами стирания и который должен прожить столько же, сколько камера, это то, что её убивает.
 
-So the camera has two stores, and the split is by **how often** a value changes. `Flash` holds the row, the epoch, and what the agent carries — values that change a few times a day at most. `Ram` holds the heartbeat and the snapshot shard, which change every pass and are worthless after a reboot anyway: a heartbeat from before the reboot is a lie about now. The domain reads both through the camera's door, so it cannot tell the difference and does not need to.
+Поэтому у камеры два хранилища, и делятся они по тому, **как часто** меняется значение. `Flash` держит строку, эпоху и то, что приносит агент, — значения, которые меняются самое большее несколько раз в день. `Ram` держит heartbeat и срез снапшота: они меняются каждый проход и после перезагрузки всё равно ничего не стоят — heartbeat из времени до перезагрузки лжёт о настоящем. Домен читает оба через дверь камеры, поэтому разницы не видит, и видеть ему не нужно.
 
-The test runs a day: 8 640 publishes and 2 880 agent passes. Flash takes two writes at boot (the epoch, the row) and one more when the grants first arrive. The agent's `_carry` compares before it writes, which is what keeps 2 879 unchanged passes free.
+Тест прогоняет сутки: 8 640 публикаций и 2 880 проходов агента. Флеш получает две записи при загрузке (эпоха, строка) и ещё одну, когда впервые приходят права. `_carry` агента сравнивает, прежде чем писать, — поэтому 2 879 проходов без изменений ничего не стоят.
 
-## Step 5 — The door opens after the first publish
+## Шаг 5 — Дверь открывается после первой публикации
 
-A server cluster is never rebooted whole: some server is always up and publishing. A camera is rebooted whole every time. For the seconds between power and the first publish its RAM is empty — and if its door is open in those seconds, it answers the domain truthfully: *I hold no cameras.*
+Серверный кластер никогда не перезагружается целиком: какой-то сервер всегда работает и публикует. Камера перезагружается целиком каждый раз. В секунды между включением питания и первой публикацией её RAM пуста — и если дверь в эти секунды открыта, камера честно отвечает домену: *у меня нет камер.*
 
-That is a **complete** answer. Lesson 1 made the domain believe complete answers: *in no cluster of the domain* is a 404, and an edit sent at that moment is refused as if the camera did not exist. The test does it by hand — power, an open door, nothing published — and gets exactly that 404.
+Это **полный** ответ. Урок 1 научил домен верить полным ответам: *ни в одном кластере домена* — это 404, и правка, отправленная в этот момент, отклоняется так, будто камеры не существует. Тест делает это вручную — питание, открытая дверь, ничего не опубликовано — и получает ровно этот 404.
 
-With the door closed until the publish, the same seconds are a cluster that **did not answer**: an incomplete answer, and Lesson 9 keeps the edit. So the boot order is the lesson's one rule that a server room never needed:
+Если дверь закрыта до публикации, те же секунды — это кластер, который **не ответил**: неполный ответ, и урок 9 сохраняет правку. Поэтому порядок загрузки — единственное правило урока, которое серверной никогда не было нужно:
 
 ```python
         self.boots += 1
@@ -107,43 +107,43 @@ With the door closed until the publish, the same seconds are a cluster that **di
         self.door_open = True
 ```
 
-The epoch first, because everything after it carries it. The row, if this is the first boot. The publish. And only then the door.
+Сначала эпоха, потому что всё после неё её несёт. Строка, если это первая загрузка. Публикация. И только потом дверь.
 
-## Step 6 — Its console, and its only link up
+## Шаг 6 — Её консоль и её единственная связь наверх
 
-A camera's own web page **is** its cluster's console: it writes the row. So is the domain's forwarded edit — it arrives at the same `update_camera`, with the subject's name, and the camera checks that subject against the grants **its** agent carried, exactly as a server cluster's console does (Lesson 4). A subject with no grant gets 403 from the camera, not from the domain.
+Собственная веб-страница камеры **и есть** консоль её кластера: она пишет строку. Пересылаемая правка домена — тоже: она приходит в тот же `update_camera`, с именем субъекта, и камера проверяет этого субъекта по правам, которые принёс **её** агент, ровно как консоль серверного кластера (урок 4). Субъект без права получает 403 от камеры, а не от домена.
 
-The agent is the camera's only link upward, and it is Lesson 4's agent unchanged: keys, revocations, this cluster's grants, and Lesson 9's kept edits. The last test runs Lesson 9 end to end on a device: the camera goes off, the edit is kept beside its grants, the camera boots, its agent carries the edit home, its console applies it as the operator, and the domain clears what landed.
+Агент — единственная связь камеры наверх, и это агент урока 4 без изменений: ключи, отзывы, права этого кластера и сохранённые правки урока 9. Последний тест прогоняет урок 9 целиком на устройстве: камера выключается, правка сохраняется рядом с её правами, камера загружается, агент несёт правку домой, консоль применяет её от имени оператора, и домен убирает то, что дошло.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| An edit for a camera that is rebooting is refused with 404 | The door opened before the first publish; the domain got a complete, empty answer. Publish first. |
-| Footage from after a reboot lands in the previous epoch's directory | The epoch is kept in RAM or taken once at manufacture. Take it from flash, by CAS, on every boot. |
-| Cameras in the field die after two or three years | Heartbeats or snapshots are written to flash. Count flash writes per day in a test and put a number on it. |
-| The domain lists a camera as *configured — no worker reports it* | The snapshot shard is published, the heartbeat is not (or under another name). Both, named by the serial. |
-| A camera appears twice in the directory | Its `ref` changed — somebody made the id the serial on one path and not another. `ref` is the serial; the id is `1`. |
+| Правка для камеры, которая перезагружается, отклонена с 404 | Дверь открылась до первой публикации; домен получил полный пустой ответ. Сначала публикуйте. |
+| Видео после перезагрузки попадает в каталог предыдущей эпохи | Эпоха хранится в RAM или взята один раз на производстве. Берите её с флеша, по CAS, при каждой загрузке. |
+| Камеры в поле умирают через два-три года | Heartbeat'ы или снапшоты пишутся на флеш. Считайте записи на флеш в сутки в тесте и назовите число. |
+| Домен показывает камеру как *configured — no worker reports it* (настроена — ни один воркер о ней не сообщает) | Срез снапшота публикуется, heartbeat — нет (или под другим именем). Оба, названные серийным номером. |
+| Камера появляется в каталоге дважды | Её `ref` изменился — кто-то сделал номер серийником на одном пути и не на другом. `ref` — серийный номер; номер — `1`. |
 
-## Recap
+## Итог
 
-- A camera is a cluster of its own; "all cameras, one cluster" is raft among cameras, which the brief refused.
-- The domain reads a heartbeat and a snapshot shard. A device that publishes both, named by its serial, is read like a server room.
-- The unit is pinned: no controller, no slot, no assignment — absent, not forbidden.
-- The epoch fences nothing and is still taken on every boot, because the paths carry it.
-- RAM for what changes every pass, flash for what changes a few times a day — counted.
-- The door opens after the first publish, or the domain is told a complete answer that is false.
-- The camera's console decides edits against its own grants; the agent is its only link up.
+- Камера — отдельный кластер; «все камеры — один кластер» — это raft среди камер, от которого задание отказалось.
+- Домен читает heartbeat и срез снапшота. Устройство, публикующее оба под своим серийным номером, читается как серверная.
+- Единица закреплена: ни контроллера, ни слота, ни назначения — отсутствуют, а не запрещены.
+- Эпоха ничего не ограждает и всё равно берётся при каждой загрузке, потому что её несут пути.
+- RAM — для того, что меняется каждый проход, флеш — для того, что меняется несколько раз в день, — сосчитано.
+- Дверь открывается после первой публикации, иначе домену сообщают полный ответ, который ложен.
+- Консоль камеры решает правки по собственным правам; агент — её единственная связь наверх.
 
-## Exercises
+## Упражнения
 
-1. Make `boot` open the door first and run the test suite. Which test fails, and what exactly would the operator have seen?
-2. A camera keeps its configuration on a 1 MiB flash partition of 4 KiB blocks, rated for 10 000 erase cycles each, and a small write costs about three block erases once the file system's journal is counted. Compute the partition's lifetime if every heartbeat reached it (about a hundred days), and with the design as built.
-3. A sixteen-channel recorder that runs the platform is one device and sixteen cameras. Which parts of `DeviceCluster` change — the id, the snapshot, the epoch key — and which stay? (The brief's answer: rows by camera, `vms/devices/<device>` by device.)
-4. The camera's agent syncs every 30 s. What does a camera that has been off for a week do in its first pass, in what order, and what is the worst case for flash writes?
+1. Заставьте `boot` открывать дверь первой и прогоните тесты. Какой тест падает и что именно увидел бы оператор?
+2. Камера хранит конфигурацию в разделе флеша 1 МиБ из блоков по 4 КиБ, каждый рассчитан на 10 000 циклов стирания, и маленькая запись с учётом журнала файловой системы стоит около трёх стираний блока. Посчитайте срок жизни раздела, если бы до него доходил каждый heartbeat (около ста дней), и при построенной конструкции.
+3. Шестнадцатиканальный регистратор, на котором работает платформа, — это одно устройство и шестнадцать камер. Какие части `DeviceCluster` меняются — номер, снапшот, ключ эпохи, — а какие остаются? (Ответ задания: строки по камерам, `vms/devices/<device>` по устройству.)
+4. Агент камеры синхронизируется каждые 30 с. Что делает камера, выключенная неделю, в свой первый проход, в каком порядке, и какой худший случай по записям на флеш?
 
-## Where this is going
+## Что дальше
 
-One camera is a member like any other. [**Lesson 11**](11-hundreds-of-small-members.md) takes three hundred of them, a tenth of them off, and measures what the domain's read view, directory and forwarded write cost at that shape — which the module promised and never measured.
+Одна камера — такой же член, как любой другой. [**Урок 11**](11-hundreds-of-small-members.md) берёт триста таких, десятая часть выключена, и измеряет, сколько при такой форме стоят представление для чтения, каталог и пересылаемая запись домена — что модуль обещал и ни разу не измерил.

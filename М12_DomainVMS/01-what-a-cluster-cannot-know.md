@@ -1,57 +1,57 @@
-# Lesson 1 — What a Cluster Cannot Know
+# Урок 1 — Чего кластер не может знать
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a directory of directories over three clusters, an answer that says what it could not reach, and cluster-level placement by reachability — stored, by check-and-set, with a reason.
-**Time:** ~150 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** каталог каталогов над тремя кластерами, ответ, который говорит, до чего он не смог дотянуться, и размещение по кластерам по достижимости — сохранённое, записанное по CAS, с причиной.
+**Время:** ~150 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-М11 ended in an unusual place: everything works. A cluster's controller is the only writer of its configuration, its workers fail over by claiming their names back, its resources fence their own zombies, and the cluster knows where every camera is — in one raft, strongly consistent, with nothing above it. So the first thing this module has to do is justify its own existence, and the answer is short: exactly three things stop being knowable the moment there is a second cluster. Where is camera 7, when the cluster you are asking has never heard of it? Which cluster should a new camera go to? And — the one people forget — is the answer you just got *complete*?
+М11 закончился в необычном месте: всё работает. Контроллер кластера — единственный писатель его конфигурации, его воркеры переключаются, захватывая свои имена обратно, его ресурсы сами ограждают своих зомби, и кластер знает, где каждая камера, — в одном raft, строго согласованно, и ничего над ним нет. Поэтому первое, что должен сделать этот модуль, — оправдать своё существование, и ответ короткий: ровно три вещи перестают быть известными, как только появляется второй кластер. Где камера 7, если кластер, который вы спрашиваете, никогда о ней не слышал? В какой кластер ставить новую камеру? И — о чём забывают — *полон* ли ответ, который вы только что получили?
 
-The lesson is built around the property that makes those three questions a different module rather than the same module with bigger nouns: **no raft spans clusters.** Inside a cluster the directory has one current answer. Across clusters there is an aggregation over N directories, partial, stale by a bounded amount, and sometimes incomplete. That is the CAP boundary, and it was drawn for you by a network you stopped trusting rather than chosen.
+Урок построен вокруг свойства, из-за которого эти три вопроса — другой модуль, а не тот же самый с существительными покрупнее: **ни один raft не охватывает несколько кластеров.** Внутри кластера у каталога один текущий ответ. Поперёк кластеров — сводка по N каталогам: частичная, устаревшая на ограниченную величину, иногда неполная. Это граница CAP, и её не выбирали: её провела для вас сеть, которой вы перестали доверять.
 
-> **What you can verify without hardware.** Everything in this lesson runs against fakes in [`domainvms/`](domainvms/README.md): three clusters as three `FakeVariables` rafts with a switch to make one unreachable. `tests/test_lesson1_directory_and_placement.py` is the lesson's deliverable, and every line of output below came out of it. Nomad federation itself — two regions, one gossip pool, a forwarded read — is `deploy/federation.hcl` and `deploy/verify-bench.sh`, and needs the bench.
+> **Что проверяется без железа.** Всё в этом уроке работает на подделках из [`domainvms/`](domainvms/README.md): три кластера — три raft `FakeVariables` с переключателем, делающим один из них недоступным. `tests/test_lesson1_directory_and_placement.py` — результат урока, и каждая строка вывода ниже получена из него. Сама федерация Nomad — два региона, один пул gossip, пересланное чтение — это `deploy/federation.hcl` и `deploy/verify-bench.sh`, и ей нужен стенд.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **М11 Lesson 10** — the cluster directory: one scan of `vms/workers/*`, and why it is current inside one raft; and what a cluster publishes for a layer above — `vms/snapshot/<worker>`, one object per worker. This lesson aggregates several clusters' worth of those.
-- **М11 Lessons 2 and 5** — Variables belong to a region, and the three-stores rule.
-- **М11 Lesson 8** — the epoch is per camera, issued by check-and-set from the cluster's raft. This lesson shows why per-cluster raft is precisely the right scope for it.
-- **М9 Lesson 5** — `revision` as a monotonic integer. The convergence token here is that idea, one scope up.
+- **М11, урок 10** — каталог кластера: один скан `vms/workers/*` и почему внутри одного raft он актуален; и что кластер публикует для слоя выше — `vms/snapshot/<worker>`, по объекту на воркер. Этот урок сводит такие объекты нескольких кластеров.
+- **М11, уроки 2 и 5** — Variables принадлежат региону, и правило трёх хранилищ.
+- **М11, урок 8** — эпоха выдаётся на каждую камеру отдельно, по CAS из raft кластера. Этот урок показывает, почему raft на кластер — в точности правильная для неё граница.
+- **М9, урок 5** — `revision` как монотонное целое. Токен сходимости здесь — та же идея, уровнем выше.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Name the three things a cluster cannot answer, and why each needs the level above.
-2. Return *incomplete* as a first-class result, and say why a short list read as complete is worse than no list.
-3. Explain what Nomad federation is and is not — what regions share (nothing) and how a read crosses them.
-4. Place a camera on a **cluster** by reachability, store the decision with a reason, and prove two placers cannot disagree.
-5. Say why a dead cluster is not a placement trigger, and why the epoch needs no domain-wide issuer.
-6. Walk the domain's cold start and name the window in which a cluster is recording and invisible.
+1. Назвать три вещи, на которые кластер не может ответить, и почему каждой нужен уровень выше.
+2. Возвращать *неполный ответ* как полноправный результат и объяснить, почему короткий список, прочитанный как полный, хуже, чем никакого списка.
+3. Объяснить, что такое федерация Nomad и чем она не является: что делят регионы (ничего) и как чтение пересекает границу между ними.
+4. Разместить камеру на **кластер** по достижимости, сохранить решение с причиной и доказать, что два размещающих не могут разойтись.
+5. Объяснить, почему мёртвый кластер — не повод для размещения и почему эпохе не нужен выдающий на весь домен.
+6. Пройти холодный старт домена и назвать окно, в котором кластер пишет и невидим.
 
 ---
 
-## Step 1 — The three things
+## Шаг 1 — Три вещи
 
-Put М11's cluster directory in front of a second cluster and ask it the question it answers perfectly for its own workers:
+Поставьте каталог кластера из М11 перед вторым кластером и задайте ему вопрос, на который он безупречно отвечает для своих воркеров:
 
-| | Why a **cluster** cannot answer it |
+| | Почему **кластер** не может на это ответить |
 |---|---|
-| **Where is camera 7?** | A cluster answers for its own workers, correctly. Asked about a camera it does not have, it says *no* — and *no* is the wrong word, because it cannot tell **not mine** from **not anywhere** |
-| **Which cluster gets a new camera?** | The criterion is **reachability**: which clusters can see this site's network at all. No cluster knows what the others can reach |
-| **Is this answer complete?** | Only something that knows how many clusters exist can say a result is partial |
+| **Где камера 7?** | Кластер отвечает за своих воркеров, и верно. Спросите его про камеру, которой у него нет, — он скажет *нет*, и *нет* — неверное слово, потому что он не может отличить **не у меня** от **нигде** |
+| **Какой кластер получает новую камеру?** | Критерий — **достижимость**: какие кластеры вообще видят сеть этой площадки. Ни один кластер не знает, до чего дотягиваются другие |
+| **Полон ли этот ответ?** | Сказать, что результат частичный, может только тот, кто знает, сколько кластеров существует |
 
-Notice what is *not* in the table. Lookup within a cluster, placing a camera on a worker, rebalancing between workers, deciding how many workers there are — those are М11's and Nomad's, and a single-cluster customer gets all three with nothing above the cluster. The domain adds the level above; it does not repeat the level below. Keep that boundary in your head for the whole module, because every temptation to "just do it at the domain" is a temptation to build М11 again with worse consistency.
+Заметьте, чего в таблице *нет*. Поиск внутри кластера, размещение камеры на воркер, перебалансировка между воркерами, решение, сколько воркеров, — это дело М11 и Nomad, и заказчик с одним кластером получает всё это вообще без слоя над кластером. Домен добавляет уровень выше; уровень ниже он не повторяет. Держите эту границу в голове весь модуль: каждый соблазн «просто сделать это на домене» — это соблазн построить М11 заново, с худшей согласованностью.
 
-## Step 2 — Federation, and what it does not do
+## Шаг 2 — Федерация, и чего она не делает
 
-Nomad calls a cluster a *region*, and joining regions is *federation*. Read the two properties that matter before running anything:
+Кластер у Nomad называется *регионом*, а объединение регионов — *федерацией*. Прежде чем что-то запускать, прочитайте два свойства, которые имеют значение:
 
-- Regions are **fully independent**. They share no jobs, no clients, no state. Nothing replicates between them — not a Variable, not an allocation, not an ACL token's raft entry.
-- They are coupled by **gossip**, so a request submitted to any region's servers is **forwarded** to the right region and answered from there. `nomad var list -region south vms/workers/` run against a north server works, because north forwards it — though the domain does not do that: it reads one object per cluster (Step 3).
+- Регионы **полностью независимы**. У них нет общих заданий, клиентов и состояния. Между ними ничего не реплицируется — ни Variable, ни аллокация, ни запись raft о токене ACL.
+- Они связаны через **gossip**, поэтому запрос, отправленный серверам любого региона, **пересылается** в нужный регион и получает ответ оттуда. `nomad var list -region south vms/workers/`, запущенный на сервере north, работает, потому что north его пересылает, — хотя домен так не делает: он читает объекты каждого кластера (шаг 3).
 
-That is exactly the shape a domain needs and nothing more: each cluster keeps scheduling with the others unreachable, and the domain can *read across* them without *owning* them. `deploy/federation.hcl` is the south servers' configuration: a `region`, `authoritative_region = "north"` (for ACL policy replication, the one thing federation does replicate), and `retry_join` pointing at the other region's servers on the WAN gossip port.
+Это ровно та форма, которая нужна домену, и ничего сверх: каждый кластер продолжает планировать, когда остальные недоступны, а домен может *читать поперёк* них, не *владея* ими. `deploy/federation.hcl` — конфигурация серверов south: `region`, `authoritative_region = "north"` (для репликации политик ACL — единственного, что федерация всё-таки реплицирует) и `retry_join`, указывающий на серверы другого региона по порту WAN gossip.
 
-What federation does not give you is the thing people assume: a domain-wide raft. There is none. Which is why, in code, a domain is nothing more than a list:
+Чего федерация не даёт — так это того, что обычно предполагают: raft на весь домен. Его нет. Поэтому в коде домен — не больше чем список:
 
 ```python
 @dataclass
@@ -63,11 +63,11 @@ class Cluster:
     is_domain_cluster: bool  # the one that hosts the domain services — a stated decision
 ```
 
-`Federation.domain_cluster` raises if zero or two clusters are designated. Which cluster hosts the domain is a deployment decision someone wrote down, not wherever an installer happened to run a job first.
+`Federation.domain_cluster` бросает исключение, если назначено ноль кластеров или два. Какой кластер держит домен — решение о развёртывании, которое кто-то записал, а не то место, где установщику случилось первым запустить задание.
 
-## Step 3 — The directory of directories
+## Шаг 3 — Каталог каталогов
 
-`DomainDirectory` reads each cluster's `vms/snapshot/*` — one object per worker, the controller's copy of the camera rows placed on it with the server and a timestamp (М11 Lesson 10, М10A Lesson 25) — and merges. The shards are read the way the heartbeats beside them are read, a listing and a get per object; the age of a cluster's answer is the age of its *stalest* shard, because a directory is only as fresh as its oldest part. The rows themselves stay in each cluster's raft with one writer; what leaves is a copy with an age, and `ages()` shows it. The merge is ten lines; the part that matters is the return type:
+`DomainDirectory` читает `vms/snapshot/*` каждого кластера — по объекту на воркер, копию контроллера со строками камер, размещённых на этом воркере, с сервером и отметкой времени (М11, урок 10; М10A, урок 25), — и сводит. Срезы читаются так же, как лежащие рядом heartbeat'ы: листинг и по одному get на объект. Возраст ответа кластера — возраст его *самого старого* среза, потому что каталог свеж настолько, насколько свежа его самая старая часть. Сами строки остаются в raft каждого кластера с одним писателем; наружу уходит копия с возрастом, и `ages()` его показывает. Сведение занимает десять строк; важна в нём часть про возвращаемый тип:
 
 ```python
 @dataclass
@@ -84,7 +84,7 @@ class Answer:
         return not self.unreachable
 ```
 
-Run it over three clusters, then pull one:
+Запустите его над тремя кластерами, потом выдерните один:
 
 ```
 camera 1 is on w-0 (srv-1) in north
@@ -96,23 +96,23 @@ camera 7 was not found in the 2 cluster(s) I could reach; south unreachable — 
 camera 1 is on w-0 (srv-1) in north (and south could not be asked)
 ```
 
-Read the fourth line and the fifth line together. Both are "not found". The fourth is a fact about the domain; the fifth is a fact about the network, and the sentence says so, because a short list rendered as complete is how a missing-camera investigation closes on the wrong answer and how an access review misses the administrator who kept the site. Even the sixth line — a hit — carries the caveat, because "camera 1 is on w-0 in north" and "camera 1 is on w-0 in north *as far as I can see*" are different claims and the console must never upgrade one to the other.
+Прочитайте четвёртую и пятую строки вместе. Обе — «не найдено». Четвёртая — факт о домене; пятая — факт о сети, и фраза так и говорит, потому что короткий список, показанный как полный, — это то, как расследование пропавшей камеры закрывается с неверным ответом и как проверка доступа пропускает администратора, у которого остался доступ к площадке. Даже шестая строка — попадание — несёт оговорку, потому что «камера 1 на w-0 в north» и «камера 1 на w-0 в north, *насколько я вижу*» — разные утверждения, и консоль никогда не должна повышать одно до другого.
 
-The one condition the directory refuses to merge is two clusters claiming one camera. That is not a tie for the domain to break; it is a placement failure, and `where()` raises rather than guessing.
+Единственное, что каталог отказывается сводить, — два кластера, заявляющие одну камеру. Это не ничья, которую домен должен разрешить; это отказ размещения, и `where()` бросает исключение, а не гадает.
 
-**Whose id is it.** Every cluster's controller numbers its cameras from 1 (`vms/next_id`), so two clusters both have a camera 7 and the domain cannot ask by that number. It asks by **`ref`** — the name it gave the cluster when it forwarded the create, an operator field on the camera row (М10) that the snapshot and the workers' heartbeats carry back up. The cluster's id is the cluster's; the domain's ref is the domain's; the tests name three clusters that each have an id 1 and find the right one by ref every time.
+**Чей это номер.** Контроллер каждого кластера нумерует свои камеры с 1 (`vms/next_id`), так что камера 7 есть в обоих кластерах, и домен не может спрашивать по этому номеру. Он спрашивает по **`ref`** — имени, которое он дал кластеру, когда пересылал создание: это поле оператора в строке камеры (М10), и снапшот и heartbeat'ы воркеров несут его обратно наверх. Номер кластера принадлежит кластеру; `ref` домена — домену; тесты заводят три кластера, в каждом из которых есть номер 1, и каждый раз находят нужную камеру по `ref`.
 
-## Step 4 — Placement, one level up
+## Шаг 4 — Размещение уровнем выше
 
-М11 Lesson 10 placed cameras on workers by the workers' own capacity, under label constraints. This lesson adds the level above, and the division is about what each level *knows*:
+Урок 10 М11 размещал камеры на воркеры по собственной ёмкости воркеров, с ограничениями по меткам. Этот урок добавляет уровень выше, и деление идёт по тому, что каждый уровень *знает*:
 
-| Level | Decides | On | Because only it knows |
+| Уровень | Решает | По чему | Потому что только он знает |
 |---|---|---|---|
-| Nomad | which **server** runs a worker — and how many workers there are | resources, constraints, the autoscaler's metric | the servers |
-| Cluster (М11 Lesson 10) | which **worker** gets a camera | the workers' reported capacity, the server's labels | its own workers' headroom, accurately |
-| **Domain** (here) | which **cluster** gets a camera | **reachability** | which clusters exist, and what each can see |
+| Nomad | какой **сервер** запускает воркер — и сколько воркеров | ресурсы, ограничения, метрика автоскейлера | серверы |
+| Кластер (М11, урок 10) | какой **воркер** получает камеру | ёмкость, которую сообщают воркеры, метки сервера | запас своих воркеров, точно |
+| **Домен** (здесь) | какой **кластер** получает камеру | **достижимость** | какие кластеры существуют и что каждый видит |
 
-Reachability is the whole reason the level exists. A camera on the warehouse VLAN can be reached from the warehouse cluster and from nowhere else; spare capacity in the cloud cluster is irrelevant. Capacity only breaks ties among clusters that can actually see the camera, and even then the domain does not measure it — it reads each cluster's `vms_headroom` from its console's `/metrics` and believes the answer.
+Достижимость — вся причина существования этого уровня. Камера в VLAN склада достижима из кластера склада и больше ниоткуда; свободная ёмкость в облачном кластере не имеет значения. Ёмкость только разрешает ничьи между кластерами, которые камеру действительно видят, и даже тогда домен её не измеряет — он читает `vms_headroom` каждого кластера из `/metrics` его консоли и верит ответу.
 
 ```
 101 north | only cluster reaching vlan:a | rev 1
@@ -120,17 +120,17 @@ Reachability is the whole reason the level exists. A camera on the warehouse VLA
 refused: camera 103: no cluster in the domain reaches vlan:z
 ```
 
-Three things to notice. The refusal says *the domain cannot reach it*, never *cluster X is full* — the same rule as М11's *the system is full*. The reason is stored with the decision: `domain/placement/102` in the domain cluster's Variables reads
+Три вещи, на которые стоит обратить внимание. Отказ говорит *домен до неё не дотягивается*, никогда не *кластер X полон* — то же правило, что и *система полна* в М11. Причина хранится вместе с решением: `domain/placement/102` в Variables доменного кластера содержит
 
 ```
 {'cluster': 'south', 'reason': 'most headroom (40.0) among 2 reaching vlan:b', 'at': '1757500000.0', 'rev': '2'}
 ```
 
-so that at three in the morning *why is camera 102 in the south cluster* is a row with a reason and a time, not an inference. And placing camera 102 again changes nothing: placement is stored, not derived.
+— так что в три часа ночи *почему камера 102 в кластере south* — это строка с причиной и временем, а не вывод. И повторное размещение камеры 102 ничего не меняет: размещение хранится, а не выводится.
 
-## Step 5 — Two placers, and why that is fine
+## Шаг 5 — Два размещающих, и почему это нормально
 
-Nomad's `count = 1` is not exactly-one during a reschedule: a partitioned server may still be running the old placement service while the new one starts. Two placers could give one camera two clusters. The domain's answer is not "make sure there is one" — it cannot — but the same answer М11 gave for the epoch: **correctness comes from how the write is made, never from how many instances Nomad promises.**
+`count = 1` у Nomad — не «ровно один» во время перепланирования: отрезанный сервер может ещё гонять старую службу размещения, пока стартует новая. Два размещающих могли бы дать одной камере два кластера. Ответ домена — не «убедиться, что он один» (этого он не может), а тот же ответ, что М11 дал для эпохи: **корректность берётся из того, как делается запись, и никогда — из того, сколько экземпляров обещает Nomad.**
 
 ```python
 def _store(self, camera, cluster, reason, retries=5):
@@ -145,13 +145,13 @@ def _store(self, camera, cluster, reason, retries=5):
             continue                                 # the other placer won; re-read
 ```
 
-The test runs two placers with *opposite* preferences — one thinks north has more headroom, the other south — placing forty cameras concurrently, and asserts every camera ended in exactly one cluster. Whoever won each CAS, both placers agree afterwards, because the loser reads the winner's row instead of insisting.
+Тест запускает два размещающих с *противоположными* предпочтениями — один считает, что больше запаса у north, другой — у south, — которые одновременно размещают сорок камер, и проверяет, что каждая камера оказалась ровно в одном кластере. Кто бы ни выиграл каждый CAS, после этого оба размещающих согласны, потому что проигравший читает строку победителя, а не настаивает на своём.
 
-## Step 6 — What is not a trigger
+## Шаг 6 — Что не является поводом
 
-Only place a camera when you must: it is new, or an operator asked. Two events look like triggers and are not.
+Размещайте камеру, только когда обязаны: она новая или оператор попросил. Два события выглядят как повод, но им не являются.
 
-**A dead server** is not one — Nomad brings the worker back under the same name and its cameras follow it; that was М11's whole point. **A dead cluster** is not one either, for the opposite reason: those cameras are on that cluster's network and their footage on its resources. Nothing above can heal that, and re-placing them elsewhere produces workers in another cluster trying to reach a dead VLAN — busy, failing, and hiding the real fault behind thirty camera alarms.
+**Мёртвый сервер** — не повод: Nomad возвращает воркер под тем же именем, и его камеры следуют за ним; в этом и был весь смысл М11. **Мёртвый кластер** — тоже не повод, по противоположной причине: эти камеры в сети этого кластера, а их записи — на его ресурсах. Ничто сверху этого не вылечит, а переразмещение камер в другое место даёт воркеры в другом кластере, которые пытаются достучаться до мёртвого VLAN, — занятые, падающие и прячущие настоящий отказ за тридцатью тревогами по камерам.
 
 ```python
 try:
@@ -160,60 +160,60 @@ except Refused as e:
     # camera 8: the only cluster(s) reaching vlan:b (south) are unreachable; not placing elsewhere — nothing else can see it
 ```
 
-`ClusterPlacer.rebalance_across_clusters` exists only to raise `NotImplementedError` with the sentence from М11: a worker never crosses a cluster. The domain's job when a cluster dies is **honesty, not recovery**: report it as unreachable (distinct from its workers being unhealthy — you do not know which), show what is *unavailable rather than lost*, and refuse to move anything.
+`ClusterPlacer.rebalance_across_clusters` существует только затем, чтобы бросить `NotImplementedError` с фразой из М11: воркер никогда не пересекает границу кластера. Работа домена, когда умирает кластер, — **честность, а не восстановление**: сообщить, что кластер недоступен (отдельно от того, что его воркеры нездоровы, — вы не знаете, какое из двух), показать, что *недоступно, а не потеряно*, и отказаться что-либо перемещать.
 
-And the level below does its own part without being asked: `test_the_cluster_then_places_on_a_worker_and_the_domain_never_named_one` has the domain pick south by reachability, forward the create with a `ref` and a label, and south's controller put the camera on a worker whose server sees that VLAN — with the server in its reason. The domain stored `domain/placement/7 {cluster: south}` and nothing about workers, because it knows nothing about them.
+А уровень ниже делает свою часть, не дожидаясь просьбы: в `test_the_cluster_then_places_on_a_worker_and_the_domain_never_named_one` домен выбирает south по достижимости и пересылает создание с `ref` и меткой, а контроллер south ставит камеру на воркер, чей сервер видит этот VLAN, — с сервером в причине. Домен сохранил `domain/placement/7 {cluster: south}` и ничего о воркерах, потому что ничего о них не знает.
 
-## Step 7 — The epoch needs no domain
+## Шаг 7 — Эпохе домен не нужен
 
-A worry surfaces at this point: the fencing token from М11 Lesson 8 is issued from a per-cluster raft, and now there are several rafts. Does the domain need an issuer?
+На этом месте всплывает беспокойство: токен ограждения из урока 8 М11 выдаётся из raft кластера, а raft теперь не один. Нужен ли домену выдающий?
 
-No, and the reason is worth saying out loud because it looks like luck. The epoch only ever needs to be monotonic *for one camera*, and a camera lives in exactly one cluster for its whole life — its workers never cross one. So per-region raft is not a compromise; it is precisely the right scope. The failover rule was chosen in М11 for archive locality; it happens to make the fencing token's scope correct as well. When two independent arguments land on the same boundary, the boundary is usually real.
+Нет, и причину стоит сказать вслух, потому что это похоже на везение. Эпоха должна быть монотонной только *для одной камеры*, а камера всю жизнь живёт ровно в одном кластере — её воркеры никогда не пересекают его границу. Поэтому raft на регион — не компромисс, а в точности правильная граница. Правило переключения было выбрано в М11 ради локальности архива; оно же делает правильной и границу токена ограждения. Когда два независимых довода приходят к одной границе, граница обычно настоящая.
 
-## Step 8 — Cold start
+## Шаг 8 — Холодный старт
 
-М11 Lesson 8 walked a worker's failover. A domain's *first* start has a step that sequence never had: before the signer runs, no server in the domain can present a certificate. The order is
+Урок 8 М11 прошёл переключение воркера. У *первого* старта домена есть шаг, которого в той последовательности не было: пока не запущен подписывающий, ни один сервер домена не может предъявить сертификат. Порядок такой:
 
 ```
 Nomad up (its own install-time TLS) → the signer scheduled in the domain cluster
 → certificates issued → the clusters' consoles and agents come up; snapshots and heartbeats become visible
 ```
 
-Name the window: between "Nomad up" and "certificates issued", every cluster is **recording** — that is the whole design — but cannot yet be seen by anything above it. Nothing in that sequence is allowed to depend on a cluster, because a student who has not seen it draws a signer that reads its configuration from a cluster whose console needs a certificate from the signer. `Signer.__init__` is the concrete form: it loads its keys from `domain/signer` in the domain cluster's raft or creates them on first start, and reads nothing else.
+Назовите окно: между «Nomad поднят» и «сертификаты выданы» каждый кластер **пишет** — в этом весь проект, — но ничто сверху его ещё не видит. Ничто в этой последовательности не вправе зависеть от кластера, потому что студент, который её не видел, нарисует подписывающего, читающего свою конфигурацию из кластера, чьей консоли нужен сертификат от подписывающего. `Signer.__init__` — конкретная форма этого правила: он загружает свои ключи из `domain/signer` в raft доменного кластера или создаёт их при первом старте и больше ничего не читает.
 
-**Deliverable:** three clusters, one directory; `where()` finds a camera in each; make one cluster unreachable and show the console saying **what it does not know** rather than a shorter list. Then place a camera on each network, read the reason back from the Variable, race two placers, and show a dead cluster refusing to become a trigger.
+**Результат:** три кластера, один каталог; `where()` находит камеру в каждом; сделайте один кластер недоступным и покажите, что консоль говорит, **чего она не знает**, а не показывает список покороче. Затем разместите по камере в каждой сети, прочитайте причину из Variable, устройте гонку двух размещающих и покажите, что мёртвый кластер отказывается становиться поводом.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| `where()` says *in no cluster of the domain* for a camera you know exists | The cluster holding it answered — with a snapshot that does not list it yet: its controller publishes every five seconds, and `ages()` says how old the copy is. Or you asked by the cluster's id instead of the domain's `ref`. Not a domain fault. |
-| `where()` says *unreachable* for a cluster that is up | The forwarding path: the region name in the request does not match the server's `region`, or WAN gossip is not established (`nomad server members` shows one region). |
-| Placement always picks the same cluster | Every candidate reports the same headroom and the tiebreak is by name. Fine — or the headroom callback is returning a constant, which it does by default. |
-| `place()` raises `Conflict` after five retries | Something other than a placer is writing `domain/placement/*`. Find it; the placement service is the only writer of that prefix (`deploy/signer-policy.hcl`). |
-| `domain_cluster` raises | Zero or two clusters have `is_domain_cluster=True`. It is a decision; make it once. |
+| `where()` говорит *in no cluster of the domain* про камеру, которая точно существует | Кластер, где она есть, ответил — снапшотом, в котором её ещё нет: его контроллер публикует раз в пять секунд, и `ages()` говорит, насколько стара копия. Или вы спросили по номеру кластера, а не по `ref` домена. Это не отказ домена. |
+| `where()` говорит *unreachable* про кластер, который работает | Путь пересылки: имя региона в запросе не совпадает с `region` сервера, или WAN gossip не установлен (`nomad server members` показывает один регион). |
+| Размещение всегда выбирает один и тот же кластер | Все кандидаты сообщают одинаковый запас, и ничья разрешается по имени. Это нормально — или функция обратного вызова для запаса возвращает константу, что она и делает по умолчанию. |
+| `place()` бросает `Conflict` после пяти повторов | В `domain/placement/*` пишет кто-то, кроме размещающего. Найдите его: служба размещения — единственный писатель этого префикса (`deploy/signer-policy.hcl`). |
+| `domain_cluster` бросает исключение | `is_domain_cluster=True` у нуля или у двух кластеров. Это решение; примите его один раз. |
 
-## Recap
+## Итог
 
-- A cluster cannot tell *not mine* from *not anywhere*, cannot know what other clusters reach, and cannot know whether an answer is complete. Everything else is М11's.
-- **No raft spans clusters.** The domain's directory is an aggregation: partial, stale by a bounded amount, sometimes incomplete — and `Answer` carries the incompleteness as a field, never as an absence.
-- Federation shares nothing and forwards reads. That is enough.
-- Placement at the domain is by **reachability**, stored with a reason, written by CAS — so two placers agree and nobody counts instances.
-- A dead server brings the worker back under Nomad; a dead cluster moves nothing, and the domain says so.
-- The domain asks by `ref`, its own name for a camera; a cluster's ids are the cluster's.
-- The epoch's scope is the cluster, and that is correct, not lucky.
-- Cold start: the signer first, and nothing in the sequence depends on a cluster.
+- Кластер не может отличить *не у меня* от *нигде*, не может знать, до чего дотягиваются другие кластеры, и не может знать, полон ли ответ. Всё остальное — М11.
+- **Ни один raft не охватывает несколько кластеров.** Каталог домена — сводка: частичная, устаревшая на ограниченную величину, иногда неполная, — и `Answer` несёт неполноту как поле, а не как отсутствие.
+- Федерация ничего не делит и пересылает чтения. Этого достаточно.
+- Размещение на уровне домена — по **достижимости**, хранится с причиной, пишется по CAS — поэтому два размещающих соглашаются, и никто не считает экземпляры.
+- Мёртвый сервер: Nomad возвращает воркер; мёртвый кластер: ничего не перемещается, и домен так и говорит.
+- Домен спрашивает по `ref`, своему имени для камеры; номера кластера принадлежат кластеру.
+- Граница эпохи — кластер, и это правильно, а не везение.
+- Холодный старт: сначала подписывающий, и ничто в последовательности не зависит от кластера.
 
-## Exercises
+## Упражнения
 
-1. Add a fourth cluster that reaches *both* `vlan:a` and `vlan:b`, then place twenty cameras on each network and count where they went. Then make the fourth cluster report headroom 0 and repeat. Say in one sentence what the domain measured and what it believed.
-2. Write the one-line console message for a camera that is *found* while another cluster is unreachable, and defend keeping the caveat on a hit.
-3. Make `where()` return the first claimant when two clusters claim a camera, run the conflict test, and explain what an operator would have seen a week later.
-4. Take the cold-start sequence and reorder any two steps. Say what breaks, and whether it breaks loudly.
-5. The design record's open question: should the domain cluster be chosen automatically when the designated one dies? Argue both sides in a paragraph each; then say which one the deliverable of Lesson 7 makes easier.
+1. Добавьте четвёртый кластер, который дотягивается *и* до `vlan:a`, и до `vlan:b`, затем разместите по двадцать камер в каждой сети и посчитайте, куда они попали. Потом заставьте четвёртый кластер сообщать запас 0 и повторите. Скажите одной фразой, что домен измерил и чему поверил.
+2. Напишите однострочное сообщение консоли для камеры, которая *найдена*, пока другой кластер недоступен, и защитите решение оставить оговорку при попадании.
+3. Заставьте `where()` возвращать первого заявившего, когда камеру заявляют два кластера, прогоните тест конфликта и объясните, что оператор увидел бы через неделю.
+4. Возьмите последовательность холодного старта и переставьте любые два шага. Скажите, что ломается и громко ли.
+5. Открытый вопрос из проектной записки: должен ли доменный кластер выбираться автоматически, когда назначенный умирает? Приведите доводы за обе стороны, по абзацу на каждую; затем скажите, какую из них облегчает результат урока 7.
 
-## Where this is going
+## Что дальше
 
-You have a directory that knows what it does not know, and a placement service that writes safely and refuses honestly. Neither of them writes anything a cluster can see yet — and that is on purpose. [**Lesson 2**](02-shadow-mode-the-domain-that-writes-nothing.md) runs the domain in shadow: it computes what the directory *would* say, watches what the workers report, and produces a divergence report against your own cluster before it is allowed to change anything.
+У вас есть каталог, который знает, чего он не знает, и служба размещения, которая пишет безопасно и честно отказывает. Ни одна из них пока не пишет ничего, что видел бы кластер, — и это намеренно. [**Урок 2**](02-shadow-mode-the-domain-that-writes-nothing.md) запускает домен в теневом режиме: он вычисляет, что *сказал бы* каталог, следит за тем, что сообщают воркеры, и выдаёт отчёт о расхождениях с вашим собственным кластером, прежде чем ему позволят что-либо менять.

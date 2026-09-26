@@ -1,58 +1,58 @@
-# Lesson 2 — Shadow Mode: The Domain That Writes Nothing
+# Урок 2 — Теневой режим: домен, который ничего не пишет
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a divergence report — six kinds of disagreement between what the directory says and what the clusters' workers report, told apart by distance and time — and the written criterion for letting the domain write.
-**Time:** ~90 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** отчёт о расхождениях — шесть видов несогласия между тем, что говорит каталог, и тем, что сообщают воркеры кластеров, различённых по расстоянию и времени, — и записанный критерий, по которому домену разрешают писать.
+**Время:** ~90 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-The course has a convention: the stand-in before the real thing. `camera_sim.py` before the pipeline, `filesink` before `kvssink`, a fake actuator before GStreamer. At the top layer the convention has teeth, because a domain that writes into three clusters' worth of state on its first day, on the strength of a model nobody has checked against reality, is how a fleet ends up with cameras nobody placed and placements nobody runs.
+В курсе есть соглашение: заглушка раньше настоящего. `camera_sim.py` раньше конвейера, `filesink` раньше `kvssink`, поддельный исполнитель раньше GStreamer. На верхнем слое у этого соглашения есть зубы: домен, который в первый же день пишет в состояние трёх кластеров, опираясь на модель, которую никто не сверил с реальностью, — это как раз то, как у парка появляются камеры, которые никто не размещал, и размещения, которые никто не исполняет.
 
-So the domain's first mode is one where it computes what it *would* do, observes what actually is, and prints the difference. The point is not caution for its own sake. It is that the difference is the design work: every camera running that the model does not describe is a gap in the model, and driving that number to zero is what "the domain is correct" means. You cannot skip it, only postpone it to a worse moment.
+Поэтому первый режим домена — тот, в котором он вычисляет, что *сделал бы*, наблюдает, что есть на самом деле, и печатает разницу. Смысл не в осторожности ради осторожности. Смысл в том, что эта разница и есть проектная работа: каждая работающая камера, которую модель не описывает, — дыра в модели, и довести это число до нуля — вот что значит «домен корректен». Пропустить это нельзя, можно только отложить до худшего момента.
 
-> **What you can verify without hardware.** All of it. `domain/shadow.py` takes the directory's view, the workers' reports and a clock, and returns findings; `reports_from(fed)` builds those reports from what real clusters publish — heartbeats and `vms/epoch/*` — and `test_the_report_from_what_clusters_publish` runs it over М11's real controller and workers; `tests/test_lesson2_shadow.py` is the lesson. Running it against live traffic — real workers, real revisions moving — is the bench's job and the reason shadow mode exists.
+> **Что проверяется без железа.** Всё. `domain/shadow.py` берёт представление каталога, отчёты воркеров и часы и возвращает находки; `reports_from(fed)` собирает эти отчёты из того, что публикуют настоящие кластеры, — heartbeat'ов и `vms/epoch/*`, — а `test_the_report_from_what_clusters_publish` прогоняет его над настоящими контроллером и воркерами М11; `tests/test_lesson2_shadow.py` — сам урок. Запустить его на живом трафике — настоящие воркеры, настоящие ревизии в движении — задача стенда и причина, по которой теневой режим существует.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 1** — the directory of directories and cluster placement; this lesson compares them to reality.
-- **М11 Lessons 8–9** — the epoch. One of the six kinds is a report under a superseded epoch, and it is the fencing rule catching a writer that should have stopped.
-- **М9 Lesson 6** — `observed_revision` and the `>=` rule. Shadow mode reads the same numbers, one level up.
-- **М9 Lesson 9** — positions and reasons. The report has kinds, not a health enum.
+- **Урок 1** — каталог каталогов и размещение по кластерам; этот урок сравнивает их с реальностью.
+- **М11, уроки 8–9** — эпоха. Один из шести видов — отчёт под вытесненной эпохой, и это правило ограждения, поймавшее писателя, который должен был остановиться.
+- **М9, урок 6** — `observed_revision` и правило `>=`. Теневой режим читает те же числа, уровнем выше.
+- **М9, урок 9** — положения и причины. У отчёта есть виды, а не перечисление здоровья.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Compute a divergence report from the domain's placement, the clusters' epochs and the workers' reports.
-2. Name the six kinds and say which are faults, which are normal, and which are measurements.
-3. Tell *slow* from *stuck* by distance and by time, and say why "diverged" is an alert you learn to ignore.
-4. State the one number and defend its target.
-5. Write the exit criterion for switching the domain into write mode.
+1. Вычислить отчёт о расхождениях по размещению домена, эпохам кластеров и отчётам воркеров.
+2. Назвать шесть видов и сказать, какие из них — отказы, какие — норма, а какие — измерения.
+3. Отличить *медленно* от *застряло* по расстоянию и по времени и объяснить, почему «разошлось» — тревога, которую учатся игнорировать.
+4. Назвать единственное число и защитить его целевое значение.
+5. Записать критерий выхода для перевода домена в режим записи.
 
 ---
 
-## Step 1 — Ordering beats equality
+## Шаг 1 — Порядок лучше равенства
 
-Before the taxonomy, the token. Every camera row carries a `revision` its controller bumps on each edit and every worker reports the `observed_revision` it has applied (М10 Lesson 4), and the domain must be able to say how far behind a worker is on a camera. The token could be an opaque value compared for equality, or an ordered revision. Ordering wins three ways:
+Прежде таксономии — токен. Каждая строка камеры несёт `revision`, которую её контроллер увеличивает при каждой правке, и каждый воркер сообщает `observed_revision`, которую он применил (М10, урок 4), а домен должен уметь сказать, насколько воркер отстаёт по камере. Токен мог бы быть непрозрачным значением, которое сравнивают на равенство, или упорядоченной ревизией. Порядок выигрывает трижды:
 
-1. **It expresses distance, not just difference.** "Diverged" is an alert you learn to ignore; "behind by four revisions for forty minutes" is an incident.
-2. **It permits skip-ahead.** A worker offline across revisions 7, 8 and 9 converges straight to 9 without replaying. Edge links go down constantly; this is not an optimisation.
-3. **It survives replay and reordering.** A late report carrying a lower revision is ignored rather than ambiguous.
+1. **Он выражает расстояние, а не только различие.** «Разошлось» — тревога, которую учатся игнорировать; «отстаёт на четыре ревизии сорок минут» — инцидент.
+2. **Он позволяет перескакивать.** Воркер, который был офлайн на ревизиях 7, 8 и 9, сходится сразу к 9, ничего не проигрывая заново. Каналы на краю сети падают постоянно; это не оптимизация.
+3. **Он переживает повторы и перестановки.** Опоздавший отчёт с меньшей ревизией просто игнорируется, а не становится неоднозначным.
 
-The cost: you lose proof that one *precise* configuration was applied at one moment. If that must be auditable it belongs in an audit log, not in the convergence token. The report below uses `revision - observed_revision` everywhere, and never asks whether two blobs are equal.
+Цена: теряется доказательство, что в определённый момент была применена одна *точная* конфигурация. Если это нужно для аудита, место этому — в журнале аудита, а не в токене сходимости. Отчёт ниже везде использует `revision - observed_revision` и никогда не спрашивает, равны ли два блоба.
 
-## Step 2 — The six kinds
+## Шаг 2 — Шесть видов
 
-`Shadow.compare()` takes three things: `placed` (camera ref → the cluster the domain's `domain/placement/<ref>` says), `epochs` ((cluster, ref) → the current epoch from that cluster's `vms/epoch/<id>`), and the workers' reports — each worker's heartbeat, carrying per camera the epoch it holds, the row's `revision` and its `observed_revision`. Everything is keyed by the domain's `ref` (Lesson 1), because two clusters both have an id 1. It returns findings of six kinds:
+`Shadow.compare()` принимает три вещи: `placed` (`ref` камеры → кластер, который называет `domain/placement/<ref>` домена), `epochs` ((кластер, `ref`) → текущая эпоха из `vms/epoch/<id>` этого кластера) и отчёты воркеров — heartbeat каждого воркера, несущий для каждой камеры эпоху, которую он держит, `revision` строки и её `observed_revision`. Всё ключуется по `ref` домена (урок 1), потому что номер 1 есть в обоих кластерах. Возвращаются находки шести видов:
 
-| Kind | Meaning | Fault? |
+| Вид | Значение | Отказ? |
 |---|---|---|
-| **lagging** | behind, within grace | No — normal |
-| **stalled** | behind past grace, and progress static | **Yes** — the real "it didn't take effect" |
-| **orphaned** | placed by the domain, and no worker in the domain runs it | Yes |
-| **unmanaged** | a cluster runs a camera the domain never placed | In shadow mode, **a measurement, not a fault** |
-| **conflict** | two workers — or two clusters — claim one camera, or the claimant's cluster is not the placee | Always — a placement or fencing failure |
-| **stale_epoch** | a report under a superseded epoch | The fencing rule catching a writer that should have stopped |
+| **lagging** (отстаёт) | отстаёт, в пределах допуска | Нет — норма |
+| **stalled** (застрял) | отстаёт дольше допуска, и прогресса нет | **Да** — настоящее «не применилось» |
+| **orphaned** (сирота) | размещена доменом, и ни один воркер домена её не исполняет | Да |
+| **unmanaged** (неучтённая) | кластер исполняет камеру, которую домен никогда не размещал | В теневом режиме — **измерение, а не отказ** |
+| **conflict** (конфликт) | камеру заявляют два воркера — или два кластера, — или кластер заявившего не тот, куда её разместили | Всегда — отказ размещения или ограждения |
+| **stale_epoch** (устаревшая эпоха) | отчёт под вытесненной эпохой | Правило ограждения, поймавшее писателя, который должен был остановиться |
 
-One world, four workers, and everything goes wrong at once:
+Один мир, четыре воркера, и всё идёт не так одновременно:
 
 ```
 lagging=0  stalled=0  orphaned=1  unmanaged=1  conflict=1  stale_epoch=1
@@ -62,13 +62,13 @@ lagging=0  stalled=0  orphaned=1  unmanaged=1  conflict=1  stale_epoch=1
   orphaned     camera=9 where=north: placed, and no worker in the domain runs it
 ```
 
-Read the first and last lines together, because they are one story. w-2 reports camera 9 under epoch 1 while the cluster issued epoch 2 for it — the old instance of w-2 is still alive somewhere and still talking. Its claim counts for nothing (the code drops a stale-epoch claim before counting), which is why camera 9, placed in north, is then *orphaned*: the only thing claiming it was a zombie. That is М11 Lesson 9's fence, seen from the domain: a writer that should have stopped, caught by the number in its own report.
+Прочитайте первую и последнюю строки вместе, потому что это одна история. w-2 сообщает камеру 9 под эпохой 1, тогда как кластер выдал для неё эпоху 2: старый экземпляр w-2 всё ещё где-то жив и всё ещё говорит. Его заявка не значит ничего (код отбрасывает заявку с устаревшей эпохой прежде, чем считать), и поэтому камера 9, размещённая в north, оказывается *сиротой*: единственным, кто её заявлял, был зомби. Это ограждение из урока 9 М11, увиденное со стороны домена: писатель, который должен был остановиться, пойман числом в собственном отчёте.
 
-The conflict is the other kind of wrong. Two live workers both say they run camera 3. Whatever caused it — a move that did not remove the camera from the source's assignment, an ACL that let two controllers write one key — it is never a tie to break and always a fault to raise. The other conflict, `placed in south, running in north`, is the domain's own level caught out: its placement row and a cluster's snapshot disagree.
+Конфликт — другой род ошибки. Два живых воркера оба говорят, что исполняют камеру 3. Что бы ни было причиной — переезд, который не убрал камеру из назначения источника, ACL, позволивший двум контроллерам писать один ключ, — это никогда не ничья, которую надо разрешить, и всегда отказ, о котором надо заявить. Второй вид конфликта, `placed in south, running in north`, ловит на ошибке уже уровень самого домена: его строка размещения и снапшот кластера расходятся.
 
-## Step 3 — Slow versus stuck
+## Шаг 3 — Медленно или застряло
 
-The lagging/stalled boundary is the one that needs a clock, and it is worth watching move:
+Граница между lagging и stalled — та, которой нужны часы, и на её движение стоит посмотреть:
 
 ```
 t=100  observed=5  revision=7   lagging     behind by 2 revision(s) for 0s
@@ -77,15 +77,15 @@ t=210  observed=6  revision=7   lagging     behind by 1 revision(s) for 0s
 t=220  observed=7  revision=7   (clean)
 ```
 
-`Shadow` remembers, per worker and camera, the last `observed_revision` it saw and *when it changed*. Behind by two for a hundred seconds with no movement is *stalled* — the grace was sixty. The moment progress moves, the clock restarts and the worker is merely *lagging* again on that camera, even though it is still behind. Being behind is not the fault. Being behind and not moving is.
+`Shadow` помнит для каждой пары воркер–камера последнюю `observed_revision`, которую видел, и *когда она изменилась*. Отставание на две ревизии сто секунд без движения — это *stalled*: допуск был шестьдесят. Как только прогресс сдвигается, часы перезапускаются, и воркер снова всего лишь *lagging* по этой камере, хотя всё ещё отстаёт. Отставание — не отказ. Отказ — отставание без движения.
 
-This is М9's `>=` rule with time added. A worker that reports `observed_revision = 5` against `revision = 7` is lagging; the same report ten minutes later, unchanged, means the reconcile loop on that worker is not converging on that camera, and *that* is what pages someone. "Diverged" would have fired at t=100 and been ignored by t=200.
+Это правило `>=` из М9 с добавленным временем. Воркер, сообщающий `observed_revision = 5` при `revision = 7`, отстаёт; тот же отчёт десять минут спустя, без изменений, значит, что цикл согласования на этом воркере не сходится по этой камере, и *вот это* поднимает дежурного. «Разошлось» сработало бы при t=100, а к t=200 его бы уже игнорировали.
 
-## Step 4 — The one number
+## Шаг 4 — Единственное число
 
 `unmanaged == 0`.
 
-Anything running that the model does not describe is a gap in the model. In shadow mode it is not a fault — the domain has not placed anything yet, so on day one *everything* is unmanaged — and driving it to zero is the work: importing every camera the clusters already run into the domain's placement, with a reason and a `ref`, until the report is clean. A domain switched to write mode with unmanaged cameras will, at its first rebalance, treat them as free space.
+Всё, что работает и не описано моделью, — дыра в модели. В теневом режиме это не отказ — домен ещё ничего не разместил, так что в первый день неучтённое *всё*, — а довести это число до нуля и есть работа: импортировать каждую камеру, которую кластеры уже исполняют, в размещение домена, с причиной и `ref`, пока отчёт не станет чистым. Домен, переведённый в режим записи с неучтёнными камерами, при первой же перебалансировке сочтёт их свободным местом.
 
 ```python
 def exit_criterion(rep, consecutive_clean, required=3):
@@ -98,37 +98,37 @@ def exit_criterion(rep, consecutive_clean, required=3):
     return True, "unmanaged == 0, no faults, stable across reports: the domain may write"
 ```
 
-The criterion is code because a criterion that lives in someone's head is renegotiated at the moment it is inconvenient. Three consecutive clean reports is the default; the number is yours to defend.
+Критерий — это код, потому что критерий, который живёт у кого-то в голове, пересматривают в тот момент, когда он неудобен. По умолчанию — три чистых отчёта подряд; защищать это число — вам.
 
-**Deliverable:** a divergence report against your own cluster from Lesson 1 — with a camera you never placed, a zombie you resumed with `kill -CONT` (М11 Lesson 9), and a worker whose reconcile loop you paused — and the written exit criterion, met.
+**Результат:** отчёт о расхождениях с вашим собственным кластером из урока 1 — с камерой, которую вы никогда не размещали, зомби, которого вы разбудили `kill -CONT` (М11, урок 9), и воркером, чей цикл согласования вы приостановили, — и записанный критерий выхода, выполненный.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| Every worker is *stalled* immediately | The grace is shorter than the workers' heartbeat interval; a worker cannot move `observed_revision` faster than it reports. Grace ≥ 2 × the heartbeat interval. |
-| A worker flips lagging/stalled/lagging | Progress moves in bursts (a batch of edits, a long reconcile). Widen the grace or look at why one pass takes that long — М9 Lesson 7's shard size. |
-| `unmanaged` never reaches zero | Something adds cameras at a cluster's console without going through the domain's placement — which is allowed, and is what a single-cluster customer does all day. In shadow mode that is the measurement working: find the path and route it. |
-| `stale_epoch` on a worker that is healthy | The `epochs` map is stale — the domain read `vms/epoch/<id>` before the camera's last restart. Re-read; if it persists, the worker is not taking the epoch before it starts (М10 Lesson 4's gate). |
-| `orphaned` for a camera you know is recording | Its worker's report was dropped as stale-epoch (see above), or the worker has not heartbeaten since, or its `ref` is missing — the cluster's console created it without one. All three are worth knowing. |
+| Каждый воркер сразу *stalled* | Допуск короче интервала heartbeat'ов воркеров; воркер не может сдвинуть `observed_revision` быстрее, чем отчитывается. Допуск ≥ 2 × интервал heartbeat'а. |
+| Воркер скачет lagging/stalled/lagging | Прогресс идёт рывками (пачка правок, долгое согласование). Расширьте допуск или разберитесь, почему один проход занимает столько времени, — размер шарда из урока 7 М9. |
+| `unmanaged` никогда не доходит до нуля | Что-то добавляет камеры в консоли кластера в обход размещения домена — это разрешено, и заказчик с одним кластером делает так целый день. В теневом режиме это значит, что измерение работает: найдите этот путь и направьте его через домен. |
+| `stale_epoch` у здорового воркера | Карта `epochs` устарела — домен прочитал `vms/epoch/<id>` до последнего перезапуска камеры. Прочитайте снова; если не проходит, воркер не берёт эпоху перед стартом (затвор из урока 4 М10). |
+| `orphaned` у камеры, которая точно пишет | Отчёт её воркера отброшен из-за устаревшей эпохи (см. выше), или воркер с тех пор не присылал heartbeat, или у неё нет `ref` — консоль кластера создала её без него. Все три стоит знать. |
 
-## Recap
+## Итог
 
-- The domain's first mode computes, observes, and prints the difference. It writes nothing.
-- Six kinds: lagging (normal), stalled (fault), orphaned (fault), unmanaged (a measurement here), conflict (always a fault), stale_epoch (the fence, seen from above).
-- Slow versus stuck is distance *and* time; "diverged" is neither.
-- The one number is `unmanaged == 0`, and reaching it is the design work, not a formality.
-- The exit criterion is code, met before the domain writes.
+- Первый режим домена вычисляет, наблюдает и печатает разницу. Он ничего не пишет.
+- Шесть видов: lagging (норма), stalled (отказ), orphaned (отказ), unmanaged (здесь — измерение), conflict (всегда отказ), stale_epoch (ограждение, увиденное сверху).
+- Медленно или застряло — это расстояние *и* время; «разошлось» — ни то ни другое.
+- Единственное число — `unmanaged == 0`, и дойти до него — проектная работа, а не формальность.
+- Критерий выхода — это код, и он выполнен до того, как домен начнёт писать.
 
-## Exercises
+## Упражнения
 
-1. Add a seventh kind, *duplicate placement* — a camera placed in two clusters in the domain's own rows — and say whether it can happen if `domain/placement/<ref>` is written by CAS. If it cannot, delete the kind and write down why.
-2. The progress memory is per worker *and* camera. Make it per worker only, and say what the report loses for a worker that converges forty-nine cameras and stalls on one.
-3. Run the report with grace = 0. Count the stalled findings against the Lesson 1 cluster and say what the number measures.
-4. Write the shadow report as a Prometheus exposition: one gauge per kind, labelled by cluster. Which kind deserves an alert with no threshold?
+1. Добавьте седьмой вид, *двойное размещение* — камера, размещённая в двух кластерах в собственных строках домена, — и скажите, может ли такое случиться, если `domain/placement/<ref>` пишется по CAS. Если не может, удалите этот вид и запишите почему.
+2. Память о прогрессе ведётся по воркеру *и* камере. Сделайте её только по воркеру и скажите, что теряет отчёт для воркера, который сошёлся по сорока девяти камерам и застрял на одной.
+3. Прогоните отчёт с допуском 0. Посчитайте находки stalled на кластере из урока 1 и скажите, что измеряет это число.
+4. Запишите теневой отчёт в формате экспозиции Prometheus: по одному gauge на вид, с меткой кластера. Какой вид заслуживает тревоги без порога?
 
-## Where this is going
+## Что дальше
 
-The domain can now see. [**Lesson 3**](03-the-api-and-what-it-refuses.md) lets people see it: the camera list assembled from the same snapshots this lesson read, the write API that forwards to the owning cluster and refuses to set placement at either level, and — because someone has to serve browsers and it must not be a worker — the console and the live gateway.
+Теперь домен видит. [**Урок 3**](03-the-api-and-what-it-refuses.md) даёт людям увидеть его самого: список камер, собранный из тех же снапшотов, что читал этот урок, API записи, который пересылает в кластер-владелец и отказывается задавать размещение на любом из уровней, и — потому что кто-то должен обслуживать браузеры, и это не должен быть воркер, — консоль и шлюз живого видео.

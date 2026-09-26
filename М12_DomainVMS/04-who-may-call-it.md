@@ -1,47 +1,47 @@
-# Lesson 4 — Who May Call It
+# Урок 4 — Кому можно его звать
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a domain signer that issues tokens naming a subject and nothing else; clusters that verify them offline against a public key and check their own grants; an agent that carries trust and grants into every cluster; identity that never reaches a worker; a revocation window stated in advance and then measured; and break-glass, out loud.
-**Time:** ~180 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** подписывающий домена, который выдаёт токены, называющие субъект и ничего больше; кластеры, которые проверяют их офлайн по публичному ключу и сверяются со своими правами; агент, который несёт доверие и права в каждый кластер; идентичность, которая никогда не доходит до воркера; окно отзыва, заявленное заранее и затем измеренное; и аварийный доступ — вслух.
+**Время:** ~180 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-Lesson 3 left a write API on every cluster's console, and it is unauthenticated. That is N endpoints where there used to be one. Cluster-owned configuration — one controller per cluster, the only writer of its rows — is why an operator can edit a camera while the domain is unreachable, and it is also why the thing to protect is now per cluster. This is a real cost of the design and it belongs next to the benefit rather than three modules later.
+Урок 3 оставил на консоли каждого кластера API записи, и этот API без аутентификации. Это N точек входа там, где раньше была одна. Конфигурация, которой владеет кластер, — один контроллер на кластер, единственный писатель своих строк, — это причина, по которой оператор может править камеру, пока домен недоступен, и она же причина, по которой защищать теперь приходится каждый кластер. Это настоящая цена проекта, и ей место рядом с выгодой, а не тремя модулями позже.
 
-The lesson is in two halves that turn out to be one argument. The first is *what* protects a cluster's API: a channel, then a caller, then a local check that needs no network. The second is a defect the course has been carrying since М9 Lesson 9 — a login against a local `operators` table with a password hash — and what it becomes on N clusters: N Alices, N stealable hashes, and an account that outlives the grants it was meant to bound. Both halves resolve the same way, and it is the move this course keeps making: **delegate an authority; do not distribute a secret.**
+Урок состоит из двух половин, которые оказываются одним доводом. Первая — *что* защищает API кластера: канал, затем вызывающий, затем локальная проверка, которой не нужна сеть. Вторая — дефект, который курс несёт с М9, урок 9, — вход по локальной таблице `operators` с хешем пароля, — и во что он превращается на N кластерах: N Алис, N хешей, которые можно украсть, и учётная запись, которая переживает права, которые должна была ограничивать. Обе половины решаются одинаково, и это ход, который курс делает раз за разом: **делегируйте власть, не раздавайте секрет.**
 
-> **What you can verify without hardware.** Tokens, the key set, the revocation list, users, grants, the agent, break-glass and the identity restore all run in `tests/test_lesson4_identity_grants_agent.py`, with a clock. The revocation window is stated by `access_ends()` and then measured by moving that clock. The mTLS channel itself — certificates on the wire — is Lesson 7's `TrustBundle` and the bench.
+> **Что проверяется без железа.** Токены, набор ключей, список отзыва, пользователи, права, агент, аварийный доступ и восстановление идентичности — всё работает в `tests/test_lesson4_identity_grants_agent.py`, с часами. Окно отзыва заявляет `access_ends()`, а затем его измеряют, сдвигая эти часы. Сам канал mTLS — сертификаты на проводе — это `TrustBundle` урока 7 и стенд.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 3** — the console's write API and the `verifier` hook it left empty.
-- **М11 Lesson 2** — Variables, and their `403`: one writer per prefix. The agent is that pattern with a new prefix.
-- **М11 Lesson 5** — one writer per prefix, enforced by a policy bound to a job's identity. The agent is one more such writer.
-- **М11 Lesson 10** — the cluster's console and its controller: the write path a forwarded edit takes.
-- **М9 Lesson 9** — the login marked temporary, and the `operators` and `grants` tables it left behind.
+- **Урок 3** — API записи консоли и хук `verifier`, который он оставил пустым.
+- **М11, урок 2** — Variables и их `403`: один писатель на префикс. Агент — тот же шаблон с новым префиксом.
+- **М11, урок 5** — один писатель на префикс, обеспеченный политикой, привязанной к идентичности задания. Агент — ещё один такой писатель.
+- **М11, урок 10** — консоль кластера и его контроллер: путь записи, по которому идёт пересланная правка.
+- **М9, урок 9** — вход, помеченный временным, и таблицы `operators` и `grants`, которые он оставил после себя.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Order the protections: channel, caller, local check — and say which survive the domain being down.
-2. Issue a token that names a subject and nothing else, and verify it offline against a key set.
-3. Put users where they belong and prove nothing about them reaches a worker.
-4. Carry trust into every cluster with an agent that can write `domain/*` and nothing else.
-5. Enforce with cluster-local grants that expire, carried by the agent, and state then measure the revocation window.
-6. Say why М9's `operators` table is superseded, not extended — and what break-glass costs.
+1. Упорядочить защиты: канал, вызывающий, локальная проверка — и сказать, какие из них переживают недоступность домена.
+2. Выдать токен, который называет субъект и ничего больше, и проверить его офлайн по набору ключей.
+3. Поместить пользователей туда, где им место, и доказать, что ничего о них не доходит до воркера.
+4. Нести доверие в каждый кластер агентом, который может писать `domain/*` и ничего больше.
+5. Проверять доступ по локальным для кластера правам, которые истекают и которые несёт агент, — и заявить, а затем измерить окно отзыва.
+6. Сказать, почему таблица `operators` М9 заменяется, а не расширяется, — и чего стоит аварийный доступ.
 
 ---
 
-## Step 1 — The channel, before the caller
+## Шаг 1 — Канал раньше вызывающего
 
-Every stream in this module — configuration upward, grants downward, status both ways — runs **mTLS from the domain's own self-signed root**. A credential says who is calling; it says nothing about the channel. The root is hand-provisioned in the sense that a student runs `openssl` (or, here, `Signer.__init__`) to make it, and **it is not a stand-in**: this is the customer's root, permanently, and Lesson 7 gives it lifetimes and rotation. The certificate names the **server** — the physical box, which under М10's shape is the thing that has an identity and a place: a worker is an allocation that moves and is named by a slot, and Nomad's workload identity gives its tasks their tokens; what the domain enrols and signs for is the server.
+Каждый поток этого модуля — конфигурация вверх, права вниз, статус в обе стороны — идёт по **mTLS от собственного самоподписанного корня домена**. Учётные данные говорят, кто звонит; о канале они не говорят ничего. Корень выдан руками в том смысле, что студент делает его `openssl` (или здесь — `Signer.__init__`), и **это не заглушка**: это корень заказчика, навсегда, а урок 7 даёт ему сроки жизни и смену. Сертификат называет **сервер** — физическую коробку, которая в форме М10 и есть то, у чего есть идентичность и место: воркер — это аллокация, которая переезжает и называется слотом, и свои токены его задачи получают от workload identity Nomad; то, что домен регистрирует и для чего подписывает, — это сервер.
 
-The per-server credential that authenticates on that channel is hand-provisioned in *this* lesson and marked temporary, exactly as М8 hand-provisions AWS keys and М9 a database password. Lesson 6 replaces it with a certificate the server earns by enrolling.
+Учётные данные сервера, которыми он аутентифицируется на этом канале, в *этом* уроке выданы руками и помечены временными — ровно так, как М8 выдаёт руками ключи AWS, а М9 — пароль базы. Урок 6 заменяет их сертификатом, который сервер зарабатывает регистрацией.
 
-## Step 2 — Delegate an authority, do not distribute a secret
+## Шаг 2 — Делегируйте власть, не раздавайте секрет
 
-The defect first. М9 Lesson 9 put a login on the console against a local `operators` table. On one box that was right. On N clusters it means four accounts for one person, four passwords she will make identical, four hashes an attacker can take — and worse, **a grant expires and the account does not.** Revoke Alice's grants and her credential still authenticates at every console; you have bounded the authorization window and left the authentication window unbounded.
+Сначала дефект. В М9, урок 9, консоль получила вход по локальной таблице `operators`. На одной коробке это было правильно. На N кластерах это значит четыре учётки на одного человека, четыре пароля, которые она сделает одинаковыми, четыре хеша, которые может забрать атакующий, — и хуже того, **право истекает, а учётная запись — нет.** Отзовите права Алисы, и её учётные данные по-прежнему проходят аутентификацию в каждой консоли; вы ограничили окно авторизации и оставили окно аутентификации неограниченным.
 
-The fix is the same one the CA made a paragraph ago:
+Лечение — то же, что абзацем выше сделал УЦ:
 
 ```
 Alice ──▶ the domain signer ──▶ a short-lived signed token (sub: alice)
@@ -52,44 +52,44 @@ Alice ──▶ the domain signer ──▶ a short-lived signed token (sub: ali
                                   look up ITS OWN grants for "alice"
 ```
 
-`domain/tokens.py` is that token: the JWS shape — `base64url(header).base64url(payload).base64url(signature)` — with one algorithm (Ed25519) and no library, so a console verifies it in forty lines and a public key:
+`domain/tokens.py` — это и есть такой токен: форма JWS — `base64url(header).base64url(payload).base64url(signature)` — с одним алгоритмом (Ed25519) и без библиотеки, так что консоль проверяет его сорока строками и одним публичным ключом:
 
 ```
 token:   eyJhbGciOiAiRWREU0EiLCAia2lkIjogImI4MmRi...   (269 bytes)
 payload: {'exp': 1757500900.0, 'iat': 1757500000.0, 'iss': 'acme', 'jti': '28ec559f5a84fc9e', 'sub': 'alice'}
 ```
 
-Read what is not in the payload: no roles, no grants, no cameras. **The token names the subject and nothing else.** What Alice may do is each cluster's own grants (Step 5), because a token that carried rights would be a lookup that expired with the domain. `verify()` returns the payload or raises `Expired`, `Revoked`, `UnknownKey`, `BadSignature` — and takes a `KeySet`, not a key, so that rotation (Lesson 7) is an overlap and not an outage.
+Посмотрите, чего в payload нет: ни ролей, ни прав, ни камер. **Токен называет субъект и ничего больше.** Что Алисе можно делать — это собственные права каждого кластера (шаг 5), потому что токен, который нёс бы права, был бы запросом, который умирает вместе с доменом. `verify()` возвращает payload или бросает `Expired`, `Revoked`, `UnknownKey`, `BadSignature` — и принимает `KeySet`, а не ключ, чтобы смена ключа (урок 7) была перекрытием, а не простоем.
 
-**N clusters holding password hashes is N places to steal them from. N clusters holding a public key is zero.** That is a security improvement, not a tidiness one. М9's `operators` table is superseded, not extended: a student who keeps it and adds a `cluster` column has built the N-Alices problem on purpose.
+**N кластеров с хешами паролей — N мест, откуда их украсть. N кластеров с публичным ключом — ноль.** Это улучшение безопасности, а не аккуратности. Таблица `operators` М9 заменяется, а не расширяется: студент, который оставит её и добавит столбец `cluster`, сознательно построил проблему N Алис.
 
-## Step 3 — Where users live, and what touches a cluster
+## Шаг 3 — Где живут пользователи и что касается кластера
 
-Creating a user touches no cluster. `IdentityStore` writes one record under `identity/users/<id>` in the domain cluster's Variables — small, rare, consistent, beside the signer's key, under the same one-writer-per-prefix ACL (`deploy/signer-policy.hcl`). A local user holds a scrypt hash; where the customer has an IdP, the record holds an OIDC subject and no secret at all: Alice authenticates against her employer, the signer issues a *domain* token naming her, and the clusters never learn the IdP exists. Per-user UI configuration — walls, layouts — is an object (`users/<id>/prefs`), last write wins with a revision so a stale tab is *told*.
+Создание пользователя не касается ни одного кластера. `IdentityStore` пишет одну запись под `identity/users/<id>` в Variables доменного кластера — маленькую, редкую, согласованную, рядом с ключом подписывающего, под тем же ACL «один писатель на префикс» (`deploy/signer-policy.hcl`). Локальный пользователь хранит хеш scrypt; если у заказчика есть IdP, запись хранит субъект OIDC и вообще никакого секрета: Алиса аутентифицируется у своего работодателя, подписывающий выдаёт *доменный* токен на её имя, и кластеры так и не узнают, что IdP существует. Настройки интерфейса пользователя — стены, раскладки — это объект (`users/<id>/prefs`): последняя запись выигрывает, с ревизией, чтобы устаревшей вкладке об этом *сказали*.
 
-Then the test that is the point of the step. After the domain agent has synced into the south cluster:
+Затем тест, ради которого этот шаг. После того как агент домена синхронизировался в кластер south:
 
 ```
 domain vars:                 ['domain/signer', 'identity/users/alice']
 south vars after agent sync: ['domain/keys']
 ```
 
-Nothing about Alice is in south. What arrived is the signer's public key set, (when there is one) the revocation list, and (Step 5) south's grants. `DomainAgent` is one small Nomad job per cluster (`deploy/agent.nomad.hcl`) whose only right is to write `domain/*` in that cluster's Variables — the way the controller's only right is `vms/*` and a worker's is its epochs and its slot. The test then makes the agent try to write `vms/cameras/7`, `vms/epoch/7` and `vms/slots/w-0` and gets `Forbidden` each time. The cluster's console and gateway read the key set from their **own** cluster's Variables (`ClusterTrust`), never from the domain; a worker reads none of it.
+Об Алисе в south нет ничего. Туда пришли набор публичных ключей подписывающего, (если он есть) список отзыва и (шаг 5) права south. `DomainAgent` — одно маленькое задание Nomad на кластер (`deploy/agent.nomad.hcl`), чьё единственное право — писать `domain/*` в Variables этого кластера, так же как единственное право контроллера — `vms/*`, а воркера — его эпохи и его слот. Затем тест заставляет агента попробовать записать `vms/cameras/7`, `vms/epoch/7` и `vms/slots/w-0` и каждый раз получает `Forbidden`. Консоль и шлюз кластера читают набор ключей из Variables **своего** кластера (`ClusterTrust`), никогда из домена; воркер ничего из этого не читает.
 
-And the identity set is published object-first, then a pointer: `IdentityStore.publish()` writes the whole set as one object, then moves the pointer — `identity/pointer → identity/rev-N` — on a floor. Losing the domain cluster loses users only back to the last publication, and `IdentityStore.restore()` on another cluster is М11's restore with different nouns: the backed-up signer key, then the object the pointer names. The RPO for users is the publication interval, and it is stated.
+А набор идентичностей публикуется сначала объектом, затем указателем: `IdentityStore.publish()` пишет весь набор одним объектом, затем сдвигает указатель — `identity/pointer → identity/rev-N` — не реже заданного интервала. Потеря доменного кластера откатывает пользователей только до последней публикации, а `IdentityStore.restore()` на другом кластере — это восстановление М11 с другими существительными: ключ подписывающего из резервной копии, затем объект, на который показывает указатель. RPO для пользователей — интервал публикации, и он заявлен.
 
-## Step 4 — The domain is down
+## Шаг 4 — Домен недоступен
 
 ```
 domain down, agent.sync(): False | south's console still authorises: alice
 new login: Unreachable
 ```
 
-The agent stops updating and writes nothing. The cluster keeps verifying with the keys it has — a signature check needs no network. Issued tokens run to their expiry. Nobody *new* logs in, because the signer is behind the link that is down. That is the bounded outage the services table promised, with the mechanism in front of you: the only thing the domain's absence removes is the issuing of new tokens, and Lesson 7's arithmetic — certificate and token lifetimes chosen from the outage you must survive — is what decides how long that is tolerable.
+Агент перестаёт обновлять и ничего не пишет. Кластер продолжает проверять ключами, которые у него есть, — проверке подписи сеть не нужна. Выданные токены работают до своего истечения. *Новый* никто не входит, потому что подписывающий — за тем самым каналом, который лежит. Это ограниченный отказ, обещанный таблицей служб, и механизм перед вами: единственное, что убирает отсутствие домена, — выдача новых токенов, а арифметика урока 7 — сроки жизни сертификатов и токенов, выбранные по отказу, который нужно пережить, — решает, сколько это можно терпеть.
 
-## Step 5 — Grants are cluster-local, carried by the agent, and expiry is the revocation mechanism
+## Шаг 5 — Права локальны для кластера, их несёт агент, и истечение срока — это механизм отзыва
 
-Each cluster holds *subject X may do Y on camera Z until T* in its own Variables under `domain/grants`, and its console and gateway hold them in memory (`ClusterGrants`). The signer publishes each cluster's grants under `domain/grants/<cluster>` in the domain cluster; the agent copies its own cluster's home with the keys. Enforcement is a local read — no lookup, no token exchange — which is the only way authorization survives the domain being down. It also partitions privilege: a compromised cluster's grants are that cluster's, where a central store compromised is total. Workers are not in this picture at all: nothing about a user, a grant or a token ever reaches one, because the console and the gateway are the only things that talk to people, and they are the ones that enforce.
+Каждый кластер держит *субъект X может делать Y с камерой Z до T* в своих Variables под `domain/grants`, а его консоль и шлюз держат их в памяти (`ClusterGrants`). Подписывающий публикует права каждого кластера под `domain/grants/<cluster>` в доменном кластере; агент вместе с ключами копирует домой права своего кластера. Проверка — локальное чтение, без запроса и обмена токенами, и это единственный способ, которым авторизация переживает недоступность домена. Это ещё и делит привилегии: права скомпрометированного кластера — это права только этого кластера, тогда как компрометация центрального хранилища тотальна. Воркеров в этой картине нет вовсе: ничего о пользователе, праве или токене до них не доходит, потому что консоль и шлюз — единственное, что разговаривает с людьми, и проверяют права именно они.
 
 ```python
 class ClusterGrants:
@@ -98,34 +98,34 @@ class ClusterGrants:
     def access_ends(self, subject, token_exp) -> float: ...                  # state it in advance
 ```
 
-Now the asymmetry that makes rights different from configuration:
+Теперь асимметрия, которая отличает права от конфигурации:
 
-| If the write does not reach the cluster | Result | Visible? |
+| Если запись не дошла до кластера | Итог | Видно? |
 |---|---|---|
-| A camera edit | records the old way | **Yes** — you can see it |
-| A **grant** | the operator cannot get in | Yes — they complain |
-| A **revoke** | **the removed administrator keeps the site** | **No** — and they have every incentive not to mention it |
+| Правка камеры | пишется по-старому | **Да** — это видно |
+| **Выдача права** | оператор не может войти | Да — он жалуется |
+| **Отзыв** | **снятый администратор сохраняет площадку** | **Нет** — и у него есть все причины об этом молчать |
 
-Configuration staleness is benign and self-announcing. Revocation staleness is silent and adversarial, and its window is *unbounded* — until the agent reaches that cluster again, which may be weeks. A grant carrying `valid_until`, renewed by the same agent pass that carries the keys, converts that into **a number the product states**: a cluster whose agent cannot renew lets its grants lapse.
+Устаревшая конфигурация безобидна и сама о себе заявляет. Устаревший отзыв молчалив и враждебен, и его окно *не ограничено* — пока агент снова не дотянется до этого кластера, а это могут быть недели. Право с `valid_until`, которое продлевает тот же проход агента, что несёт ключи, превращает это окно в **число, которое заявляет продукт**: кластер, чей агент не может продлить права, даёт им истечь.
 
-Two lifetimes, and they are not independent:
+Два срока, и они не независимы:
 
-| | Too short | Too long |
+| | Слишком короткий | Слишком длинный |
 |---|---|---|
-| **Token** (`TOKEN_LIFETIME`, 15 min) | Alice is logged out mid-incident and cannot re-authenticate if the domain is unreachable | a revoked employee keeps working until it expires |
-| **Grant** (`GRANT_LIFETIME`, 24 h) | a site in a long outage locks out its own operator | a revoked administrator keeps the site |
+| **Токен** (`TOKEN_LIFETIME`, 15 мин) | Алису выкидывает посреди инцидента, и она не может войти заново, если домен недоступен | отозванный сотрудник продолжает работать, пока токен не истечёт |
+| **Право** (`GRANT_LIFETIME`, 24 ч) | площадка в долгом отказе запирает собственного оператора | отозванный администратор сохраняет площадку |
 
-A token outliving its grant is harmless — the cluster finds no grants and refuses. A grant outliving every token is harmless — nobody can present a subject. The failure is assuming one covers the other. The revocation window is **the shorter of the two**, and most people answer the token:
+Токен, переживший своё право, безвреден — кластер не находит прав и отказывает. Право, пережившее все токены, безвредно — никто не может предъявить субъект. Отказ — в предположении, что одно покрывает другое. Окно отзыва — **более короткий из двух сроков**, а большинство отвечает «токен»:
 
 ```
 access_ends (revoke cannot reach south): 900.0 s      window: 900.0
 ```
 
-The test states that number with `access_ends()` before touching the clock, then advances the clock past it and shows `authorise()` refusing — *expired* — with the grant still in the table. Then the other direction: a fresh token after the grant lifetime, refused — *no view grant* — until the upward stream renews what the domain still grants and drops what it does not.
+Тест заявляет это число через `access_ends()`, прежде чем тронуть часы, затем переводит часы дальше и показывает, что `authorise()` отказывает — *expired*, — хотя право всё ещё в таблице. Затем обратное направление: свежий токен после истечения срока права — отказ, *no view grant*, — пока поток прав сверху, от домена, не продлит то, что домен всё ещё выдаёт, и не выбросит то, чего он больше не выдаёт.
 
-## Step 6 — Wire it into the console
+## Шаг 6 — Подключить это к консоли
 
-Lesson 3 left `ConsoleAPI(verifier=None)`. The verifier is three lines:
+Урок 3 оставил `ConsoleAPI(verifier=None)`. Верификатор — три строки:
 
 ```python
 def verifier(token) -> str:
@@ -133,50 +133,50 @@ def verifier(token) -> str:
     return verify(token, ks, trust.revoked())["sub"]
 ```
 
-and the console's responses stop saying `"authenticated": false`. The domain's console verifies the *token*; the **owning cluster's** console decides the *grant* when the forwarded edit arrives, from its own Variables, because the domain's console cannot survive the domain being down either and must not be where enforcement lives. The live gateway (Lesson 3) does the same: relays, and the cluster's authoriser decides at the worker's endpoint.
+и ответы консоли перестают говорить `"authenticated": false`. Консоль домена проверяет *токен*; о *праве* решает консоль **кластера-владельца**, когда приходит пересланная правка, — по своим Variables, потому что консоль домена тоже не переживает недоступность домена, и проверка прав не должна жить в ней. Шлюз живого видео (урок 3) делает то же самое: ретранслирует, а решает авторизатор кластера на точке входа воркера.
 
-## Step 7 — The honest residue: break-glass
+## Шаг 7 — Честный остаток: аварийный доступ
 
-Alice is on site, the uplink is down, and her token expired an hour ago. No amount of design removes that case. A local emergency account is what real products ship, and it reintroduces exactly the password hash this lesson removed. The defensible version is `BreakGlass`: **one** account, audited on every use (success *and* attempt), alarmed on, and rotated after — and a module that says this out loud rather than pretending the clean design has no edge.
+Алиса на площадке, канал лежит, её токен истёк час назад. Никакой проект этот случай не уберёт. Настоящие продукты поставляют локальную аварийную учётку, и она возвращает ровно тот хеш пароля, который этот урок убрал. Защитимая версия — `BreakGlass`: **одна** учётка, аудит каждого использования (успеха *и* попытки), тревога и смена после, — и модуль, который говорит это вслух, а не делает вид, что у чистого проекта нет края.
 
 ```
 BREAK-GLASS used by carol: uplink down, token expired
 audit: [{'at': ..., 'who': 'carol', 'why': ..., 'ok': False}, {'at': ..., 'who': 'carol', 'why': ..., 'ok': True}]
 ```
 
-The token it issues carries `via: break-glass` and `who: carol`, so a cluster's grant check can treat the subject `break-glass` differently and the events say who was holding it.
+Токен, который она выдаёт, несёт `via: break-glass` и `who: carol`, так что проверка прав в кластере может обращаться с субъектом `break-glass` по-особому, а события говорят, кто его держал.
 
-**Deliverable:** grant an operator rights in a cluster, then revoke them while that cluster is unreachable — and state, in advance (`access_ends()`) and then by measurement (the clock), exactly when their access ends. Then delete М9's `operators` rows everywhere and show that Alice still logs in.
+**Результат:** выдать оператору права в кластере, затем отозвать их, пока этот кластер недоступен, — и назвать, заранее (`access_ends()`) и затем измерением (по часам), когда именно его доступ кончится. Затем удалить строки `operators` М9 везде и показать, что Алиса по-прежнему входит.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| `UnknownKey` at one cluster's console | The agent there has not synced, or its token lacks `domain/keys` write. `nomad var get domain/keys` in that region. |
-| `UnknownKey` after a key rotation, on old tokens only | The previous key's overlap has ended (`retire:` in the key set). Expected after the overlap; a token older than the overlap was already past its own expiry. |
-| Alice can log in but every cluster refuses her | She has a token and no grants. Grants are published per cluster and carried by its agent; a new user has none anywhere. Correct. |
-| A revoked administrator still has access in one cluster | That cluster's agent has not renewed its grants — the domain is unreachable from there. Their access ends at `access_ends()`; if that number is a week, the number is the bug, not the cluster. |
-| `Expired` immediately after issue | Clock skew between signer and cluster beyond `verify()`'s 60 s tolerance. Lesson 7 names this; NTP fixes it. |
-| The identity restore refuses | The pointer names an object the backup store does not hold — publication order broken, or the backup did not copy the latest object. Refuse to guess; restore the previous revision explicitly. |
+| `UnknownKey` в консоли одного кластера | Агент там не синхронизировался, или у его токена нет права записи в `domain/keys`. `nomad var get domain/keys` в этом регионе. |
+| `UnknownKey` после смены ключа, только на старых токенах | Перекрытие предыдущего ключа закончилось (`retire:` в наборе ключей). После перекрытия это ожидаемо; токен старше перекрытия и так уже был за своим сроком. |
+| Алиса может войти, но каждый кластер ей отказывает | У неё есть токен и нет прав. Права публикуются по кластерам, и их несёт агент каждого; у нового пользователя их нет нигде. Так и должно быть. |
+| Отозванный администратор всё ещё имеет доступ в одном кластере | Агент этого кластера не продлил права — домен оттуда недоступен. Доступ кончится в `access_ends()`; если это число — неделя, то ошибка в числе, а не в кластере. |
+| `Expired` сразу после выдачи | Расхождение часов подписывающего и кластера больше допуска `verify()` в 60 с. Урок 7 это называет; лечит NTP. |
+| Восстановление идентичности отказывает | Указатель называет объект, которого нет в хранилище резервных копий, — нарушен порядок публикации, или резервное копирование не забрало последний объект. Не угадывайте; восстановите предыдущую ревизию явно. |
 
-## Recap
+## Итог
 
-- Channel (mTLS from the domain's root), then caller (a token), then a **local** check (grants) — and only the last two need to survive the domain being down, and both do.
-- The token names the subject and nothing else. Clusters hold a public key set, never a hash; workers hold nothing.
-- Users live in `identity/*` in the domain cluster's raft, published object-first; nothing about them reaches a worker. The agent carries the key set, the revocation list and the cluster's grants into `domain/*` of every cluster and can write nothing else.
-- Grants are cluster-local with `valid_until`; expiry is the revocation mechanism; the window is the shorter of the two lifetimes, stated, then measured.
-- М9's `operators` table is superseded. Break-glass is one account, audited, alarmed, rotated — and admitted.
+- Канал (mTLS от корня домена), затем вызывающий (токен), затем **локальная** проверка (права) — пережить недоступность домена нужно только двум последним, и обе переживают.
+- Токен называет субъект и ничего больше. Кластеры держат набор публичных ключей, никогда не хеш; воркеры не держат ничего.
+- Пользователи живут в `identity/*` в raft доменного кластера и публикуются сначала объектом; ничего о них не доходит до воркера. Агент несёт набор ключей, список отзыва и права кластера в `domain/*` каждого кластера и больше ничего писать не может.
+- Права локальны для кластера и несут `valid_until`; истечение срока — механизм отзыва; окно — более короткий из двух сроков, заявленный, затем измеренный.
+- Таблица `operators` М9 заменена. Аварийный доступ — одна учётка с аудитом, тревогой и сменой — и это сказано вслух.
 
-## Exercises
+## Упражнения
 
-1. Set `TOKEN_LIFETIME` to four hours and `GRANT_LIFETIME` to fifteen minutes. Re-run the window test, state the number, and say which operator you have just locked out during a long outage.
-2. Put roles into the token and remove `ClusterGrants`. Then make the domain unreachable and revoke Alice. When does her access end?
-3. Give the agent write on `vms/*` "for convenience" and describe the first thing a compromised agent does.
-4. The IdP is down but the domain is up. Who can log in? Now the reverse. Write both answers as one sentence each for the datasheet.
-5. Design the alarm for break-glass: where it goes, who acknowledges it, and what "rotated after" means when the person who used it is the one who would rotate it.
+1. Поставьте `TOKEN_LIFETIME` в четыре часа, а `GRANT_LIFETIME` — в пятнадцать минут. Перезапустите тест окна, назовите число и скажите, какого оператора вы только что заперли снаружи при долгом отказе.
+2. Положите роли в токен и уберите `ClusterGrants`. Затем сделайте домен недоступным и отзовите Алису. Когда кончится её доступ?
+3. Дайте агенту запись в `vms/*` «для удобства» и опишите, что первым делом сделает скомпрометированный агент.
+4. IdP лежит, а домен работает. Кто может войти? Теперь наоборот. Запишите оба ответа — по одной фразе для технического описания продукта.
+5. Спроектируйте тревогу для аварийного доступа: куда она идёт, кто её подтверждает и что значит «смена после», когда тот, кто им воспользовался, — это тот же человек, который должен сменить учётку.
 
-## Where this is going
+## Что дальше
 
-The server still authenticates on the channel with the credential someone typed in Step 1. [**Lesson 5**](05-packaging-updates-and-the-licence.md) first settles how the domain ships and updates itself and what a licence does at this level; then [**Lesson 6**](06-secure-introduction-a-box-joins-the-domain.md) replaces that typed credential with one the box earns.
+Сервер по-прежнему аутентифицируется на канале учётными данными, которые кто-то ввёл на шаге 1. [**Урок 5**](05-packaging-updates-and-the-licence.md) сначала разбирается, как домен поставляется и обновляет себя и что делает лицензия на этом уровне; затем [**урок 6**](06-secure-introduction-a-box-joins-the-domain.md) заменяет эти введённые руками учётные данные теми, которые коробка зарабатывает сама.

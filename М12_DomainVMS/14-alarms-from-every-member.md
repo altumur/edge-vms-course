@@ -1,39 +1,39 @@
-# Lesson 14 — Alarms From Every Member
+# Урок 14 — Тревоги со всех членов
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** one list of alarms across cameras that are each their own cluster — fetched from every member's door, merged newest first, each line naming its member, a page per member so one storm cannot hide the rest — and a second copy of each camera's closed alarm buckets on a neighbour, pulled by the neighbour, chosen by the domain, so that a camera which is off is answered from the copy, with the list saying up to when the copy knows.
-**Time:** ~100 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** единый список тревог по камерам, каждая из которых — отдельный кластер, — забранный из двери каждого члена, слитый от новых к старым, где каждая строка называет своего члена, со страницей на члена, чтобы один шторм не заслонил остальных, — и вторую копию закрытых корзин тревог каждой камеры у соседа, которую забирает сосед и выбирает домен, чтобы на вопрос о выключенной камере отвечала копия, а список говорил, до какого момента копия знает.
+**Время:** ~100 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-An operator of a site of cameras watches one thing more than anything else: the list of alarms. *Door forced, gate 3, 14:21. Stream lost, loading bay, 14:25.* Newest first, whichever camera saw it.
+Оператор площадки с камерами следит за одним больше, чем за чем-либо: за списком тревог. *Взлом двери, ворота 3, 14:21. Потерян поток, погрузочная зона, 14:25.* Новые сверху, какая бы камера это ни увидела.
 
-Inside a cluster that list exists. Every worker writes its events into buckets on its resource (М10A); М11's `MergedIndex` merges every resource's buckets and says, per source, whether it answered and whether it was cut short. Across members there is no cluster to merge in: each camera's events are on its own card, behind its own door. And there is a harder problem the cluster never had. A server that dies leaves its disk behind, often readable; a resource can be mirrored to another server in the same room (`platform/mirror`). A camera that is off, or whose card has died, takes its alarms with it — and the camera that is off is very often the camera whose last alarm matters most. The camera at the gate goes dark thirty seconds after it reported the door forced.
+Внутри кластера такой список есть. Каждый воркер пишет свои события в корзины на своём ресурсе (М10A); `MergedIndex` из М11 сливает корзины всех ресурсов и говорит по каждому источнику, ответил ли он и не был ли обрезан. Между членами сливать не в чем — кластера нет: события каждой камеры лежат на её собственной карте, за её собственной дверью. И есть задача потруднее, которой у кластера не было никогда. Умерший сервер оставляет после себя диск, часто читаемый; ресурс можно зеркалить на другой сервер в той же серверной (`platform/mirror`). Камера, которая выключена или у которой умерла карта, уносит свои тревоги с собой — и выключенная камера очень часто именно та, чья последняя тревога важнее всего. Камера у ворот гаснет через тридцать секунд после того, как сообщила о взломе двери.
 
-The brief asked for exactly this — `MergedIndex` over the cameras, and neighbours keeping copies of each other's alarms — and left it without a lesson. This is that lesson. It adds no new principle: it is the directory's honesty (Lesson 1) applied to events, and the platform's mirror applied between members.
+Проектное задание просило ровно этого — `MergedIndex` по камерам и соседей, хранящих копии тревог друг друга, — и урока на это не было. Это тот урок. Нового принципа он не добавляет: это честность каталога (урок 1), применённая к событиям, и зеркало платформы, применённое между членами.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson14_alarms.py`: three cameras from Lesson 10 with М10A's real `EventLog` writing buckets on a card; the merged list; a camera switched off after its neighbour pulled its closed buckets; a camera with no reachable copy; the copy's rules (closed only, alarms only, twice is once); the mirror plan on a three-hundred-camera site as it grows; and a storm of 150 alarms on one camera beside a single alarm on the next.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson14_alarms.py`: три камеры из урока 10 с настоящим `EventLog` из М10A, пишущим корзины на карту; слитый список; камера, выключенная после того, как сосед забрал её закрытые корзины; камера, у которой нет доступной копии; правила копии (только закрытые, только тревоги, дважды — это один раз); план зеркал на площадке в триста камер по мере её роста; и шторм из 150 тревог на одной камере рядом с единственной тревогой на соседней.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 1** — an answer that knows it is incomplete.
-- **Lesson 10** — a camera as a cluster of one, with a door that is shut while it is off.
-- **Lesson 11** — hundreds of members, and what asking each of them costs.
-- **М10A** — the event bucket (`<root>/vms/<unit>/e<epoch>/<start>Z.events.jsonl`), traffic classes (`alarm`, `observation`), and a bucket that is *closed* once its span has ended.
+- **Урок 1** — ответ, который знает, что он неполный.
+- **Урок 10** — камера как кластер из одного, с дверью, которая закрыта, пока камера выключена.
+- **Урок 11** — сотни членов и во что обходится опрос каждого.
+- **М10A** — корзина событий (`<root>/vms/<unit>/e<epoch>/<start>Z.events.jsonl`), классы трафика (`alarm`, `observation`) и корзина, которая *закрыта*, как только её интервал закончился.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Merge alarms from many members with what could not be reached said as part of the answer.
-2. Keep one noisy member from pushing every other off the page.
-3. Copy another member's alarms with no coordination, by copying only what can no longer change.
-4. Choose who keeps whose copy so that the plan barely moves as the site grows.
-5. Answer from a copy without letting "none known since" read as "none".
+1. Сливать тревоги многих членов так, чтобы недоступное было сказано как часть ответа.
+2. Не давать одному шумному члену вытеснить со страницы всех остальных.
+3. Копировать тревоги другого члена без координации, копируя только то, что уже не может измениться.
+4. Выбирать, кто хранит чью копию, так, чтобы план почти не двигался при росте площадки.
+5. Отвечать из копии, не позволяя «с тех пор ничего не известно» прочитаться как «ничего».
 
 ---
 
-## Step 1 — One list, per member
+## Шаг 1 — Один список, по членам
 
-The domain asks each member's door for its alarms in the window, newest first, **at most a page**, and merges:
+Домен спрашивает дверь каждого члена о его тревогах в окне, от новых к старым, **не больше страницы**, и сливает:
 
 ```python
             try:
@@ -45,21 +45,21 @@ The domain asks each member's door for its alarms in the window, newest first, *
                 pass
 ```
 
-Every line names its member. Every member has a state. `complete` is true only if every member answered, and the list carries a sentence — *every member answered*, or what did not — the way `Answer.sentence()` has since Lesson 1.
+Каждая строка называет своего члена. У каждого члена есть состояние. `complete` истинно, только если ответил каждый член, и список несёт фразу — *every member answered* («ответили все члены») или то, что не ответило, — как `Answer.sentence()` делает с урока 1.
 
-A member reads its alarms from М10A's buckets on its card: `Card.alarms` walks `buckets_under(root, "vms", unit, …)` and keeps the lines whose class is `alarm`. Observations — motion, every frame's worth of analytics — never leave the card for this list; they are nearly every line (М10A's traffic classes), and nobody watches them.
+Член читает свои тревоги из корзин М10A на своей карте: `Card.alarms` обходит `buckets_under(root, "vms", unit, …)` и оставляет строки класса `alarm`. Наблюдения — движение, аналитика на каждом кадре — никогда не покидают карту ради этого списка: это почти все строки (классы трафика М10A), и за ними никто не следит.
 
-## Step 2 — A storm is one line of news
+## Шаг 2 — Шторм — это одна новость
 
-One camera raising a hundred and fifty alarms in an hour is a camera with a problem — a flapping contact, a misaimed detector. Merged by time alone, it fills the page, and the quiet camera next to it — the one with the single *door forced* — is on page two.
+Камера, поднявшая сто пятьдесят тревог за час, — это камера с проблемой: дребезжащий контакт, неверно наведённый детектор. При слиянии только по времени она заполняет страницу, а тихая камера рядом — та, у которой единственный *взлом двери*, — оказывается на второй странице.
 
-So each member is asked for at most `per_member` lines, and a member that had more says so: `truncated`. The test puts 150 alarms on SN1 and one on SN0, asks with a page of 100, and finds SN0's alarm on the list, SN1 marked truncated, and the sentence saying *cam-SN1 had more alarms than one page holds; showing its newest*. This is `MergedIndex`'s `truncated` per source, for the same reason.
+Поэтому каждого члена спрашивают не больше чем о `per_member` строках, и член, у которого было больше, так и говорит: `truncated`. Тест кладёт 150 тревог на SN1 и одну на SN0, спрашивает со страницей в 100 и находит тревогу SN0 в списке, SN1 — помеченной как обрезанная, а фразу — говорящей *cam-SN1 had more alarms than one page holds; showing its newest* («у cam-SN1 тревог больше, чем помещается на страницу; показаны самые новые»). Это `truncated` по источнику из `MergedIndex`, по той же причине.
 
-## Step 3 — A copy that needs no coordination
+## Шаг 3 — Копия, которой не нужна координация
 
-A neighbour keeps a copy of another member's alarms. Copies are where replication gets hard — two writers, ordering, a copy half-made when the source dies. Here none of that arises, because of one rule: **only closed buckets are copied.**
+Сосед хранит копию тревог другого члена. Копии — это место, где репликация становится трудной: два писателя, порядок, копия, сделанная наполовину, когда источник умер. Здесь ничего этого не возникает благодаря одному правилу: **копируются только закрытые корзины.**
 
-A bucket is closed once its span has ended (М10A): nothing will ever be appended to it again. A copy of it is therefore either all of it or none of it, and copying it twice is copying it once:
+Корзина закрыта, как только её интервал закончился (М10A): в неё больше никогда ничего не допишут. Поэтому её копия — либо вся она, либо ничего, а скопировать её дважды — то же, что скопировать один раз:
 
 ```python
     def keep_copy(self, of: str, path: str, lines: list[dict]) -> bool:
@@ -70,11 +70,11 @@ A bucket is closed once its span has ended (М10A): nothing will ever be appende
         os.replace(tmp, dst)                             # all there or not there
 ```
 
-The copy keeps **alarm lines only**. A neighbour's flash is not a second card — it could not hold another camera's observations, and should not try. The open bucket is in no copy, by design: that is the accepted loss, the same one the platform accepts for a resource's disk (the last few minutes, stated).
+Копия хранит **только строки тревог**. Флеш соседа — не вторая карта: он не вместил бы наблюдения другой камеры и не должен пытаться. Открытой корзины нет ни в одной копии, и так задумано: это принятая потеря, та же, которую платформа принимает для диска ресурса (последние несколько минут, заявлено).
 
-## Step 4 — Pulled by the one who keeps it
+## Шаг 4 — Забирает тот, кто хранит
 
-The copy is made by the member that keeps it, reading the source's door — never pushed by the source:
+Копию делает член, который её хранит, читая дверь источника, — источник её никогда не проталкивает:
 
 ```python
 def mirror_once(me: Card, my_vars, doors, now: float) -> int:
@@ -87,13 +87,13 @@ def mirror_once(me: Card, my_vars, doors, now: float) -> int:
         ...
 ```
 
-This is the platform's rule since М10B: evacuation pushes, backfill pulls — the initiative is with the one who lacks. A camera does not need to know who keeps its copy, and nothing is written into it. A source that is off is simply not copied this pass; there is nothing to retry and nothing to reconcile.
+Это правило платформы со времён М10B: эвакуация проталкивает, дозапись забирает — инициатива у того, кому не хватает. Камере не нужно знать, кто хранит её копию, и в неё ничего не пишется. Выключенный источник просто не копируется на этом проходе; повторять нечего и сверять нечего.
 
-## Step 5 — Who keeps whose copy
+## Шаг 5 — Кто хранит чью копию
 
-Cameras cannot pick their own neighbours sensibly: a camera knows nothing of the others. The domain does, and it decides, by **reachability** — Lesson 1's criterion for placement — and stores the decision per member, `domain/mirrors/<member>`, carried home by the member's agent: the second per-cluster row the agent learned to carry in Lesson 13.
+Камеры не могут разумно выбрать себе соседей: камера ничего не знает о других. Домен знает, и он решает — по **достижимости**, критерию размещения из урока 1, — и сохраняет решение по каждому члену, `domain/mirrors/<member>`, а агент члена несёт его домой: это вторая строка по кластерам, которую агент научился нести в уроке 13.
 
-The choice is rendezvous hashing: each member ranks the others by a hash of the pair and takes the top `copies`, among the members on its own network when there are enough of them:
+Выбор — rendezvous-хеширование: каждый член ранжирует остальных по хешу пары и берёт первых `copies` — среди членов своей сети, когда их там достаточно:
 
 ```python
             near = [b for b in others if nets & members[b]]
@@ -101,46 +101,46 @@ The choice is rendezvous hashing: each member ranks the others by a hash of the 
             out[a] = sorted(pool, key=lambda b: -_score(a, b))[: self.copies]
 ```
 
-Its virtue is what happens when the site grows. Three hundred cameras on three networks; add one. A pair changes only where the newcomer outranks the current holder — in the test, **one** pair out of three hundred. A plan that reshuffled on every change would re-copy every camera's alarms across the site's links each time a camera was added.
+Его достоинство — в том, что происходит, когда площадка растёт. Триста камер в трёх сетях; добавьте одну. Пара меняется только там, где новичок обходит текущего хранителя, — в тесте это **одна** пара из трёхсот. План, который перетасовывался бы при каждом изменении, копировал бы тревоги каждой камеры заново по каналам площадки всякий раз, когда добавляют камеру.
 
-## Step 6 — Answered from the copy, and honest about it
+## Шаг 6 — Ответ из копии, и честно об этом
 
-SN0 raised *door forced* twenty-five minutes ago and again ninety seconds ago, and then went off. Its neighbour SN1 had pulled its closed buckets. The list:
+SN0 подняла *взлом двери* двадцать пять минут назад и ещё раз девяносто секунд назад, а потом выключилась. Её сосед SN1 успел забрать её закрытые корзины. Список:
 
-- has the first alarm, marked `from_mirror_on: cam-SN1`;
-- does **not** have the second, which was in SN0's open bucket and in no copy;
-- says so: SN0 is in state `mirror`, `known_until` the end of the last closed bucket, and the sentence reads *cam-SN0 off — its alarms from the copy on cam-SN1, known up to 13:40 UTC; none known since*.
+- содержит первую тревогу с пометкой `from_mirror_on: cam-SN1`;
+- **не** содержит вторую — она была в открытой корзине SN0 и ни в одной копии;
+- так и говорит: SN0 в состоянии `mirror`, `known_until` — конец последней закрытой корзины, а фраза гласит *cam-SN0 off — its alarms from the copy on cam-SN1, known up to 13:40 UTC; none known since* («cam-SN0 выключена — её тревоги из копии на cam-SN1, известны до 13:40 UTC; с тех пор ничего не известно»).
 
-That last clause is the lesson. A list that showed SN0's copied alarms and nothing else would read as *SN0 has been quiet since 13:40* — the most dangerous thing it could say about a camera that went dark. And a camera whose copy cannot be reached either is `unreachable`, said by name: *cam-SN2 off, and no copy of its alarms could be reached.*
+Последняя часть фразы и есть урок. Список, показавший скопированные тревоги SN0 и больше ничего, читался бы как *SN0 молчит с 13:40* — самое опасное, что он мог бы сказать о погасшей камере. А камера, до копии которой тоже не дотянуться, — `unreachable`, и это сказано по имени: *cam-SN2 off, and no copy of its alarms could be reached.* («cam-SN2 выключена, и ни одна копия её тревог недоступна»).
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| One camera's alarms fill the page and others vanish | Merged by time with no per-member page. Ask each for a page and mark `truncated`. |
-| A mirrored bucket is missing its last alarms | An open bucket was copied. Copy only closed buckets. |
-| Neighbours' flash fills up | Whole buckets are copied, observations included. Alarms only. |
-| Adding one camera re-copies alarms site-wide | The plan is recomputed with a scheme that reshuffles (modulo, sorted order). Rendezvous hashing. |
-| An operator concludes a dark camera was quiet | The list shows copied alarms without `known_until`. Say up to when the copy knows. |
+| Тревоги одной камеры заполняют страницу, и остальные пропадают | Слияние по времени без страницы на члена. Спрашивайте у каждого страницу и помечайте `truncated`. |
+| В зеркальной корзине не хватает последних тревог | Скопирована открытая корзина. Копируйте только закрытые. |
+| Флеш соседей переполняется | Копируются корзины целиком, вместе с наблюдениями. Только тревоги. |
+| Добавление одной камеры заново копирует тревоги по всей площадке | План пересчитывается схемой, которая перетасовывает (остаток от деления, порядок сортировки). Rendezvous-хеширование. |
+| Оператор заключает, что погасшая камера молчала | Список показывает скопированные тревоги без `known_until`. Говорите, до какого момента копия знает. |
 
-## Recap
+## Итог
 
-- One list from every member's door, each line naming its member, the unreached said as part of the answer.
-- A page per member, and `truncated`: a storm is one line of news, not the whole page.
-- Neighbours keep copies of closed alarm buckets only — immutable, so copying needs no coordination.
-- Copies are pulled by the keeper, never pushed; nothing is written into the source.
-- Who keeps whose copy is the domain's decision, by reachability, stable as the site grows.
-- A member answered from a copy says up to when the copy knows; "none known since" never reads as "none".
+- Один список из дверей всех членов, каждая строка называет своего члена, недоступное сказано как часть ответа.
+- Страница на члена и `truncated`: шторм — одна новость, а не вся страница.
+- Соседи хранят копии только закрытых корзин тревог — неизменяемых, поэтому копированию не нужна координация.
+- Копии забирает хранитель, их никогда не проталкивают; в источник ничего не пишется.
+- Кто хранит чью копию — решение домена, по достижимости, устойчивое при росте площадки.
+- Член, на вопрос о котором отвечает копия, говорит, до какого момента копия знает; «с тех пор ничего не известно» никогда не читается как «ничего».
 
-## Exercises
+## Упражнения
 
-1. The test's plan leaves about a third of the cameras holding no copy and a few holding four. Bound each keeper's load at two without breaking stability, and measure how many pairs move when a camera is added.
-2. Two copies per camera instead of one. When is the second worth its flash — and what does the list do when both copies disagree about `known_until`?
-3. A camera's card dies and the camera stays on. What does the list show for it, and what should it show?
-4. The list is fetched from three hundred doors per refresh. Using Lesson 11's numbers, how often can the console refresh it, and what would you change first — the page size, the lanes, or pulling only since the last refresh?
+1. План в тесте оставляет примерно треть камер без единой копии на хранении, а у нескольких — по четыре. Ограничьте нагрузку каждого хранителя двумя, не сломав устойчивости, и измерьте, сколько пар сдвигается при добавлении камеры.
+2. Две копии на камеру вместо одной. Когда вторая стоит своего флеша — и что делает список, когда копии расходятся в `known_until`?
+3. У камеры умерла карта, а сама камера включена. Что список показывает для неё и что должен показывать?
+4. Список забирается из трёхсот дверей при каждом обновлении. По числам урока 11: как часто консоль может его обновлять и что вы поменяете первым — размер страницы, полосы или забор только с момента последнего обновления?
 
-## Where this is going
+## Что дальше
 
-Every piece of the domain now runs across cameras. One piece still runs *on* something: the domain's own services, which a site with no server has to put on a camera. [**Lesson 15**](15-a-domain-cluster-of-one-node.md) does that, and makes moving them — when that camera dies, as cameras do — an ordinary operation.
+Каждая часть домена теперь работает поверх камер. Одна часть всё ещё работает *на* чём-то: собственные службы домена, которые площадке без сервера приходится ставить на камеру. [**Урок 15**](15-a-domain-cluster-of-one-node.md) делает это и превращает их перенос — когда эта камера умрёт, а камеры умирают, — в обычную операцию.

@@ -1,42 +1,42 @@
-# Lesson 11 — Hundreds of Small Members
+# Урок 11 — Сотни маленьких членов
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a measurement of what the domain costs at three hundred members, a tenth of them off — calls counted, link time charged per call — and the three changes it forces: the snapshot read once per member, "where is camera X" answered from memory, and a pass that waits for silent members together and then stops asking them every few seconds.
-**Time:** ~90 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** измерение того, сколько стоит домен при трёхстах членах, из которых десятая часть выключена, — вызовы сосчитаны, время канала начислено за каждый вызов, — и три изменения, которые оно вынуждает: снапшот читается один раз на член, «где камера X» отвечается из памяти, а проход ждёт молчащих членов вместе и потом перестаёт спрашивать их каждые несколько секунд.
+**Время:** ~90 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-*Several clusters, one domain* in the module design says the directory and the read view hold "low hundreds of clusters' worth", and nobody ever checked. With server rooms nobody had to: a customer with three campuses has three clusters and hundreds of cameras, and the domain's loops run over **clusters**. Lesson 10 changed the arithmetic without changing a line of the loops. A site of three hundred cameras is now three hundred clusters, and on any given evening thirty of them are off.
+Раздел *Несколько кластеров, один домен* в проектной записке модуля говорит, что каталог и представление для чтения выдерживают «порядка нескольких сотен кластеров», и никто этого ни разу не проверял. С серверными и не приходилось: у заказчика с тремя кампусами три кластера и сотни камер, а циклы домена идут по **кластерам**. Урок 10 изменил арифметику, не изменив в циклах ни строчки. Площадка на триста камер теперь — триста кластеров, и в любой вечер тридцать из них выключены.
 
-The code has the same shape it had at three clusters. Its cost does not, and it hides in three places nobody had reason to look at before:
+У кода та же форма, что и при трёх кластерах. У его стоимости — нет, и она прячется в трёх местах, куда раньше ни у кого не было причин смотреть:
 
-- **per pass** — what one refresh of the read view asks of every member;
-- **per edit** — what `where(camera)` costs, which every forwarded edit calls;
-- **per silence** — what a member that does not answer costs, which on a real link is not zero but a whole connect timeout.
+- **на проход** — что одно обновление представления для чтения требует от каждого члена;
+- **на правку** — сколько стоит `where(camera)`, который вызывает каждая пересылаемая правка;
+- **на молчание** — сколько стоит член, который не отвечает; на настоящем канале это не ноль, а целый таймаут соединения.
 
-This lesson measures all three before promising anything, finds a defect that was invisible at three clusters, and changes the read view so the promise can be kept.
+Этот урок измеряет все три, прежде чем что-либо обещать, находит дефект, невидимый при трёх кластерах, и меняет представление для чтения так, чтобы обещание можно было сдержать.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson11_hundreds.py`: three hundred `DeviceCluster`s from Lesson 10 in one domain, a `Meter` around each member's stores counting calls and charging link time, and a real-thread test with stores that sleep. The numbers in this lesson are what those tests print.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson11_hundreds.py`: триста `DeviceCluster` из урока 10 в одном домене, `Meter` вокруг хранилищ каждого члена, который считает вызовы и начисляет время канала, и тест с настоящими потоками и хранилищами, которые спят. Числа в этом уроке — то, что печатают эти тесты.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 3** — the read view: one pass over every member, heartbeats and snapshot shards, rows served from memory.
-- **Lesson 9** — an edit kept for a member that is off.
-- **Lesson 10** — a camera as a cluster of one.
+- **Урок 3** — представление для чтения: один проход по всем членам, heartbeat'ы и срезы снапшота, строки из памяти.
+- **Урок 9** — правка, сохранённая для выключенного члена.
+- **Урок 10** — камера как кластер из одного.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Count the calls a pass makes per member, and say what the count was before this lesson.
-2. Show why `DomainDirectory.where` does not survive a bulk edit at three hundred members, and answer it from memory without becoming less honest.
-3. Put a number on what silent members cost a sequential pass, and remove most of it with lanes and a back-off.
-4. State the back-off ceiling as a promise to the operator.
-5. Handle the new case that answering from memory creates.
+1. Сосчитать вызовы прохода на один член и сказать, каким было число до этого урока.
+2. Показать, почему `DomainDirectory.where` не выдерживает массовой правки при трёхстах членах, и отвечать на него из памяти, не становясь менее честным.
+3. Назвать число — сколько молчащие члены стоят последовательному проходу, — и убрать большую часть этого полосами и отступлением.
+4. Сформулировать потолок отступления как обещание оператору.
+5. Обработать новый случай, который создаёт ответ из памяти.
 
 ---
 
-## Step 1 — A meter, not an estimate
+## Шаг 1 — Счётчик, а не оценка
 
-`domain/scale.py` wraps each member's two stores and does two things per call: counts it, and charges it what it would cost on a link — `latency` (20 ms) for an answer, `timeout` (2 s) for learning there is none. `pass_time(lanes)` spreads the charged work over `lanes` concurrent readers the way a thread pool would, longest first onto the least loaded:
+`domain/scale.py` оборачивает два хранилища каждого члена и на каждый вызов делает две вещи: считает его и начисляет ему то, что он стоил бы на канале, — `latency` (20 мс) за ответ, `timeout` (2 с) за то, чтобы узнать, что ответа нет. `pass_time(lanes)` раскладывает начисленную работу по `lanes` параллельным читателям так, как это сделал бы пул потоков, — самое длинное первым, на наименее загруженного:
 
 ```python
     def pass_time(self, lanes: int = 1) -> float:
@@ -46,28 +46,28 @@ This lesson measures all three before promising anything, finds a defect that wa
         return max(load)
 ```
 
-One lane is the sum: the pass exactly as Lesson 3 wrote it, one member after another.
+Одна полоса — это сумма: проход ровно таким, каким его написал урок 3, член за членом.
 
-## Step 2 — A pass, counted
+## Шаг 2 — Проход, сосчитанный
 
-Three hundred cameras, all on. One pass of the read view:
+Триста камер, все включены. Один проход представления для чтения:
 
 | | |
 |---|---|
-| calls | **1 202** — four per member, two for the domain cluster's empty listings |
-| bytes | **172 KB** — about 575 bytes per member: one heartbeat, one snapshot shard |
-| time, in turn | **24 s** |
+| вызовы | **1 202** — по четыре на член, два — на пустые списки доменного кластера |
+| байты | **172 КБ** — около 575 байт на член: один heartbeat, один срез снапшота |
+| время, по очереди | **24 с** |
 
-The bytes are nothing. The time is not: a pass meant to run every five seconds takes twenty-four with every camera answering, because twelve hundred round trips of twenty milliseconds, one after another, are twenty-four seconds.
+Байты — ничто. Время — нет: проход, который должен идти каждые пять секунд, занимает двадцать четыре, когда отвечает каждая камера, потому что тысяча двести обращений по двадцать миллисекунд одно за другим — это двадцать четыре секунды.
 
-And the count is four only since this lesson. `refresh` used to read the snapshot twice per member:
+И четыре вызова — только с этого урока. Раньше `refresh` читал снапшот каждого члена дважды:
 
 ```python
                 self.configured[name] = (c.snapshot() or {}).get("cameras", [])
                 self.configured_at[name] = float((c.snapshot() or {}).get("ts", 0))
 ```
 
-once for the rows and once for their age. At three clusters that was six calls instead of four, and nobody could see it. At three hundred members it is six hundred extra round trips a pass — a third of the pass. The member's part of a pass is now one function that reads each thing once:
+один раз ради строк и один раз ради их возраста. При трёх кластерах это было шесть вызовов вместо четырёх, и никто не мог этого заметить. При трёхстах членах это шестьсот лишних обращений за проход — треть прохода. Теперь часть прохода, приходящаяся на член, — одна функция, которая читает каждую вещь один раз:
 
 ```python
     @staticmethod
@@ -75,18 +75,18 @@ once for the rows and once for their age. At three clusters that was six calls i
         return c.heartbeats(), (c.snapshot() or {})
 ```
 
-## Step 3 — Where is camera X, fifty times
+## Шаг 3 — Где камера X, пятьдесят раз
 
-Every forwarded edit starts with `where(camera)` (Lesson 3), and `DomainDirectory.where` reads every member's snapshot on every call. That was right when "every member" was three: always fresh, no cache to be wrong.
+Каждая пересылаемая правка начинается с `where(camera)` (урок 3), а `DomainDirectory.where` при каждом вызове читает снапшот каждого члена. Это было верно, пока «каждый член» означал трёх: всегда свежо, нет кеша, который мог бы ошибиться.
 
-A bulk edit of fifty cameras, with thirty cameras off:
+Массовая правка пятидесяти камер, тридцать камер выключены:
 
-| | calls | time |
+| | вызовы | время |
 |---|---|---|
-| `DomainDirectory.where`, 50 times | **28 550** | **3 541 s** — most of an hour |
-| `ReadView.where`, 50 times | **0** | — |
+| `DomainDirectory.where`, 50 раз | **28 550** | **3 541 с** — почти час |
+| `ReadView.where`, 50 раз | **0** | — |
 
-Each silent member costs its full timeout on every scan, and there are fifty scans. The read view already holds every member's rows from its last pass, so it answers from memory — and it stays exactly as honest as the directory, because it builds the same `Answer`: found only in a member that answered, the silent ones named, `complete` false while any is silent.
+Каждый молчащий член стоит полного таймаута при каждом скане, а сканов пятьдесят. Представление для чтения уже держит строки каждого члена с последнего прохода, поэтому отвечает из памяти — и остаётся ровно таким же честным, как каталог, потому что строит тот же `Answer`: найдено только у члена, который ответил, молчащие названы, `complete` ложно, пока молчит хоть один.
 
 ```python
     def where(self, camera) -> Answer:
@@ -97,21 +97,21 @@ Each silent member costs its full timeout on every scan, and there are fifty sca
         ...
 ```
 
-`ConsoleAPI` takes anything with a `where`, so the read view is passed where the directory was.
+`ConsoleAPI` принимает всё, у чего есть `where`, поэтому туда, куда передавался каталог, передаётся представление для чтения.
 
-## Step 4 — Silence, waited for together
+## Шаг 4 — Молчание, которое ждут вместе
 
-The same site with thirty cameras off, one pass:
+Та же площадка, тридцать камер выключены, один проход:
 
-| | time |
+| | время |
 |---|---|
-| in turn | **82 s** — 270 × 4 × 20 ms, plus 30 × 2 s |
-| sixteen lanes | **5.1 s** — the timeouts overlap |
-| sixteen lanes, silent members backing off | **1.4 s** |
+| по очереди | **82 с** — 270 × 4 × 20 мс плюс 30 × 2 с |
+| шестнадцать полос | **5,1 с** — таймауты перекрываются |
+| шестнадцать полос, молчащие члены отступают | **1,4 с** |
 
-Lanes are `ReadView(lanes=16)`: a thread pool over the members due this pass. Nothing else about the pass changes — the fourth test runs the same site with one lane and with sixteen and compares every row — and the last test checks that the lanes are real threads, with stores that actually sleep, not only arithmetic in the meter.
+Полосы — это `ReadView(lanes=16)`: пул потоков по членам, которым пора в этом проходе. Больше в проходе ничего не меняется — четвёртый тест прогоняет ту же площадку с одной полосой и с шестнадцатью и сравнивает каждую строку, — а последний тест проверяет, что полосы — настоящие потоки, с хранилищами, которые действительно спят, а не только арифметика в счётчике.
 
-Lanes make thirty silences cost one timeout instead of thirty. The back-off makes them cost nothing most of the time. A member that did not answer is not asked again until `retry_at`: five seconds after its first silence, doubling, up to a ceiling. It does not leave the list: its last rows stay, marked *unreachable*, with their age.
+Полосы делают так, что тридцать молчаний стоят одного таймаута вместо тридцати. Отступление делает так, что большую часть времени они не стоят ничего. Член, который не ответил, не спрашивается снова до `retry_at`: через пять секунд после первого молчания, с удвоением, до потолка. Из списка он не уходит: его последние строки остаются, помеченные как *недоступен*, с их возрастом.
 
 ```python
             if got is None:
@@ -122,17 +122,17 @@ Lanes make thirty silences cost one timeout instead of thirty. The back-off make
                 continue
 ```
 
-## Step 5 — The ceiling is a promise
+## Шаг 5 — Потолок — это обещание
 
-A back-off without a ceiling is a camera off for a weekend that is asked about once an hour by Monday, and appears on the list an hour after somebody plugged it in. The ceiling is what the product can say to the operator: *a camera that comes back is on the list within a minute.* The test keeps a camera off for an hour of passes, switches it on, and finds it live within the ceiling.
+Отступление без потолка — это камера, выключенная на выходные, которую к понедельнику спрашивают раз в час и которая появляется в списке через час после того, как её кто-то включил. Потолок — то, что продукт может сказать оператору: *камера, которая вернулась, появляется в списке в течение минуты.* Тест держит камеру выключенной час проходов, включает её и находит живой в пределах потолка.
 
-The defaults — one lane, no back-off — are Lesson 3's pass, unchanged. A server-room domain does not need either, and its tests still switch a link off and on and expect the next pass to see it.
+Умолчания — одна полоса, без отступления — это проход урока 3 без изменений. Домену из серверных не нужно ни то ни другое, и его тесты по-прежнему выключают и включают канал и ожидают, что следующий проход это увидит.
 
-## Step 6 — The case that memory creates
+## Шаг 6 — Случай, который создаёт память
 
-Answering from memory has one new case: a member that answered the last pass and is off by the time its edit is forwarded. The directory never had it, because it looked a moment before forwarding. Now the forward itself meets the silence.
+У ответа из памяти один новый случай: член, который ответил в последнем проходе и выключился к моменту, когда его правку пересылают. У каталога такого случая не было, потому что он смотрел за мгновение до пересылки. Теперь с молчанием сталкивается сама пересылка.
 
-It is Lesson 9's case with the order reversed, and it ends the same way. `ConsoleAPI` catches `Unreachable` from the forward and keeps the edit for the cluster it was forwarding to:
+Это случай урока 9 в обратном порядке, и заканчивается он так же. `ConsoleAPI` ловит `Unreachable` из пересылки и сохраняет правку для кластера, которому её пересылал:
 
 ```python
         try:
@@ -144,36 +144,36 @@ It is Lesson 9's case with the order reversed, and it ends the same way. `Consol
             ...
 ```
 
-The bulk edit of twenty cameras, one switched off after the pass: nineteen applied, one kept with `202`, no error from deep inside the forward.
+Массовая правка двадцати камер, одна выключена после прохода: девятнадцать применено, одна сохранена с `202`, никакой ошибки из глубины пересылки.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| The console's list is a minute old on a large site | One lane: the pass runs members in turn, and silent ones cost a timeout each. `lanes=16`. |
-| A bulk edit takes minutes and the operator retries it | The API scans the directory per camera. Pass the read view as the directory. |
-| A camera that was switched on stays *unreachable* for a long time | No ceiling on the back-off, or one far above what the product promises. |
-| A bulk edit fails with an exception from the forward | `Unreachable` from the owner is not caught; a member went silent after the pass. Keep the edit (Lesson 9). |
-| The pass count is six calls per member | The snapshot is read twice. Read it once with the heartbeats. |
+| Список в консоли на большой площадке отстаёт на минуту | Одна полоса: проход идёт по членам по очереди, и каждый молчащий стоит таймаута. `lanes=16`. |
+| Массовая правка идёт минуты, и оператор повторяет её | API сканирует каталог на каждую камеру. Передайте представление для чтения в качестве каталога. |
+| Включённая камера долго остаётся *недоступна* | У отступления нет потолка, или он намного выше того, что обещает продукт. |
+| Массовая правка падает с исключением из пересылки | `Unreachable` от владельца не перехвачен; член замолк после прохода. Сохраните правку (урок 9). |
+| Проход делает шесть вызовов на член | Снапшот читается дважды. Читайте его один раз вместе с heartbeat'ами. |
 
-## Recap
+## Итог
 
-- The module promised "low hundreds of clusters"; cameras reach it on the first site. Measured, not assumed.
-- A pass: 4 calls and ~575 bytes per member — once the double snapshot read was found.
-- `where` from the directory is a scan per edit; from the read view it is memory, and exactly as honest.
-- Silent members cost a timeout each in turn: lanes overlap them, a back-off stops asking every pass.
-- The back-off ceiling is a promise: *back on the list within a minute*.
-- A member silent since the last pass is Lesson 9's case, and ends in `202`.
+- Модуль обещал «порядка нескольких сотен кластеров»; камеры доходят до этого на первой же площадке. Измерено, а не предположено.
+- Проход: 4 вызова и ~575 байт на член — после того, как нашлось двойное чтение снапшота.
+- `where` из каталога — скан на каждую правку; из представления для чтения — память, и ровно так же честно.
+- Молчащие члены по очереди стоят по таймауту каждый: полосы их перекрывают, отступление перестаёт спрашивать их каждый проход.
+- Потолок отступления — обещание: *снова в списке в течение минуты*.
+- Член, молчащий с последнего прохода, — случай урока 9, и заканчивается он `202`.
 
-## Exercises
+## Упражнения
 
-1. Run the site at 1 000 members. Which number breaks first — pass time, bytes, or the threads a pass needs — and at what lane count?
-2. The read view answers `where` from a pass that may be five seconds old. Name an edit for which that age is wrong, and what the forward does about it.
-3. Replace the doubling back-off with a fixed 60 s. What does the operator see differently in the first minute after a camera goes off, and in the first minute after it comes back?
-4. A site's WAN link carries the domain's reads to three hundred cameras at 172 KB per pass. At one pass every five seconds, what fraction of a 10 Mbit/s uplink is that, and would you shorten the pass or the heartbeat?
+1. Прогоните площадку на 1 000 членов. Какое число ломается первым — время прохода, байты или потоки, которые нужны проходу, — и при каком числе полос?
+2. Представление для чтения отвечает на `where` по проходу, которому может быть пять секунд. Назовите правку, для которой этот возраст неверен, и что с этим делает пересылка.
+3. Замените отступление с удвоением фиксированными 60 с. Что оператор увидит иначе в первую минуту после того, как камера выключилась, и в первую минуту после того, как она вернулась?
+4. WAN-канал площадки несёт чтения домена к тремстам камерам по 172 КБ за проход. При одном проходе каждые пять секунд какую долю аплинка 10 Мбит/с это занимает, и что бы вы сократили — проход или heartbeat?
 
-## Where this is going
+## Что дальше
 
-Hundreds of members, each with its own settings, and no server to keep the settings they share. [**Lesson 12**](12-shared-settings-without-a-database.md) publishes those — defaults, the folder tree, the scenarios between cameras — once, signed, carried to every member by its agent.
+Сотни членов, у каждого свои настройки, и нет сервера, который хранил бы общие для них. [**Урок 12**](12-shared-settings-without-a-database.md) публикует их — умолчания, дерево папок, сценарии между камерами — один раз, подписанными, и агент каждого члена несёт их к нему.

@@ -1,48 +1,48 @@
-# Lesson 3 — The API, and What It Refuses
+# Урок 3 — API, и от чего он отказывается
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** the camera list every UI wants, assembled from what the clusters' workers already publish; a write API that forwards to the owning cluster and refuses to set placement at either level; and the two processes that serve browsers so that a worker never has to.
-**Time:** ~180 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** список камер, который нужен любому интерфейсу, собранный из того, что воркеры кластеров уже публикуют; API записи, который пересылает в кластер-владелец и отказывается задавать размещение на любом из уровней; и два процесса, которые обслуживают браузеры, чтобы воркеру никогда не пришлось.
+**Время:** ~180 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-Every screen an operator opens starts with the same list: every camera, its name, its site, whether it is recording, when it was last seen — across workers and across clusters. The architecture so far cannot draw it. The directory answers *where* camera 7 is from a cluster's snapshot; the phase, the position and `observed_revision` are what a worker observes, and they live only in its heartbeat, because М10 put them there and nowhere else. So the list exists nowhere and has to be assembled, and the wrong way to assemble it is the obvious one.
+Каждый экран, который открывает оператор, начинается с одного и того же списка: каждая камера, её имя, её площадка, пишет ли она, когда её видели в последний раз, — по всем воркерам и по всем кластерам. Архитектура до сих пор нарисовать его не может. Каталог отвечает, *где* камера 7, по снапшоту кластера; фаза, положение и `observed_revision` — это то, что наблюдает воркер, и живут они только в его heartbeat'е, потому что М10 положил их туда и больше никуда. Значит, списка нет нигде, его приходится собирать, и неправильный способ собрать его — очевидный.
 
-The second half of the lesson is a question the single-box modules never had to ask: who talks to people? М9 put a console on the recorder and М10 beside the controller, as its own process, and each was the right console for the right client — the box's own status, one query. It never said who is allowed to be that console's client, and the answer decides whether every browser tab is a subtraction from the camera count.
+Вторая половина урока — вопрос, который модулям одной коробки задавать не приходилось: кто разговаривает с людьми? М9 поставил консоль на регистратор, М10 — рядом с контроллером, отдельным процессом, и каждая была правильной консолью для правильного клиента — собственный статус коробки, один запрос. Ни один из них не сказал, кому разрешено быть клиентом этой консоли, а от ответа зависит, вычитается ли каждая вкладка браузера из числа камер.
 
-> **What you can verify without hardware.** The read model, the causes, the API façade and the gateway's contract run against fakes in `tests/test_lesson3_readview_api_gateway.py`, including the console over real HTTP on a random port. Two hundred cameras across four workers, a server killed, one cause — that is a test. WebRTC, fMP4 and TURN are the transport under the gateway's contract and need a browser and the bench.
+> **Что проверяется без железа.** Модель чтения, причины, фасад API и контракт шлюза работают на подделках в `tests/test_lesson3_readview_api_gateway.py`, включая консоль по настоящему HTTP на случайном порту. Двести камер на четырёх воркерах, убитый сервер, одна причина — это тест. WebRTC, fMP4 и TURN — транспорт под контрактом шлюза, и им нужны браузер и стенд.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 1** — the directory of directories. Writes go through it to find the owner.
-- **М11 Lessons 1–2** — the heartbeat as an object, and why it left raft. This lesson is that object carrying its payload.
-- **М11 Lesson 6** — `replicated`. It stays the only place the UI learns an edit reached the cluster.
-- **М9 Lesson 9** — positions and reasons; the recorder's console; the login marked temporary.
-- **М10 Lesson 4** — the worker's heartbeat: status per camera, `server`, `epoch`; **М11 Lesson 10** — the cluster's snapshot and console.
-- **М9 Lesson 7** — `B + n·I`. The reason a worker must not serve browsers is that formula.
+- **Урок 1** — каталог каталогов. Записи идут через него, чтобы найти владельца.
+- **М11, уроки 1–2** — heartbeat как объект и почему он ушёл из raft. В этом уроке этот объект несёт свою полезную нагрузку.
+- **М11, урок 6** — `replicated`. Это по-прежнему единственное место, откуда интерфейс узнаёт, что правка дошла до кластера.
+- **М9, урок 9** — положения и причины; консоль регистратора; вход, помеченный как временный.
+- **М10, урок 4** — heartbeat воркера: статус по каждой камере, `server`, `epoch`; **М11, урок 10** — снапшот и консоль кластера.
+- **М9, урок 7** — `B + n·I`. Причина, по которой воркер не должен обслуживать браузеры, — эта формула.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Assemble the camera list from published snapshots and say why not from a fan-out and not from Variables.
-2. Show staleness on every row and never present a worker's silence as its cameras' absence.
-3. Group silence by failure domain so a dead server reads as one cause.
-4. Forward writes to the owning cluster with idempotency keys, and refuse what a client may not set at either level.
-5. Split "serving browsers" into a console and a live gateway, and give the failure arithmetic of each.
-6. Keep enforcement in the cluster — never in the gateway, never in a worker — when a gateway relays a viewer's token.
+1. Собрать список камер из опубликованных снапшотов и объяснить, почему не веером запросов и не из Variables.
+2. Показывать устаревание в каждой строке и никогда не выдавать молчание воркера за отсутствие его камер.
+3. Группировать молчание по домену отказа, чтобы мёртвый сервер читался как одна причина.
+4. Пересылать записи в кластер-владелец с ключами идемпотентности и отказывать в том, что клиенту нельзя задавать ни на одном из уровней.
+5. Разделить «обслуживание браузеров» на консоль и шлюз живого видео и привести арифметику отказов каждого.
+6. Держать проверку прав в кластере — никогда не в шлюзе и никогда не в воркере, — когда шлюз передаёт токен зрителя.
 
 ---
 
-## Step 1 — Three ways to assemble a list, and the shape rule
+## Шаг 1 — Три способа собрать список, и правило формы
 
-М11 Lesson 5's rule — small, rare and consistent is raft; frequent and never queried by key is an object; bulk stays on the resource — decides this before anything is built:
+Правило урока 5 М11 — маленькое, редкое и согласованное — это raft; частое и никогда не запрашиваемое по ключу — объект; объёмное остаётся на ресурсе — решает этот вопрос ещё до того, как что-то построено:
 
-| | What it is | Why not |
+| | Что это | Почему нет |
 |---|---|---|
-| **Fan-out** | the console discovers every worker and calls N of them per page | every page waits for the slowest worker; the first dead one hangs the list or forces partial-response logic into every screen; each refresh is N calls. Works at three workers, fails at thirty — and a worker has no API to call in the first place |
-| **Status in the controller's rows** | the worker writes each camera's phase back into `vms/cameras/<id>` | a second writer of the row the controller owns — the whole of М10 is about there being one; and phase is observed, not desired |
-| **The heartbeats** | every worker's heartbeat object already carries its status per camera; the console reads N small objects and holds them in memory | frequent, medium, never queried by key: **an object**. No worker is called. No row is written. A dead worker costs a stale heartbeat |
+| **Веер запросов** | консоль обнаруживает каждый воркер и на каждую страницу вызывает N из них | каждая страница ждёт самый медленный воркер; первый мёртвый вешает список или заставляет вносить логику частичного ответа в каждый экран; каждое обновление — N вызовов. Работает на трёх воркерах, ломается на тридцати — да и API, который можно было бы вызвать, у воркера вообще нет |
+| **Статус в строках контроллера** | воркер записывает фазу каждой камеры обратно в `vms/cameras/<id>` | второй писатель строки, которой владеет контроллер, — а весь М10 о том, что писатель один; и фаза — наблюдаемое, а не желаемое |
+| **Heartbeat'ы** | heartbeat-объект каждого воркера уже несёт статус по каждой камере; консоль читает N маленьких объектов и держит их в памяти | частое, среднее по размеру, никогда не запрашивается по ключу: **объект**. Ни один воркер не вызывается. Ни одна строка не пишется. Мёртвый воркер стоит одного устаревшего heartbeat'а |
 
-The third is the decision, and it is not a new mechanism at all — М10 Lesson 4 built it. A worker's heartbeat is
+Третий — это и есть решение, и это вовсе не новый механизм: его построил урок 4 М10. Heartbeat воркера выглядит так:
 
 ```json
 {"worker": "w-0", "ts": 1757500000.0, "server": "srv-1", "capacity": 50, "headroom": 47,
@@ -50,11 +50,11 @@ The third is the decision, and it is not a new mechanism at all — М10 Lesson 
              "revision": 12, "observed_revision": 12, "epoch": 3}, ...]}
 ```
 
-That is `VmsWorker.heartbeat_once()` in М10's `vmsserver/` — this module changed nothing downward; it reads what was already there. The arithmetic is why it is cheap: fifty cameras at roughly two hundred bytes each is a 10 kB object per worker every ten seconds, which is why М11 keeps it in Variables as an object and needs no other store.
+Это `VmsWorker.heartbeat_once()` в `vmsserver/` из М10 — этот модуль ничего не поменял вниз по стеку; он читает то, что уже было. Арифметика объясняет, почему это дёшево: пятьдесят камер примерно по двести байт — это объект в 10 кБ на воркер раз в десять секунд, и поэтому М11 держит его в Variables как объект и не нуждается ни в каком другом хранилище.
 
-## Step 2 — The read model
+## Шаг 2 — Модель чтения
 
-`ReadView.refresh()` is one pass: for each cluster, list `vms/*/heartbeat`, `get` each worker's object, keep it. `rows()` flattens what it holds into camera rows, each carrying the age of the heartbeat it came from. Nothing else touches a worker — `test_the_list_from_a_real_cluster` runs М11's real controller and two real workers and reads only what they wrote.
+`ReadView.refresh()` — один проход: для каждого кластера перечислить `vms/*/heartbeat`, сделать `get` объекта каждого воркера, сохранить его. `rows()` разворачивает то, что держит, в строки камер, и каждая несёт возраст heartbeat'а, из которого пришла. Больше ничто воркера не трогает — `test_the_list_from_a_real_cluster` запускает настоящий контроллер М11 и два настоящих воркера и читает только то, что они записали.
 
 ```
 {"total": 200, "page": 1, "size": 2, "clusters": {"north": "ok", "south": "ok"}, "complete": true}
@@ -63,31 +63,31 @@ That is `VmsWorker.heartbeat_once()` in М10's `vmsserver/` — this module chan
  "worker_state": "live", "as_of": "as of 3 s ago"}
 ```
 
-Three properties, and each is a sentence in the design record. **It is not a database** — it holds nothing it cannot rebuild from the objects in one pass, and a restart of the console *is* that pass. **Staleness is shown, never hidden** — every row prints its age; a worker older than `lost_after` (45 s, М11 Lesson 8's `lost_after`) becomes *stale — last known state, 103 s old* with its cameras still listed, greyed. **A cluster that did not answer is reported as such**, its rows kept from the last successful pass — never rendered as an empty cluster, which is Lesson 1's *not mine* versus *not anywhere* applied to a screen:
+Три свойства, и каждое — фраза из проектной записки. **Это не база данных** — модель не держит ничего, что нельзя перестроить из объектов за один проход, и перезапуск консоли *и есть* этот проход. **Устаревание показывается, а не прячется** — каждая строка печатает свой возраст; воркер старше `lost_after` (45 с, тот самый `lost_after` из урока 8 М11) становится *stale — last known state, 103 s old* (устарел — последнее известное состояние, 103 с назад), а его камеры по-прежнему в списке, серым. **Кластер, который не ответил, так и называется** — его строки сохраняются с последнего успешного прохода, и он никогда не показывается пустым кластером; это *не у меня* против *нигде* из урока 1, применённое к экрану:
 
 ```
 clusters: {"north": "ok", "south": "unreachable"}   complete: false
 ```
 
-This is М9's *desired is persisted, actual is derived* one layer up. The snapshots are actual state; a copy of actual state is only ever a cache, and this one admits it.
+Это *желаемое хранится, фактическое выводится* из М9, слоем выше. Снапшоты — фактическое состояние; копия фактического состояния всегда лишь кеш, и этот кеш это признаёт.
 
-И ровно поэтому список собирается из **двух** источников. Heartbeat — это наблюдение: камера работает, вот на какой ревизии и на каком воркере. Снимок кластера — конфигурация: камера должна существовать. Камера, которая есть в обоих, попадает в список один раз, из наблюдения; камера, которая есть только в снимке — её никто не разместил, или держащий её воркер ни разу не отчитался, — попадает с пометкой `configured`, и это ровно «настроено, но не работает». Тот же разрыв, который консоль кластера показывает внутри себя как `rows` рядом с `configured` (М10A, урок 11), поднятый на этаж выше.
+И ровно поэтому список собирается из **двух** источников. Heartbeat — это наблюдение: камера работает, вот на какой ревизии и на каком воркере. Снапшот кластера — конфигурация: камера должна существовать. Камера, которая есть в обоих, попадает в список один раз, из наблюдения; камера, которая есть только в снапшоте — её никто не разместил, или держащий её воркер ни разу не отчитался, — попадает с пометкой `configured`, и это ровно «настроено, но не работает». Тот же разрыв, который консоль кластера показывает внутри себя как `rows` рядом с `configured` (М10A, урок 11), поднятый на этаж выше.
 
 > **До этой правки таких камер в списке не было вовсе.** Оператор мог завести камеру, увидеть, что кластер не смог её разместить, и не найти в домене ничего: ни ошибки, ни серой строки — отсутствие. Самая неудобная форма, которую может принять отказ. Ключ склейки двух источников — `ref`, а не номер камеры: свой номер 7 есть у каждого кластера.
 
-## Step 3 — One cause
+## Шаг 3 — Одна причина
 
-The heartbeat carries `server` — the Nomad client the worker runs on. So when a server dies, its workers go silent *together*, and the console can say so once instead of greying a hundred cameras:
+Heartbeat несёт `server` — клиент Nomad, на котором работает воркер. Поэтому, когда сервер умирает, его воркеры замолкают *вместе*, и консоль может сказать об этом один раз, а не красить серым сотню камер:
 
 ```
 ['server silent: north/srv-1 for 100 s — 2 worker(s), 100 camera(s)']
 ```
 
-`causes()` groups silence by the largest failure domain that explains it: a whole cluster unreachable is one cause; every worker on a server silent is one cause; a single worker silent among live ones on the same server is its own. This is the *grouped by failure domain* line from the design record, and it is what turns the deliverable's "kill a server" into one line on a screen. It is also the difference between an operator who reads *srv-1 is down* and one who reads a hundred camera alarms and starts with the first.
+`causes()` группирует молчание по самому крупному домену отказа, который его объясняет: весь недоступный кластер — одна причина; все замолчавшие воркеры одного сервера — одна причина; один замолчавший воркер среди живых на том же сервере — отдельная причина. Это строка *сгруппировано по домену отказа* из проектной записки, и именно она превращает «убейте сервер» из результата урока в одну строку на экране. И это разница между оператором, который читает *srv-1 лежит*, и тем, кто читает сотню тревог по камерам и начинает с первой.
 
-## Step 4 — The write API, and what it refuses
+## Шаг 4 — API записи, и от чего он отказывается
 
-The console owns nothing, so its write API is a façade:
+Консоль ничем не владеет, поэтому её API записи — фасад:
 
 ```python
 def update_camera(self, camera, fields, idempotency_key, token=None):
@@ -101,32 +101,32 @@ def update_camera(self, camera, fields, idempotency_key, token=None):
     result = self.consoles(ans.cluster).update_camera(camera, fields, subject)
 ```
 
-Read the refusals. A client may not set `cluster` — the domain's placement service decides that, stored with a reason — and may not set `worker` or `server` — the cluster's controller decides those, stored with a reason, and the domain does not even know the workers' names. It may not set `phase` or `observed_revision` — those are the worker's observations — nor `epoch`, which a worker takes, nor `revision`, which the controller bumps. Two levels of placement and three owners of columns, and the list is the union of everything none of them will take from a client. And a camera the directory cannot find gets a `404` only if the answer was complete; if a cluster was unreachable the honest code is `503`, because *not found* and *could not look* are different failures and a client that retries on one should not on the other.
+Прочитайте отказы. Клиент не может задать `cluster` — это решает служба размещения домена и хранит с причиной — и не может задать `worker` или `server` — это решает контроллер кластера и тоже хранит с причиной, а домен даже не знает имён воркеров. Он не может задать `phase` или `observed_revision` — это наблюдения воркера, — ни `epoch`, которую берёт воркер, ни `revision`, которую увеличивает контроллер. Два уровня размещения и три владельца столбцов, и список — объединение всего, что ни один из них у клиента не примет. А камера, которую каталог не может найти, получает `404`, только если ответ был полным; если какой-то кластер был недоступен, честный код — `503`, потому что *не найдено* и *не смог посмотреть* — разные отказы, и клиент, который повторяет запрос на один из них, не должен повторять на другой.
 
-The idempotency key is what makes a PUT safe to retry over a link that drops: the retried request returns the first response and the owning cluster sees one edit. The edit reaches the cluster through *its* console and its controller, so the owner does not change and one-writer-per-key is untouched; it is acknowledged when the controller's CAS commits into that cluster's raft (М11 Lesson 6), and the domain's list shows it when the next heartbeat and snapshot carry it — with their age. A create is the same path with the cluster chosen by Lesson 1's placement: the domain forwards the fields and a `ref`, and the cluster's controller answers with the worker it chose.
+Ключ идемпотентности — то, что делает PUT безопасным для повтора по каналу, который рвётся: повторный запрос возвращает первый ответ, и кластер-владелец видит одну правку. Правка доходит до кластера через *его* консоль и его контроллер, так что владелец не меняется и правило «один писатель на ключ» не затронуто; она подтверждается, когда CAS контроллера фиксируется в raft этого кластера (М11, урок 6), а список домена показывает её, когда её несут следующие heartbeat и снапшот, — с их возрастом. Создание — тот же путь, только кластер выбирает размещение из урока 1: домен пересылает поля и `ref`, а контроллер кластера отвечает воркером, который он выбрал.
 
-The API is unauthenticated in this lesson, and every response says so: `"authenticated": false`. Lesson 4 is where the `verifier` arrives.
+В этом уроке API без аутентификации, и каждый ответ так и говорит: `"authenticated": false`. `verifier` появляется в уроке 4.
 
-## Step 5 — Who serves browsers
+## Шаг 5 — Кто обслуживает браузеры
 
-Everything so far is workers and controllers talking to stores. Now people.
+До сих пор всё было про воркеры и контроллеры, говорящие с хранилищами. Теперь — люди.
 
-**A worker serves few, trusted, internal clients. Something else serves many, untrusted, external ones.** A worker's memory is `B + n·I`, budgeted for cameras; a browser is numerous, on a bad network, behind NAT, inclined to open six tabs and leave them. The moment a worker serves browsers, a slow viewer on a Saturday night competes with recording for the same process. So the worker's clients are exactly one — the live gateway, on its tee — and the console never touches a worker at all; the two are separate processes because they fail differently:
+**Воркер обслуживает немногих, доверенных, внутренних клиентов. Многих, недоверенных, внешних обслуживает что-то другое.** Память воркера — `B + n·I`, расписанная под камеры; браузеров много, они сидят в плохой сети, за NAT, и склонны открыть шесть вкладок и бросить их. Как только воркер начинает обслуживать браузеры, медленный зритель в субботу вечером конкурирует с записью за один и тот же процесс. Поэтому клиент у воркера ровно один — шлюз живого видео, на его ответвлении, — а консоль вообще не трогает воркер; это два отдельных процесса, потому что отказывают они по-разному:
 
-**The console** — the UI's static files, the API above, the read model, TLS, token verification. Stateless, one per server or `count = 2`, placed anywhere (`deploy/console.nomad.hcl`). `python3 -m domain.console` is the standard-library version; the test drives it over HTTP:
+**Консоль** — статические файлы интерфейса, API выше, модель чтения, TLS, проверка токенов. Без состояния, по одной на сервер или `count = 2`, размещается где угодно (`deploy/console.nomad.hcl`). `python3 -m domain.console` — версия на стандартной библиотеке; тест гоняет её по HTTP:
 
 ```
 GET  /api/cameras?q=&page=&size=&cluster=     PUT /api/cameras/7   (Idempotency-Key required)
 GET  /api/causes                              GET /api/where/7
 ```
 
-**The live gateway** — turns a worker's one live stream into fifty browser sessions: WebRTC (WHEP) for live, fMP4 over HTTP for playback, TURN when browsers are behind NAT, transcoding where a browser cannot decode what the camera sends. It is the middle tier М9's process-model note predicted — *demand-driven, sized by concurrent viewers, hardware-bound* — and it is the one legitimate place a specific server comes back: a gateway that transcodes wants the GPU, one that faces the internet wants the public address, and both are **constraints** in `deploy/gateway.nomad.hcl`. Nomad places it on that server because of them; nobody types its name.
+**Шлюз живого видео** — превращает один живой поток воркера в пятьдесят сеансов браузеров: WebRTC (WHEP) для живого видео, fMP4 по HTTP для воспроизведения, TURN, когда браузеры за NAT, перекодирование, где браузер не может декодировать то, что шлёт камера. Это тот средний уровень, который предсказала заметка М9 о модели процессов, — *по спросу, по числу одновременных зрителей, привязанный к железу*, — и это единственное законное место, где возвращается конкретный сервер: шлюзу, который перекодирует, нужен GPU, шлюзу, который смотрит в интернет, — публичный адрес, и то и другое — **ограничения** в `deploy/gateway.nomad.hcl`. Nomad ставит его на этот сервер из-за них; имени никто не вписывает.
 
-## Step 6 — The tee, and one subscription
+## Шаг 6 — Ответвление и одна подписка
 
-Where does the gateway's picture come from? Two sources, and the cameras decide. Most IP cameras serve several RTSP sessions, so the gateway may open the camera's *sub-stream* directly while the worker records the main profile. Where the camera cannot — session caps, a saturated uplink, a DriverPack source with no second session — the worker's pipeline carries a `tee` after the parser (М10 Lesson 4's `DESC`): one branch into `archivesink` as always, one into a local live endpoint with a leaky queue.
+Откуда шлюз берёт картинку? Источников два, и выбирают камеры. Большинство IP-камер обслуживают несколько сеансов RTSP, поэтому шлюз может открыть *дополнительный поток* камеры напрямую, пока воркер пишет основной профиль. Где камера этого не может — ограничение числа сеансов, забитый канал, источник DriverPack без второго сеанса, — конвейер воркера несёт `tee` после парсера (`DESC` из урока 4 М10): одна ветка, как всегда, в `archivesink`, другая — в локальную точку живого видео с «протекающей» очередью.
 
-`domain/gateway.py` is the contract of that endpoint, without the transport:
+`domain/gateway.py` — контракт этой точки, без транспорта:
 
 ```python
 class LeakyQueue:          # bounded; a full queue drops its OLDEST frame; push() never blocks
@@ -134,52 +134,52 @@ class LiveTee:             # the worker side: subscribers are gateways, never br
 class Gateway:             # ONE subscription per camera upstream; N viewer queues out; relays the token
 ```
 
-The test puts fifty viewers on one camera and asserts what the design record promises: the tee has **one** subscriber, the gateway has fifty; a hundred frames pushed into a thirty-frame upstream queue leak seventy and the worker's `push()` never waited; every viewer with a five-frame queue leaked its own twenty-five and nobody else noticed. A stalled browser costs itself frames. It cannot cost the worker anything.
+Тест ставит пятьдесят зрителей на одну камеру и проверяет то, что обещает проектная записка: у ответвления **один** подписчик, у шлюза — пятьдесят; сто кадров, втолкнутых в верхнюю очередь на тридцать кадров, теряют семьдесят, а `push()` воркера ни разу не ждал; каждый зритель с очередью на пять кадров потерял свои двадцать пять, и никто другой этого не заметил. Застрявший браузер стоит кадров только себе. Воркеру он не может стоить ничего.
 
-The line to hold: **the gateway relays and does not authorise.** `Gateway.watch()` hands the viewer's token to `WorkerLiveEndpoint.open()`, and the *cluster's* `authorise(token, camera)` — signature against the key its Variables hold, then the cluster's grants (Lesson 4) — decides at the endpoint. A bad token is refused by the cluster's check, not the gateway's opinion, because a gateway that authorised on its own would be enforcement in a process that cannot survive the domain being down; and the worker itself knows nothing of tokens — the check runs in front of its tee, not inside its loop. And when a camera fails over, `reconnect()` asks the directory again and follows the endpoint; the viewers' queues survive the move.
+Граница, которую надо держать: **шлюз передаёт и не авторизует.** `Gateway.watch()` отдаёт токен зрителя в `WorkerLiveEndpoint.open()`, и решает в точке подключения `authorise(token, camera)` *кластера* — подпись по ключу, который лежит в его Variables, затем права кластера (урок 4). Плохой токен отклоняет проверка кластера, а не мнение шлюза, потому что шлюз, авторизующий сам, был бы проверкой прав в процессе, который не может пережить недоступность домена; а сам воркер ничего не знает о токенах — проверка работает перед его ответвлением, а не внутри его цикла. А когда камера переключается, `reconnect()` снова спрашивает каталог и следует за точкой подключения; очереди зрителей переживают переезд.
 
-## Step 7 — The failure arithmetic
+## Шаг 7 — Арифметика отказов
 
-| Down | What stops | What continues |
+| Лежит | Что останавливается | Что продолжается |
 |---|---|---|
-| **Console** | nobody logs in or sees the list | recording; live sessions already established |
-| **Gateway** | live view and playback | recording |
-| **Worker** | its cameras go dark on the wall until Nomad brings it back; the console shows them from the last heartbeat, with the age | every other camera |
+| **Консоль** | никто не входит и не видит список | запись; уже установленные сеансы живого видео |
+| **Шлюз** | живое видео и воспроизведение | запись |
+| **Воркер** | его камеры гаснут на видеостене, пока Nomad его не вернёт; консоль показывает их по последнему heartbeat'у, с возрастом | все остальные камеры |
 
-In no case does a web problem reach a worker, and in no case does a worker's process host a viewer. Both jobs run in **every cluster** — a single-cluster customer gets a screen and a picture with no domain at all — and the domain cluster's console is the same code with every cluster's stores behind it, which is the read model's *directory of directories* again, now with a picture under each row.
+Ни в одном случае веб-проблема не доходит до воркера, и ни в одном случае процесс воркера не принимает зрителя. Оба задания работают в **каждом кластере** — заказчик с одним кластером получает экран и картинку вовсе без домена, — а консоль доменного кластера — тот же код, за которым стоят хранилища всех кластеров, и это снова *каталог каталогов* модели чтения, теперь с картинкой под каждой строкой.
 
-**Deliverable:** the console showing two hundred cameras across four workers; kill a server; **one cause displayed.** And a browser watching one of them live through the gateway, with the worker's tee showing one subscriber — the gateway — and the browser count on the gateway.
+**Результат:** консоль показывает двести камер на четырёх воркерах; убейте сервер; **показана одна причина.** И браузер смотрит одну из камер вживую через шлюз, при этом у ответвления воркера один подписчик — шлюз, — а число браузеров видно на шлюзе.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| The list is empty for a worker that is recording | The worker's heartbeat has not been written since it restarted (its first pass, then ten seconds), or the console's `lost_after` is shorter than the heartbeat interval. Never the answer *the console should call the worker*. |
-| Every worker on one server goes stale at once and there is no *server* cause | Their heartbeats disagree on `server` — `NOMAD_NODE_NAME` unset, so each fell back to a hostname that differs per container. Set it in the jobspec's `env`. |
-| A PUT is applied twice | The client generated a new `Idempotency-Key` on retry. The key belongs to the *intent*, generated once before the first attempt. |
-| `503` on an edit for a camera you can see in the list | The list is from the last snapshot; the directory read just now found the cluster unreachable. Correct — the list said `complete: false`. |
-| The worker's tee shows two subscribers | Two gateways, or one gateway that lost its record of the subscription and re-opened. The first is fine. The second is a gateway restart without `leave()`; the tee should time out subscribers nobody drains. |
-| Frames drop for every viewer, not just the slow one | The *upstream* queue is leaking — the gateway's pump is slower than the camera. That is the gateway's CPU, not the worker's, and the reason it has a GPU constraint. |
+| Список пуст для воркера, который пишет | Heartbeat воркера не записывался с момента перезапуска (первый проход, потом десять секунд), или `lost_after` консоли короче интервала heartbeat'ов. Ответ никогда не «консоль должна вызвать воркер». |
+| Все воркеры одного сервера разом устаревают, а причины *server* нет | Их heartbeat'ы расходятся в `server` — `NOMAD_NODE_NAME` не задан, и каждый откатился на имя хоста, которое у каждого контейнера своё. Задайте его в `env` спеки задания. |
+| PUT применён дважды | Клиент сгенерировал новый `Idempotency-Key` при повторе. Ключ принадлежит *намерению* и генерируется один раз, до первой попытки. |
+| `503` на правку камеры, которую видно в списке | Список — из последнего снапшота; каталог, прочитанный только что, нашёл кластер недоступным. Это верно — список говорил `complete: false`. |
+| У ответвления воркера два подписчика | Два шлюза, или один шлюз, который потерял запись о подписке и открыл её заново. Первое нормально. Второе — перезапуск шлюза без `leave()`; ответвление должно по таймауту снимать подписчиков, которых никто не вычитывает. |
+| Кадры теряются у всех зрителей, а не только у медленного | Протекает *верхняя* очередь — насос шлюза медленнее камеры. Это CPU шлюза, а не воркера, и причина, по которой у шлюза ограничение по GPU. |
 
-## Recap
+## Итог
 
-- The camera list is assembled from the heartbeat every worker already publishes — never a fan-out, never a second writer of the controller's rows.
-- The read model is a cache that admits it: memory, rebuilt in one pass, age on every row, an unreachable cluster kept and named.
-- `server` in the heartbeat is what lets a dead server read as **one cause**.
-- The write API forwards to the owner with idempotency keys, refuses placement and controller-owned fields, and says `503` when it could not look.
-- **A worker never serves a browser.** The console and the live gateway are cluster-level jobs, separate because they fail differently, placed by constraint.
-- One subscription per camera on the worker's leaky tee; N viewers on the gateway; the token relayed, the cluster's authoriser deciding at the endpoint.
+- Список камер собирается из heartbeat'а, который каждый воркер уже публикует, — никогда не веером запросов и никогда не вторым писателем строк контроллера.
+- Модель чтения — кеш, который это признаёт: в памяти, перестраивается за один проход, возраст на каждой строке, недоступный кластер сохранён и назван.
+- `server` в heartbeat'е — то, что позволяет мёртвому серверу читаться как **одна причина**.
+- API записи пересылает владельцу с ключами идемпотентности, отказывает в размещении и в полях, которыми владеет контроллер, и отвечает `503`, когда не смог посмотреть.
+- **Воркер никогда не обслуживает браузер.** Консоль и шлюз живого видео — задания уровня кластера, раздельные, потому что отказывают по-разному, и размещаются по ограничениям.
+- Одна подписка на камеру на протекающем ответвлении воркера; N зрителей на шлюзе; токен передаётся, а решает проверка прав кластера в точке подключения.
 
-## Exercises
+## Упражнения
 
-1. Set `lost_after` below `HEARTBEAT_INTERVAL` and describe what the operator sees. Then say why the number must be М11's `lost_after` and not a console setting.
-2. Add М9's `conditions` to the worker's status (the heartbeat carries `position` only) and cost it: bytes per worker per interval at fifty cameras with three conditions each — and say at what count the object store stops being Variables.
-3. Write the `causes()` case for a whole datacenter — every server in one cluster silent while the cluster's Variables still answer (the servers are up, the cameras' network is gone). Which scope is that?
-4. The domain console's idempotency cache is in its memory and `count = 2`. Say what a retry that lands on the other instance does, and whether the controller's CAS on the row (М10 Lesson 6) saves you. Then read how М10's `SpecConsole` moved the key into the store (`vms/idem/<key>`, claimed by create-only CAS) and say what the domain's version should do.
-5. Replace the leaky queue with a blocking one on the *upstream* subscription and run the fan-out test. Then say, in one sentence, which process you just made a dependency of recording.
+1. Задайте `lost_after` меньше `HEARTBEAT_INTERVAL` и опишите, что видит оператор. Затем объясните, почему это число должно быть `lost_after` из М11, а не настройкой консоли.
+2. Добавьте в статус воркера `conditions` из М9 (heartbeat несёт только `position`) и оцените цену: байт на воркер за интервал при пятидесяти камерах с тремя условиями у каждой — и скажите, при каком числе хранилищем объектов перестают быть Variables.
+3. Напишите случай `causes()` для целого дата-центра — молчат все серверы одного кластера, а Variables кластера всё ещё отвечают (серверы работают, сети камер нет). Какой это масштаб?
+4. Кеш идемпотентности консоли домена — в её памяти, и `count = 2`. Скажите, что делает повтор, попавший на другой экземпляр, и спасает ли вас CAS контроллера на строке (М10, урок 6). Затем прочитайте, как `SpecConsole` из М10 перенёс ключ в хранилище (`vms/idem/<key>`, захватывается по CAS только-на-создание), и скажите, что должна делать версия домена.
+5. Замените протекающую очередь на блокирующую на *верхней* подписке и прогоните тест веерной раздачи. Затем скажите одной фразой, какой процесс вы только что сделали зависимостью записи.
 
-## Where this is going
+## Что дальше
 
-Every cluster has a console with a write API, and it is unauthenticated. That is N endpoints where there used to be one, and [**Lesson 4**](04-who-may-call-it.md) says what protects them: a token signed by the domain, verified offline; grants that live in each cluster and expire; a revocation window the product states and then measures; and the honest residue, break-glass.
+У каждого кластера есть консоль с API записи, и она без аутентификации. Это N точек входа там, где раньше была одна, и [**урок 4**](04-who-may-call-it.md) говорит, что их защищает: токен, подписанный доменом и проверяемый без сети; права, которые живут в каждом кластере и истекают; окно отзыва, которое продукт заявляет, а потом измеряет; и честный остаток — аварийный доступ.

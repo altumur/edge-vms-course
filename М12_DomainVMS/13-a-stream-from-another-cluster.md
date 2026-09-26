@@ -1,53 +1,53 @@
-# Lesson 13 — A Stream From Another Cluster
+# Урок 13 — Поток из другого кластера
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** a server room's recorder recording a camera that is a cluster of its own — found not in its own cluster's heartbeats, which do not contain it, but in a *source book* the domain publishes for the recording cluster and that cluster's agent carries home; one recording cluster per camera, decided and stored by the domain; recording that goes on with the domain switched off; and backfill that plans from the book and fetches only what the card still holds.
-**Time:** ~100 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** регистратор серверной, который пишет камеру, являющуюся отдельным кластером, — находит её не в heartbeat'ах своего кластера, где её нет, а в *книге источников*, которую домен публикует для кластера записи и которую агент этого кластера несёт домой; один кластер записи на камеру, решённый и сохранённый доменом; запись, которая идёт при выключенном домене; и дозапись, которая планирует по книге, а забирает только то, что ещё есть на карте.
+**Время:** ~100 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-Cameras with a server room: the camera records to its card, and the server records it too. The card holds days, the server's volume months, and the card is inside the camera a thief takes with him. М10B built all of this for cameras that are not ours: the recorder pulls RTSP and writes its volume; the camera's card is a *device archive* (Lesson 15); after an outage the recorder closes its gaps from the card — *backfill from the edge* (Lesson 16).
+Камеры с серверной: камера пишет на свою карту, и сервер пишет её тоже. Карта держит дни, том сервера — месяцы, а карта — внутри камеры, которую вор уносит с собой. М10B построил всё это для камер, которые не наши: регистратор тянет RTSP и пишет свой том; карта камеры — *архив устройства* (урок 15); после отказа регистратор закрывает свои дыры с карты — *дозапись из края* (урок 16).
 
-None of that changes. What changes is one line of it. The recorder found its camera in its **own cluster's** heartbeats — `device_source` reads the holder's `playback_url` and `coverage` there:
+Ничего из этого не меняется. Меняется одна строка. Регистратор находил свою камеру в heartbeat'ах **своего** кластера — `device_source` читает там `playback_url` и `coverage` держателя:
 
 ```python
     def device_source(self, cam) -> tuple[str, dict] | None:
         found = holder_of(self.objects, "vms/", cam, self.wall(), field="playback_url")
 ```
 
-A camera that is a cluster of one (Lesson 10) publishes its heartbeat in **its** cluster. The server room's recorder cannot read that, and must not depend on reading it: the thesis says the server room records on with the domain gone, and a recorder that asked the domain where its camera was would stop with it.
+Камера, которая сама кластер из одного (урок 10), публикует heartbeat в **своём** кластере. Регистратор серверной не может его прочитать и не должен зависеть от того, что прочитает: тезис говорит, что серверная продолжает писать без домена, а регистратор, который спрашивал бы у домена, где его камера, остановился бы вместе с ним.
 
-So the domain, which reads every member anyway, writes down what the recorder needs and gives it to the recorder's cluster the way it gives grants: carried by the agent, read locally, stale by a stated amount.
+Поэтому домен, который и так читает каждого члена, записывает то, что нужно регистратору, и отдаёт это кластеру регистратора так же, как отдаёт права: несёт агент, читается локально, устаревает на заявленную величину.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson13_crossing.py`: a domain, a server room with М11's real controller and worker, and a camera cluster from Lesson 10 with an hour on its card; the source book carried and resolved; a second recording cluster refused; the domain switched off for six hours; a camera that changes its address meanwhile; and a backfill plan checked against a card that has overwritten part of what the book said it held.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson13_crossing.py`: домен, серверная с настоящими контроллером и воркером М11 и кластер камеры из урока 10 с часом записи на карте; книга источников перенесена и разрешена; второй кластер записи отклонён; домен выключен на шесть часов; камера тем временем меняет адрес; и план дозаписи, проверенный на карте, которая перезаписала часть того, что, по словам книги, на ней было.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 1** — placement stored with a reason, by CAS, and refused when a second placer disagrees.
-- **Lesson 3** — the read view, which now also keeps each worker's published doors.
-- **Lesson 4** — the agent carrying a per-cluster row from `domain/<x>/<cluster>` to `domain/<x>`.
-- **Lesson 10** — a camera as a cluster of one, publishing `live_url`, `playback_url` and `coverage`.
-- **М10B Lessons 15–16** — the device archive, coverage, and backfill bounded by `keep_days` and `settle`.
+- **Урок 1** — размещение, сохранённое с причиной, по CAS, и отклонённое, когда второй размещающий не согласен.
+- **Урок 3** — представление для чтения, которое теперь хранит ещё и опубликованные двери каждого воркера.
+- **Урок 4** — агент, который несёт строку кластера из `domain/<x>/<cluster>` в `domain/<x>`.
+- **Урок 10** — камера как кластер из одного, публикующая `live_url`, `playback_url` и `coverage`.
+- **М10B, уроки 15–16** — архив устройства, покрытие и дозапись, ограниченная `keep_days` и `settle`.
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Say what crosses between clusters here and what does not, and why the recorder stays where it is.
-2. Make "which cluster records this camera" a stored domain decision, and refuse a second one.
-3. Resolve a camera of another cluster from the recording cluster's own Variables, with the domain off.
-4. Name the failure this design accepts, and how long it lasts.
-5. Treat carried coverage as a hint: plan from it, fetch only what the device still has.
+1. Сказать, что здесь переходит между кластерами, а что нет, и почему регистратор остаётся на месте.
+2. Сделать «какой кластер пишет эту камеру» сохранённым решением домена и отклонить второе.
+3. Разрешить камеру другого кластера по собственным Variables кластера записи — при выключенном домене.
+4. Назвать отказ, который эта конструкция принимает, и сколько он длится.
+5. Считать перенесённое покрытие подсказкой: планировать по нему, забирать только то, что ещё есть на устройстве.
 
 ---
 
-## Step 1 — Data crosses; work does not
+## Шаг 1 — Данные переходят; работа — нет
 
-The rule of the whole module is that a worker never crosses a cluster. It still does not. The recorder is a worker of the server room, scheduled by the server room's orchestrator, writing the server room's volume with the server room's epoch. The camera learns of no server: it serves its RTSP and its playback door to whoever asks, as it always did. Nobody writes a row, an epoch or a request into the camera's cluster except the camera — the first test counts its flash writes before and after and finds them equal.
+Правило всего модуля: воркер никогда не переходит границу кластера. Не переходит и теперь. Регистратор — воркер серверной, его планирует оркестратор серверной, он пишет том серверной с эпохой серверной. Камера не узнаёт ни о каком сервере: она отдаёт свой RTSP и свою дверь воспроизведения любому, кто спросит, как и всегда. Никто, кроме самой камеры, не пишет в кластер камеры ни строки, ни эпохи, ни заявки — первый тест считает её записи на флеш до и после и находит их равными.
 
-What crosses is **data**: footage over RTSP, ranges from the card over the playback door. And one small piece of knowledge, which is this lesson: *where the camera is.*
+Переходят **данные**: видео по RTSP, диапазоны с карты через дверь воспроизведения. И одно маленькое знание, о котором этот урок: *где камера.*
 
-## Step 2 — One camera, one recording cluster
+## Шаг 2 — Одна камера, один кластер записи
 
-A camera serves one live session and one backfill (М10B Lesson 15) — its encoder and its uplink are small. Two server rooms both recording it would each take half of what it has, or the second would take it from the first. So *which cluster records camera SN4471* is not something each server room decides for itself. It is a domain decision, stored once, by CAS, with the same shape as Lesson 1's placement:
+Камера обслуживает одну живую сессию и одну дозапись (М10B, урок 15) — её кодер и её канал невелики. Две серверные, пишущие её обе, взяли бы каждая половину того, что у неё есть, или вторая отняла бы её у первой. Поэтому *какой кластер пишет камеру SN4471* — не то, что каждая серверная решает сама. Это решение домена, сохранённое один раз, по CAS, той же формы, что размещение урока 1:
 
 ```python
     def record(self, ref: str, on: str) -> dict:
@@ -60,11 +60,11 @@ A camera serves one live session and one backfill (М10B Lesson 15) — its enco
                                     f"session and one backfill, and a second recorder would take them from the first")
 ```
 
-Asking again for the same cluster is the same answer; asking for another is a `409` with the reason; asking for a camera the domain has never seen is a `404`. The recording row itself is the recording cluster's — its console writes `rec/recordings/<id>` with `source: ref:SN4471`, forwarded by the domain as Lesson 3 forwards a create.
+Повторная просьба о том же кластере — тот же ответ; просьба о другом — `409` с причиной; просьба о камере, которой домен никогда не видел, — `404`. Сама строка записи принадлежит кластеру записи — его консоль пишет `rec/recordings/<id>` с `source: ref:SN4471`, а домен пересылает её так же, как урок 3 пересылает создание.
 
-## Step 3 — The source book
+## Шаг 3 — Книга источников
 
-For each recording cluster, the domain publishes a book: for every camera of another cluster that it records, the doors that camera's worker last published and **when**:
+Для каждого кластера записи домен публикует книгу: для каждой камеры другого кластера, которую тот пишет, — двери, которые последним опубликовал воркер этой камеры, и **когда**:
 
 ```python
     def _doors(self, ref: str) -> dict | None:
@@ -74,9 +74,9 @@ For each recording cluster, the domain publishes a book: for every camera of ano
                         "reachable": cluster not in self.view.cluster_down_since}
 ```
 
-It is built from the read view's memory — the read view now keeps each heartbeat's `live_url`, `playback_url` and `coverage`, which it used to drop — so publishing it asks no camera anything. It is written under `domain/sources/<cluster>` in the domain cluster, and the recording cluster's agent carries it to `domain/sources`, exactly as it carries `domain/grants/<cluster>`. The agent learned one generic thing for this: a list of per-cluster rows to carry, of which this is the first.
+Она строится из памяти представления для чтения — теперь оно хранит `live_url`, `playback_url` и `coverage` каждого heartbeat'а, которые раньше отбрасывало, — так что публикация ни о чём не спрашивает ни одну камеру. Книга пишется под `domain/sources/<cluster>` в доменном кластере, и агент кластера записи несёт её в `domain/sources` — ровно так же, как несёт `domain/grants/<cluster>`. Агент научился ради этого одной общей вещи: списку строк по кластерам, которые надо нести, и эта строка в нём первая.
 
-The recorder resolves a `ref:` source against its own cluster's copy; any other source is its own cluster's and is found as always:
+Регистратор разрешает источник `ref:` по копии своего кластера; любой другой источник принадлежит его собственному кластеру и находится как всегда:
 
 ```python
 def resolve(cluster_vars, source: str, now: float) -> Source | None:
@@ -87,19 +87,19 @@ def resolve(cluster_vars, source: str, now: float) -> Source | None:
                   max(0.0, now - float(e["as_of"])), bool(e.get("reachable", True)))
 ```
 
-The seam in `recworker.py` is one fallback in `device_source`: not found in my heartbeats, and the row's source is `ref:` — resolve it.
+Шов в `recworker.py` — один запасной вариант в `device_source`: в моих heartbeat'ах не найдено, а источник строки — `ref:`, значит, разрешить его.
 
-## Step 4 — The domain off, and the failure it costs
+## Шаг 4 — Домен выключен, и чего это стоит
 
-Switch the domain off for six hours. The recorder never asked it anything, so nothing changes: it resolves from the copy its agent last carried, and the copy's `age` says six hours. The console shows that age beside the recording, as it shows every other age in this module.
+Выключите домен на шесть часов. Регистратор никогда ни о чём его не спрашивал, поэтому ничего не меняется: он разрешает камеру по копии, которую агент принёс последней, и `age` копии говорит «шесть часов». Консоль показывает этот возраст рядом с записью, как показывает любой другой возраст в этом модуле.
 
-The failure this design accepts is precise: **a camera that changes its address while the domain is off is recorded from the old address until the domain is back.** The recorder sees a dead URL, reports it as any dead source, and has nothing better to try. When the domain returns, one read-view pass, one publish and one agent pass later the book is right again — the test moves the camera to a new DHCP lease with the domain off and checks both halves. Cameras on a site get fixed addresses or long leases for reasons older than this lesson; the lesson makes the cost of not doing so a number.
+Отказ, который принимает эта конструкция, точен: **камера, сменившая адрес, пока домен выключен, пишется со старого адреса, пока домен не вернётся.** Регистратор видит мёртвый URL, сообщает о нём как о любом мёртвом источнике, и попробовать ему больше нечего. Когда домен возвращается, через один проход представления для чтения, одну публикацию и один проход агента книга снова верна — тест переводит камеру на новую аренду DHCP при выключенном домене и проверяет обе половины. Камерам на площадке дают фиксированные адреса или долгие аренды по причинам, которые старше этого урока; урок превращает цену отказа от этого в число.
 
-## Step 5 — Backfill: the book plans, the card decides
+## Шаг 5 — Дозапись: книга планирует, карта решает
 
-After an outage the recorder closes its gaps from the card, and М10B's rule for what to fetch is unchanged: what the device has, minus what we have, not older than our own volume keeps, not fresher than `settle`. The subtraction is `vms.archive.subtract`, the one the recorder and the console already share.
+После отказа регистратор закрывает свои дыры с карты, и правило М10B о том, что забирать, не меняется: то, что есть у устройства, минус то, что есть у нас, не старше, чем хранит наш собственный том, и не свежее `settle`. Вычитание — `vms.archive.subtract`, то самое, которое регистратор и консоль уже делят.
 
-What is new is that the device's coverage now comes from the book, and the book is as old as its last carry. A card is a ring: the oldest hour it listed may have been overwritten since. So the plan comes from the book and the fetch from the card:
+Новое в том, что покрытие устройства теперь приходит из книги, а книга стара настолько, насколько давно её принесли. Карта — это кольцо: самый старый час, который она перечисляла, мог с тех пор быть перезаписан. Поэтому план берётся из книги, а забор — с карты:
 
 ```python
     card = ask_device()                                  # {"from", "to"} — the card, now
@@ -111,36 +111,36 @@ What is new is that the device's coverage now comes from the book, and the book 
             dropped.append((gone, "no longer on the card"))
 ```
 
-The test's book says the card holds the last hour; the server holds all of it but minutes 30 to 10. The card, asked, now starts at minute 25. Minutes 25 to 10 are fetched; minutes 30 to 25 are **dropped with their reason**, not retried — a retry would ask the same card the same question. This is М10B's "check twice — at planning and before writing" with the first check made from further away.
+Книга в тесте говорит, что карта держит последний час; сервер держит его весь, кроме минут с 30-й по 10-ю. Карта, когда её спрашивают, теперь начинается с 25-й минуты. Минуты с 25-й по 10-ю забираются; минуты с 30-й по 25-ю **отбрасываются со своей причиной**, а не повторяются — повтор задал бы той же карте тот же вопрос. Это «проверить дважды — при планировании и перед записью» из М10B, где первая проверка сделана издалека.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| A recording stops whenever the domain is restarted | The recorder asks the domain for the camera. Resolve from the cluster's own `domain/sources`. |
-| Two server rooms record one camera and both have gaps | Nothing stored which cluster records it. `record` refuses the second. |
-| After a site's DHCP renumbering, recordings are dead until someone restarts the domain | The accepted failure, lasting until the domain's next publish. Fixed addresses, or shorten the book's journey. |
-| Backfill keeps retrying the same range and failing | The range is no longer on the card; the book said it was. Check the card before fetching; drop what is gone. |
-| The camera's store has keys written by the server room | Something crossed that should not. Only data crosses; nothing is written into another cluster. |
+| Запись останавливается при каждом перезапуске домена | Регистратор спрашивает камеру у домена. Разрешайте по собственному `domain/sources` кластера. |
+| Две серверные пишут одну камеру, и у обеих дыры | Нигде не сохранено, какой кластер её пишет. `record` отклоняет второй. |
+| После перенумерации DHCP на площадке записи мертвы, пока кто-нибудь не перезапустит домен | Принятый отказ, длящийся до следующей публикации домена. Фиксированные адреса или более короткий путь книги. |
+| Дозапись снова и снова повторяет один и тот же диапазон и падает | Диапазона уже нет на карте; книга говорила, что есть. Проверяйте карту перед забором; отбрасывайте то, чего нет. |
+| В хранилище камеры есть ключи, записанные серверной | Перешло то, что не должно. Переходят только данные; в чужой кластер не пишется ничего. |
 
-## Recap
+## Итог
 
-- The recorder is unchanged in what it does; only where it finds the camera changes.
-- Data crosses between clusters — footage and ranges. Work does not: no worker, row, epoch or request crosses.
-- Which cluster records a camera is a stored domain decision, one per camera, refused like a second placement.
-- The source book is built from the read view's memory, carried by the agent, resolved locally — with the domain off.
-- A camera that moves while the domain is off is recorded from its old address until the domain returns: stated, bounded.
-- Backfill plans from the carried coverage and fetches only what the card still holds.
+- Регистратор не меняется в том, что он делает; меняется только то, где он находит камеру.
+- Между кластерами переходят данные — видео и диапазоны. Работа не переходит: ни воркер, ни строка, ни эпоха, ни заявка.
+- Какой кластер пишет камеру — сохранённое решение домена, одно на камеру, и второе отклоняется, как второе размещение.
+- Книга источников строится из памяти представления для чтения, её несёт агент, разрешается она локально — при выключенном домене.
+- Камера, переехавшая, пока домен выключен, пишется со старого адреса, пока домен не вернётся: заявлено, ограничено.
+- Дозапись планирует по перенесённому покрытию и забирает только то, что ещё есть на карте.
 
-## Exercises
+## Упражнения
 
-1. The recording cluster itself is unreachable from the domain for a day. What does its recorder keep doing, and what does the console show about the recording?
-2. A camera is moved from one server room's recording to another's. Write the steps in order so that neither room records it twice and neither loses more than a pass.
-3. The book carries `coverage` as one range. A card that failed for an hour last week has two. Change the book's entry and `plan_backfill` so the hole in the card is not planned as a fetch.
-4. Should a camera that is recorded by a server room still record to its card? Argue from what each copy protects against, and say which one Lesson 14's alarm mirror makes less necessary.
+1. Сам кластер записи недоступен домену сутки. Что продолжает делать его регистратор и что консоль показывает о записи?
+2. Камеру переводят с записи одной серверной на запись другой. Запишите шаги по порядку так, чтобы ни одна серверная не писала её дважды и ни одна не потеряла больше одного прохода.
+3. Книга несёт `coverage` одним диапазоном. У карты, которая на прошлой неделе час не работала, их два. Измените запись книги и `plan_backfill` так, чтобы дыра на карте не планировалась как забор.
+4. Должна ли камера, которую пишет серверная, по-прежнему писать на свою карту? Рассуждайте от того, от чего защищает каждая копия, и скажите, какую из них делает менее нужной зеркало тревог урока 14.
 
-## Where this is going
+## Что дальше
 
-Footage now has two homes; alarms still have one, and it is the camera's card. [**Lesson 14**](14-alarms-from-every-member.md) builds the one list of alarms an operator watches across every member — and a second copy of each camera's alarms on a neighbour, for the camera that is off.
+У видео теперь два дома; у тревог по-прежнему один, и это карта камеры. [**Урок 14**](14-alarms-from-every-member.md) строит единый список тревог, за которым оператор следит по всем членам, — и вторую копию тревог каждой камеры у соседа, для камеры, которая выключена.

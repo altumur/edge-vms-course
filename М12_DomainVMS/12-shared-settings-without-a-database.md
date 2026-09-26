@@ -1,40 +1,40 @@
-# Lesson 12 — Shared Settings Without a Database
+# Урок 12 — Общие настройки без базы
 
-**Module:** DomainVMS — the smallest layer above a set of clusters (Module 12)
-**You will build:** the settings of the *system* — the retention a camera gets when nobody set one, the folder tree, the scenarios between cameras — published by the domain as one signed document named by a pointer, carried by every member's agent into that member's own durable store, verified there against the member's own key set, never replaced by an older one, and resolved as defaults when read, never written into rows.
-**Time:** ~100 minutes.
+**Модуль:** М12 — DomainVMS: самый тонкий слой над набором кластеров
+**Вы напишете:** настройки *системы* — срок хранения, который камера получает, когда его никто не задал, дерево папок, сценарии между камерами, — опубликованные доменом как один подписанный документ, названный указателем; агент каждого члена несёт его в собственное долговечное хранилище этого члена, там он проверяется по собственному набору ключей члена, никогда не заменяется более старым и разрешается как умолчания при чтении, никогда не записываясь в строки.
+**Время:** ~100 минут.
 
-## Why this lesson exists
+## Зачем этот урок
 
-Some settings belong to no camera. *Keep events for fourteen days unless the camera says otherwise.* *These are the folders: Site 1 / Building A / Floor 2.* *When the gate camera sees a vehicle, turn the yard camera to preset 3.* In a server room these live in the cluster's Variables, written by its console, read by everything in the cluster.
+Некоторые настройки не принадлежат ни одной камере. *Хранить события четырнадцать дней, если камера не говорит иначе.* *Вот папки: Площадка 1 / Корпус А / Этаж 2.* *Когда камера у ворот видит машину, повернуть камеру двора на пресет 3.* В серверной они живут в Variables кластера, их пишет его консоль и читает всё в кластере.
 
-With cameras as members there is no such cluster. Every member is its own; a setting written into one camera's store is that camera's. And the domain has no database — that was decided in [`where-the-database-lives.md`](where-the-database-lives.md), five revisions long, and it is not reopened here.
+Когда члены — камеры, такого кластера нет. Каждый член — свой собственный; настройка, записанная в хранилище одной камеры, принадлежит этой камере. А базы у домена нет — это решено в [`where-the-database-lives.md`](where-the-database-lives.md), за пять редакций, и здесь не пересматривается.
 
-The brief's answer was a "primary camera" that holds the shared keys and pushes an immutable, signed file of them to every other camera, which keeps the newest valid copy it has seen. Read with this module in hand, that is two things the domain already does: the identity set is **published object-first behind a pointer** (Lesson 4), and trust is **checked offline against a key set every member already holds** (Lessons 4 and 7). This lesson puts the two together and adds what comes from where the copy is *read*: on every member, possibly with the domain gone for a month.
+Ответом проектного задания была «главная камера», которая держит общие ключи и рассылает каждой другой камере неизменяемый подписанный файл с ними, а та хранит самую новую действительную копию, какую видела. Если читать это, держа в руках этот модуль, это две вещи, которые домен уже делает: набор идентичностей **публикуется сначала объектом, за указателем** (урок 4), а доверие **проверяется офлайн по набору ключей, который у каждого члена уже есть** (уроки 4 и 7). Этот урок соединяет их и добавляет то, что следует из того, где копию *читают*: на каждом члене, возможно, при домене, пропавшем на месяц.
 
-> **What you can verify without hardware.** Everything, in `tests/test_lesson12_shared.py`: a domain and three cameras from Lesson 10; an edit, its delivery report with a camera off; a document signed by a stranger with a perfectly matching checksum; a pointer that goes backwards; defaults resolved against rows that are never touched; two editors; a 500-camera tree over the 64 KiB a Variable may hold; and a camera rebooted with the domain switched off.
+> **Что проверяется без железа.** Всё, в `tests/test_lesson12_shared.py`: домен и три камеры из урока 10; правка и отчёт о её доставке при выключенной камере; документ, подписанный чужаком, с идеально совпадающей контрольной суммой; указатель, который идёт назад; умолчания, разрешённые поверх строк, которых никто не трогает; два редактора; дерево на 500 камер, превышающее 64 КиБ, которые может вместить Variable; и камера, перезагруженная при выключенном домене.
 
-## Prerequisites
+## Что нужно знать заранее
 
-- **Lesson 4** — publish-then-point for the identity set; the key set agents carry into `domain/keys`.
-- **Lesson 7** — keys that rotate with overlap; trust that works offline.
-- **Lesson 9** — outcomes reported by the member's agent and read back by the domain.
-- **Lesson 10** — a camera as a cluster of one, with flash and RAM.
-- **М10A** — the 64 KiB ceiling of a Nomad Variable (`w2cplatform/limits.py`).
+- **Урок 4** — «опубликовать, затем указать» для набора идентичностей; набор ключей, который агенты несут в `domain/keys`.
+- **Урок 7** — ключи, которые сменяются с перекрытием; доверие, которое работает офлайн.
+- **Урок 9** — исходы, о которых сообщает агент члена и которые домен читает обратно.
+- **Урок 10** — камера как кластер из одного, с флешем и RAM.
+- **М10A** — потолок в 64 КиБ у Variable в Nomad (`w2cplatform/limits.py`).
 
-## Learning objectives
+## Чему вы научитесь
 
-1. Publish a document too large for a Variable with a Variable as its point of change.
-2. Make a copy trustworthy by its signature rather than by where it came from.
-3. Order documents by `(term, rev)` so a member never goes backwards.
-4. Resolve a shared setting as a default at read time, and say why writing it into rows is wrong.
-5. Report delivery per member without rounding the silent ones into a total.
+1. Публиковать документ, слишком большой для Variable, с Variable в качестве точки изменения.
+2. Делать копию достойной доверия по её подписи, а не по тому, откуда она пришла.
+3. Упорядочивать документы по `(term, rev)`, чтобы член никогда не шёл назад.
+4. Разрешать общую настройку как умолчание во время чтения и говорить, почему записывать её в строки неправильно.
+5. Сообщать о доставке по каждому члену, не округляя молчащих в общее число.
 
 ---
 
-## Step 1 — A pointer and an object
+## Шаг 1 — Указатель и объект
 
-The document is an object; the Variable is a pointer to it. The edit writes the object first and the pointer second, and the pointer is written **by CAS** — which is what makes two editors safe:
+Документ — объект; Variable — указатель на него. Правка пишет сначала объект, потом указатель, и указатель пишется **по CAS** — именно это делает безопасными двух редакторов:
 
 ```python
     def edit(self, mutate, base_rev: int, by: str | None = None) -> int:
@@ -47,24 +47,24 @@ The document is an object; the Variable is a pointer to it. The edit writes the 
                                 "sha256": hashlib.sha256(raw).hexdigest()}, cas=idx)
 ```
 
-Why not a Variable holding the settings themselves? Because of what they grow to. Five hundred folders and five hundred scenarios are some eighty kilobytes, and a Nomad Variable holds 64 KiB, whole — a constant in the scheduler, not a setting (М10A's `limits.py`). The test builds exactly that tree: the document is over the ceiling, the pointer is under 200 bytes, and the member gets all 500 folders.
+Почему не Variable, в которой лежат сами настройки? Из-за того, до чего они дорастают. Пятьсот папок и пятьсот сценариев — это около восьмидесяти килобайт, а Variable в Nomad вмещает 64 КиБ, целиком, — это константа планировщика, а не настройка (`limits.py` из М10A). Тест строит ровно такое дерево: документ выше потолка, указатель меньше 200 байт, и член получает все 500 папок.
 
-## Step 2 — Believed by its signature
+## Шаг 2 — Верят по подписи
 
-The document carries the signer's signature, made with the same Ed25519 key that signs tokens, under its `kid`:
+Документ несёт подпись подписывающего, сделанную тем же ключом Ed25519, которым подписываются токены, под его `kid`:
 
 ```python
 def sign(doc: dict, issuer: TokenIssuer) -> dict:
     return {**doc, "kid": issuer.kid, "sig": _b64(issuer.key.sign(_canonical(doc)))}
 ```
 
-and a member checks it against **its own** key set — the one its agent carried into `domain/keys` — never one that arrived with the document. That is the whole difference between a copy and a rumour: a copy that verifies is as good as the original wherever it came from, and a copy that does not is nothing, however it arrived.
+и член проверяет её по **своему** набору ключей — тому, который его агент принёс в `domain/keys`, — и никогда по набору, пришедшему вместе с документом. В этом вся разница между копией и слухом: копия, которая проходит проверку, так же хороша, как оригинал, откуда бы она ни пришла, а копия, которая не проходит, — ничто, как бы она ни попала сюда.
 
-The test does what an attacker who can write to the domain's object store would do: signs a document with a key of its own, stores it, and points at it with a checksum that matches perfectly. The checksum proves the object is the one the pointer names. It proves nothing about who wrote it. The agent refuses — *signed by key 'a1b2c3d4', which this member does not trust* — keeps the document it had, and writes the refusal into `domain/shared-refused`, where the domain reads it.
+Тест делает то, что сделал бы злоумышленник, способный писать в хранилище объектов домена: подписывает документ собственным ключом, кладёт его и указывает на него с идеально совпадающей контрольной суммой. Контрольная сумма доказывает, что объект — тот, который называет указатель. О том, кто его написал, она не доказывает ничего. Агент отказывается — *signed by key 'a1b2c3d4', which this member does not trust* (подписано ключом 'a1b2c3d4', которому этот член не доверяет), — сохраняет документ, который у него был, и записывает отказ в `domain/shared-refused`, где его читает домен.
 
-## Step 3 — Never backwards
+## Шаг 3 — Никогда назад
 
-A domain restored from yesterday's backup points at yesterday's revision. A member that already holds today's must not take it. The rule is one comparison, made before anything is fetched:
+Домен, восстановленный из вчерашней резервной копии, указывает на вчерашнюю ревизию. Член, у которого уже есть сегодняшняя, не должен её брать. Правило — одно сравнение, сделанное прежде, чем что-либо загружается:
 
 ```python
     have, hidx = member_vars.get(dst)
@@ -72,19 +72,19 @@ A domain restored from yesterday's backup points at yesterday's revision. A memb
         return "up to date" if ... else "holding newer"
 ```
 
-`rev` counts edits. `term` is Lesson 15's: the number of times the domain has been re-hosted, and it outranks `rev` — a re-hosted domain starts from the newest backup it can find, which may be a few revisions behind, and its next edit must still win. Until Lesson 15 the term is 1.
+`rev` считает правки. `term` — из урока 15: сколько раз домен переносили, и он старше `rev`. Перенесённый домен начинает с самой новой резервной копии, какую сможет найти, а она может отставать на несколько ревизий, — и его следующая правка всё равно должна победить. До урока 15 срок равен 1.
 
-## Step 4 — Kept where it is read
+## Шаг 4 — Хранится там, где читается
 
-The agent carries the document home — object first, then the member's copy of the pointer, so a member that dies between the two still points at a document it has — into the member's **durable** store. On a camera that is its card, not its RAM (Lesson 10): the settings must survive a reboot with the domain unreachable. The member's console reads it through `SharedView`, which checks the signature again on the way in, because a copy on flash is still only data.
+Агент несёт документ домой — сначала объект, потом копию указателя у члена, чтобы член, умерший между этими двумя шагами, всё равно указывал на документ, который у него есть, — в **долговечное** хранилище члена. На камере это её карта, а не RAM (урок 10): настройки должны пережить перезагрузку при недоступном домене. Консоль члена читает их через `SharedView`, который на входе снова проверяет подпись, потому что копия на флеше — всё равно только данные.
 
-The last test is the module's thesis applied to settings: publish, carry, switch the domain off, reboot the camera — and the defaults are what they were.
+Последний тест — тезис модуля в применении к настройкам: опубликовать, донести, выключить домен, перезагрузить камеру — и умолчания остаются такими, какими были.
 
-## Step 5 — A default, not a copy
+## Шаг 5 — Умолчание, а не копия
 
-The tempting implementation of *default retention fourteen days* is to write fourteen into every row that has none. It is wrong three ways. It makes the agent a writer of rows, which Lesson 4 forbade. It turns one change of default into five hundred writes, some to cameras that are off — five hundred edits for Lesson 9 to keep. And afterwards nobody can tell a camera that was *set* to fourteen from one that merely inherited it, so the next change of default cannot know which rows to change.
+Соблазнительная реализация *срока хранения по умолчанию в четырнадцать дней* — записать четырнадцать в каждую строку, где его нет. Это неверно трижды. Это делает агента писателем строк, что урок 4 запретил. Это превращает одно изменение умолчания в пятьсот записей, часть из них — на выключенные камеры: пятьсот правок, которые придётся сохранять уроку 9. И потом никто не отличит камеру, которой *задали* четырнадцать, от той, что просто унаследовала это значение, — поэтому следующее изменение умолчания не сможет узнать, какие строки менять.
 
-So a shared setting is resolved **when it is read**, and the console says where each value came from:
+Поэтому общая настройка разрешается **при чтении**, и консоль говорит, откуда взялось каждое значение:
 
 ```python
     def effective(self, row: dict) -> dict[str, tuple[object, str]]:
@@ -95,52 +95,52 @@ So a shared setting is resolved **when it is read**, and the console says where 
                 out[k] = (defaults[k], f"domain rev {doc['rev']}")
 ```
 
-The test sets thirty days on one camera's own page, publishes a default of fourteen, and checks both answers — `(14, "domain rev 1")` and `(30, "camera")` — and that no row's revision moved.
+Тест задаёт тридцать дней на собственной странице одной камеры, публикует умолчание в четырнадцать и проверяет оба ответа — `(14, "domain rev 1")` и `(30, "camera")`, — а также то, что ревизия ни одной строки не сдвинулась.
 
-## Step 6 — Delivered to how many
+## Шаг 6 — Доставлено скольким
 
-Accepted is not delivered, as Lesson 9 said of edits. The console shows beside the settings which members hold which revision, read from each member's own copy of the pointer — the agent's report:
+Принято — не значит доставлено, как урок 9 говорил о правках. Рядом с настройками консоль показывает, какие члены держат какую ревизию, — это читается из копии указателя у каждого члена, то есть из отчёта агента:
 
 ```
 rev 1 on 2 of 3 members; not answering: cam-SN2
 ```
 
-A member that is off is named, not rounded into the total, and a member that refused is named with its reason. When SN2 comes back, its agent takes the document on its first pass and the sentence becomes *rev 1 on 3 of 3 members*.
+Выключенный член назван, а не округлён в общее число, а член, который отказался, назван вместе с причиной. Когда SN2 вернётся, его агент возьмёт документ в первом же проходе, и фраза станет *rev 1 on 3 of 3 members*.
 
-## Step 7 — Scenarios between cameras
+## Шаг 7 — Сценарии между камерами
 
-A scenario — *vehicle at the gate, yard camera to preset 3* — is shared data like the rest: it is in the document, and every member has it. Each member runs the scenarios whose trigger is its own event. The action is on **another** member, and there the shared document stops helping: turning the yard camera is a request to that camera's cluster, forwarded through the domain as Lesson 3 forwards an edit.
+Сценарий — *машина у ворот, камеру двора на пресет 3* — такие же общие данные, как остальное: он в документе, и он есть у каждого члена. Каждый член выполняет сценарии, чей триггер — его собственное событие. Действие же — на **другом** члене, и там общий документ перестаёт помогать: повернуть камеру двора — это запрос к кластеру этой камеры, пересланный через домен так же, как урок 3 пересылает правку.
 
-And unlike an edit, it is **not kept** when the target is off. *Preset 3 now* is worth something now; delivered an hour later, when the camera boots, it points the camera at an empty yard for no reason anybody remembers. A request carries a deadline and dies at it; an edit carries a value and waits. That difference is the exercise below.
+И в отличие от правки, он **не сохраняется**, когда цель выключена. *Пресет 3 сейчас* чего-то стоит сейчас; доставленный через час, когда камера загрузится, он повернёт камеру на пустой двор без причины, которую кто-нибудь помнит. Запрос несёт крайний срок и умирает в нём; правка несёт значение и ждёт. Эта разница — упражнение ниже.
 
 ---
 
-## Troubleshooting
+## Что может пойти не так
 
-| Symptom | Likely cause |
+| Симптом | Вероятная причина |
 |---|---|
-| Publishing the folder tree fails with a size error | The settings are in a Variable. Put them in an object and point at it. |
-| A member took a document written by someone without the key | The signature is checked against a key set that came with the document, or not at all. Check against the member's `domain/keys`. |
-| After restoring the domain, members lost last week's settings | The agent replaces what it holds with whatever the pointer names. Compare `(term, rev)` first. |
-| Changing a default takes minutes and leaves some cameras behind | The default is written into rows. Resolve it at read time. |
-| The console says "delivered" while a camera is off | The report counts responses, not members. Name the silent ones. |
+| Публикация дерева папок падает с ошибкой размера | Настройки лежат в Variable. Положите их в объект и укажите на него. |
+| Член принял документ, написанный кем-то без ключа | Подпись проверяется по набору ключей, пришедшему с документом, или не проверяется вовсе. Проверяйте по `domain/keys` члена. |
+| После восстановления домена члены потеряли настройки прошлой недели | Агент заменяет то, что держит, тем, что называет указатель. Сначала сравнивайте `(term, rev)`. |
+| Изменение умолчания занимает минуты и оставляет часть камер позади | Умолчание записывается в строки. Разрешайте его при чтении. |
+| Консоль говорит «доставлено», пока камера выключена | Отчёт считает ответы, а не членов. Называйте молчащих. |
 
-## Recap
+## Итог
 
-- Shared settings are one object behind one pointer; the pointer is the CAS, the object has no size ceiling worth naming.
-- Signed with the domain's key and verified against the member's own key set: a copy is believed by its signature.
-- `(term, rev)` only grows on a member, whatever the domain points at today.
-- Kept in the member's durable store and read there, with the domain gone.
-- A default is resolved at read time and never written into rows; the console says where each value came from.
-- Delivery is reported per member, silent ones named.
+- Общие настройки — один объект за одним указателем; указатель — это CAS, у объекта нет потолка размера, о котором стоило бы говорить.
+- Подписано ключом домена и проверено по собственному набору ключей члена: копии верят по подписи.
+- `(term, rev)` на члене только растёт, на что бы домен ни указывал сегодня.
+- Хранится в долговечном хранилище члена и читается там, когда домена нет.
+- Умолчание разрешается при чтении и никогда не записывается в строки; консоль говорит, откуда взялось каждое значение.
+- О доставке сообщается по каждому члену, молчащие названы.
 
-## Exercises
+## Упражнения
 
-1. Write a forwarded request for *preset 3 on the yard camera* with a deadline. What does the domain answer when the yard camera is off, and why is that different from Lesson 9's answer for an edit?
-2. The signer rotates its token key (Lesson 7). A member has been off for longer than the overlap. What happens to the next shared document it is offered, and what must the agent carry first?
-3. Two customers' sites share a folder tree template but not their cameras. Design the document so each domain can publish its own tree without either one being able to change the other's.
-4. A camera's own page shows its effective retention. Write the sentence it shows for a value inherited from the domain, including the case where the camera has never received a document at all.
+1. Напишите пересылаемый запрос *пресет 3 на камере двора* с крайним сроком. Что отвечает домен, когда камера двора выключена, и почему это отличается от ответа урока 9 на правку?
+2. Подписывающий сменяет свой ключ для токенов (урок 7). Член был выключен дольше, чем длится перекрытие. Что происходит со следующим общим документом, который ему предложат, и что агент должен донести сначала?
+3. Площадки двух заказчиков используют общий шаблон дерева папок, но не общие камеры. Спроектируйте документ так, чтобы каждый домен мог публиковать своё дерево и ни один не мог изменить чужое.
+4. Собственная страница камеры показывает её действующий срок хранения. Напишите фразу, которую она показывает для значения, унаследованного от домена, включая случай, когда камера вообще ни разу не получала документа.
 
-## Where this is going
+## Что дальше
 
-Settings cross from the domain to every member. [**Lesson 13**](13-a-stream-from-another-cluster.md) sends something the other way and sideways: a server room's recorder recording a camera that is a cluster of its own — footage crossing between clusters while the work stays where it is.
+Настройки идут от домена к каждому члену. [**Урок 13**](13-a-stream-from-another-cluster.md) отправляет кое-что в обратную сторону и вбок: регистратор серверной записывает камеру, которая сама себе кластер, — видео пересекает границу между кластерами, а работа остаётся там, где была.
