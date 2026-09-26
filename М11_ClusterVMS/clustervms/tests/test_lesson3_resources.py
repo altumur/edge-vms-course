@@ -70,7 +70,7 @@ def test_a_timeline_spans_two_resources_and_names_the_unreachable_one():
 def test_the_resource_policy_needs_neither_worker_nor_controller():
     c = Cluster(); ctl = ClusterController(c.vars, c.objects, wall=c.wall)
     ctl.create_camera({"source": "driverpack://file/1.mp4"})
-    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1", "retention_days": 1})   # retention is the RECORDING's row
+    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"name": "1", "cam": "1", "retention_days": 1})   # retention is the RECORDING's row
     srv = c.servers["srv-a"]; t = c.wall()
     _segment(srv, 1, 1, t - 3 * 86400); _segment(srv, 1, 1, t - 3600)
     os.remove(os.path.join(srv.archive, Manifest(srv.archive, 1).read()[1].path))   # a file gone behind the manifest's back
@@ -282,7 +282,7 @@ def test_the_round_trip_a_server_leaves_comes_back_and_takes_its_footage_with_it
     rec = SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall)
     rs = {s: _hb(c, s, free=500_000) for s in c.servers}
     ctl.create_camera({"source": "driverpack://file/1.mp4"})
-    rec.create({"cam": "1", "home": "srv-a"})            # the operator names the disk the footage lives on
+    rec.create({"name": "1", "cam": "1", "home": "srv-a"})            # the operator names the disk the footage lives on
 
     # at home: the camera on srv-a, the recording beside it because `near: vms`
     a = c.worker(1, "srv-a"); a.heartbeat_once(); ctl.ensure_placed(); a.reconcile_once(); a.heartbeat_once()

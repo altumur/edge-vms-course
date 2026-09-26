@@ -167,7 +167,7 @@ def test_the_console_over_http():
     call("PUT", "/policy", {"servers": "shared"})
     # the recorder at /rec/…: the page's Record toggle writes a recording row; placement is the rec controller's, not the console's
     st, out = call("GET", "/mounts"); assert json.loads(out) == {"root": "vms", "mounts": {"rec": json.loads(call("GET", "/rec/spec")[1])}}
-    st, out = call("POST", "/rec/recordings", {"cam": "1", "retention_days": 7}, {"Idempotency-Key": "r1"}); assert st == 201 and json.loads(out)["worker"] is None
+    st, out = call("POST", "/rec/recordings", {"name": "1", "cam": "1", "retention_days": 7}, {"Idempotency-Key": "r1"}); assert st == 201 and json.loads(out)["worker"] is None
     assert c.vars.get("rec/recordings/1")[0]["retention_days"] == "7" and json.loads(call("GET", "/rec/policy")[1])["servers"] == "distinct"   # the recorder's own knob
     assert call("PUT", "/rec/recordings/1", {"worker": "r-0"})[0] == 400
     assert call("DELETE", "/rec/recordings/1")[0] in (200, 204)

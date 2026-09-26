@@ -142,7 +142,7 @@ def test_the_power_pull_moves_the_recording_and_leaves_the_footage_where_it_was_
     rec = SpecController(REC_SPEC, c.vars.as_writer("reccontroller", REC_SPEC.acl_controller()), c.objects, wall=c.wall)
     assert rec.policy() == {"servers": "distinct"} and ctl.policy() == {"servers": "shared"}   # each subsystem's own default
     r1, r2 = c.recorder(1, "srv-a"), c.recorder(2, "srv-b"); r1.heartbeat_once(); r2.heartbeat_once()
-    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"cam": "1"})           # the operator: record camera 1
+    SpecController(REC_SPEC, c.vars, c.objects, wall=c.wall).create({"name": "1", "cam": "1"})           # the operator: record camera 1
     pl = rec.ensure_placed()[0]
     assert pl.worker == "r-1" and r1.reconcile_once() == [("start", "1")]   # placed where the disks are; the camera comes to it (a recording's unit id is a name, not a number)
     assert r1.actuator.started["1"]["source"] == live_shm(1) and r1.actuator.started["1"]["via"] == "shm" and r1.actuator.started["1"]["epoch"] == 1   # so it reads the worker's tee, not RTSP

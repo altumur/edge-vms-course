@@ -1,0 +1,44 @@
+# console
+GET /v1/var/platform/schema?namespace=default
+→ 404
+
+# console
+GET /v1/var/vms/next_id?namespace=default
+→ 404
+
+# console
+PUT /v1/var/vms/next_id?namespace=default&cas=0
+{"Items": {"n": "1"}}
+→ 200 {"Path": "vms/next_id", "ModifyIndex": 1001}
+
+# console
+PUT /v1/var/vms/cameras/1?namespace=default&cas=0
+{
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "north-gate",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "vlan:cctv-a",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  }
+}
+→ 200 {"Path": "vms/cameras/1", "ModifyIndex": 1002}
+
+# console
+GET /v1/var/vms/retention/1?namespace=default
+→ 404
+
+# console
+PUT /v1/var/vms/retention/1?namespace=default&cas=0
+{"Items": {"days": "365"}}
+→ 200 {"Path": "vms/retention/1", "ModifyIndex": 1003}

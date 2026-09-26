@@ -1,0 +1,4 @@
+# vmsworker (allocation 0 on srv-a)
+PUT /v1/var/vms/cameras/1?namespace=default
+{"Items": {"name": "mine now"}}
+→ 403 "Permission denied"

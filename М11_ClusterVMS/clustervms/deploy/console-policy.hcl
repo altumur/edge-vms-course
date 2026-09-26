@@ -20,6 +20,14 @@ namespace "default" {
     path "rec/*"           { capabilities = ["read", "list"] }
     path "vms/sweep"       { capabilities = ["write", "read"] }                   # what the blob sweep marked, and when
     path "rec/sweep"       { capabilities = ["write", "read"] }
+    # Requests (М10A Lesson 24, М10B Lessons 16 and 21) — an operator asking a worker to DO something: open
+    # a relay, fetch a range from a card. The console writes them and removes what a worker reports done,
+    # hence `destroy`. And the volumes (М10B Lesson 10): the administrator's list of archives, created and
+    # deleted from the page. Both named by `acl_console()` since they were written, and absent here until the
+    # policies were checked against the code again.
+    path "vms/requests/*"  { capabilities = ["write", "read", "list", "destroy"] }
+    path "rec/requests/*"  { capabilities = ["write", "read", "list", "destroy"] }
+    path "rec/volumes/*"   { capabilities = ["write", "read", "list", "destroy"] }
     # `destroy` — the only grant in this cluster that lets anything remove an object, and it is bounded to
     # the one prefix whose contents can be proved unreferenced (М10A Lesson 29). Heartbeats and snapshot
     # shards are deliberately NOT here: a worker reads the heartbeat its previous instance left to measure

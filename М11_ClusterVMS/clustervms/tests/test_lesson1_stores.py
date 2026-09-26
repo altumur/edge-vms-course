@@ -70,3 +70,15 @@ def test_the_object_store_on_this_cluster_is_variables():
         VariablesObjectStore(v.as_writer("vmsworker", ["vms/epoch/*"])).put("vms/heartbeats/w-2", b"{}"); assert False
     except Forbidden:
         pass                                                                    # the ACL comes with the token, as for every Variable
+
+
+def test_every_writer_sees_one_log():
+    """A ModifyIndex comes from ONE raft log, whichever token wrote. Two writers' views of the store must
+    never hand out the same index — or a stale CAS can match a write it never saw, and an edit is lost with
+    no 409 to say so. The fake broke this once: each writer's view counted on its own."""
+    v = FakeVariables()
+    console, worker = v.as_writer("console", ["vms/cameras/*"]), v.as_writer("vmsworker", ["vms/epoch/*"])
+    a = console.put("vms/cameras/1", {"name": "gate"}, cas=0)
+    b = worker.put("vms/epoch/1", {"epoch": "1"}, cas=0)
+    c = console.put("vms/cameras/1", {"name": "gate-2"}, cas=a)
+    assert a < b < c and len({a, b, c}) == 3

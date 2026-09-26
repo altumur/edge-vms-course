@@ -1,0 +1,149 @@
+# console A
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "north-gate",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1002
+}
+
+# console B
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "north-gate",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1002
+}
+
+# console B
+PUT /v1/var/vms/cameras/1?namespace=default&cas=1002
+{
+  "Items": {
+    "id": "1",
+    "revision": "2",
+    "name": "north-gate",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "30",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  }
+}
+→ 200 {"Path": "vms/cameras/1", "ModifyIndex": 1004}
+
+# console B
+GET /v1/var/vms/retention/1?namespace=default
+→ 200 {"Path": "vms/retention/1", "Items": {"days": "365"}, "ModifyIndex": 1003}
+
+# console B
+PUT /v1/var/vms/retention/1?namespace=default&cas=1003
+{"Items": {"days": "30"}}
+→ 200 {"Path": "vms/retention/1", "ModifyIndex": 1005}
+
+# console A
+PUT /v1/var/vms/cameras/1?namespace=default&cas=1002
+{
+  "Items": {
+    "id": "1",
+    "revision": "1",
+    "name": "north-gate-2",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "365",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  }
+}
+→ 409 {"ModifyIndex": 1004}
+
+# console A
+GET /v1/var/vms/cameras/1?namespace=default
+→ 200 {
+  "Path": "vms/cameras/1",
+  "Items": {
+    "id": "1",
+    "revision": "2",
+    "name": "north-gate",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "30",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  },
+  "ModifyIndex": 1004
+}
+
+# console A
+PUT /v1/var/vms/cameras/1?namespace=default&cas=1004
+{
+  "Items": {
+    "id": "1",
+    "revision": "2",
+    "name": "north-gate-2",
+    "source": "driverpack://acme/10.2.0.11",
+    "enabled": "true",
+    "events_retention_days": "30",
+    "priority": "100",
+    "labels": "",
+    "folders": "",
+    "alarms": "",
+    "ref": "",
+    "cred_username": "",
+    "cred_secret": "",
+    "live": "always",
+    "kind": "video"
+  }
+}
+→ 200 {"Path": "vms/cameras/1", "ModifyIndex": 1006}

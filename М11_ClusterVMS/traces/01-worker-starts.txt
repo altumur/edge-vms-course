@@ -1,0 +1,51 @@
+# vmsworker (allocation 0 on srv-a)
+GET /v1/var/platform/schema?namespace=default
+→ 404
+
+# vmsworker (allocation 0 on srv-a)
+GET /v1/vars?prefix=vms/slots/&namespace=default
+→ 200 []
+
+# vmsworker (allocation 0 on srv-a)
+GET /v1/var/vms/slots/w-0?namespace=default
+→ 404
+
+# vmsworker (allocation 0 on srv-a)
+PUT /v1/var/vms/slots/w-0?namespace=default&cas=0
+{"Items": {"holder": "alloc-0001", "until": "1757500045.0", "released": "false", "gen": "1"}}
+→ 200 {"Path": "vms/slots/w-0", "ModifyIndex": 1001}
+
+# vmsworker (allocation 0 on srv-a)
+GET /v1/var/objects/vms/heartbeats/w-0?namespace=default
+→ 404
+
+# vmsworker (allocation 0 on srv-a)
+PUT /v1/var/objects/vms/heartbeats/w-0?namespace=default
+{
+  "Items": {
+    "data": {
+      "worker": "w-0",
+      "ts": 1757500000.0,
+      "status": [],
+      "server": "srv-a",
+      "instance": "alloc-0001",
+      "alloc": "alloc-0001",
+      "labels": "vlan:cctv-a",
+      "assignment_rev": 0,
+      "fenced": false,
+      "conflicts": 0,
+      "passes": 0,
+      "capacity": 50,
+      "headroom": 50,
+      "started": 1757500000.0,
+      "previous_hb": 0.0,
+      "previous_instance": "",
+      "archive": "/data/archive",
+      "devices": [],
+      "fetched": "",
+      "schema": 1,
+      "build": "dev"
+    }
+  }
+}
+→ 200 {"Path": "objects/vms/heartbeats/w-0", "ModifyIndex": 1002}

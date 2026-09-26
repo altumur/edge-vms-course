@@ -111,7 +111,10 @@ class FakeVariables:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._raft_index = 1000
+        # ONE log for the whole cluster, shared by every writer's view of it: `as_writer` copies this object's
+        # attributes, and an int copied is a second counter — two views then hand out the same ModifyIndex,
+        # and a stale CAS can match a write it never saw. A list is shared by the copy; an int is not.
+        self._log = [1000]
         self._items: dict[str, tuple[dict, int]] = {}
         self.acl: dict[str, list[str]] = {}        # writer -> allowed prefixes
         self.writer: str | None = None            # "who am I" for the ACL check
@@ -146,9 +149,9 @@ class FakeVariables:
             _, current = self._items.get(path, (None, 0))
             if cas is not None and cas != current:
                 raise Conflict(f"cas={cas} but ModifyIndex={current}")
-            self._raft_index += 1
-            self._items[path] = ({k: str(v) for k, v in items.items()}, self._raft_index)
-            return self._raft_index
+            self._log[0] += 1
+            self._items[path] = ({k: str(v) for k, v in items.items()}, self._log[0])
+            return self._log[0]
 
     def list(self, prefix):
         with self._lock:
@@ -162,7 +165,7 @@ class FakeVariables:
             if cas is not None and cas != current:
                 raise Conflict(f"cas={cas} but ModifyIndex={current}")
             self._items.pop(path, None)
-            self._raft_index += 1
+            self._log[0] += 1
 
 
 register_scheme("nomad", _open_nomad)

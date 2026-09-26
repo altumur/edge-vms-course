@@ -6,6 +6,7 @@ namespace "default" {
   variables {
     path "vms/epoch/*"  { capabilities = ["write", "read", "list"] }
     path "vms/slots/*"  { capabilities = ["write", "read", "list"] }
+    path "vms/holds/*"  { capabilities = ["write", "read", "list"] }    # the place it took — a claim about this process, like its slot
     path "objects/vms/heartbeats/*" { capabilities = ["write", "read", "list"] }   # its heartbeat, as an object-as-Variable
     path "objects/vms/*" { capabilities = ["read", "list"] }            # the snapshot and the blobs: read, never written by a worker
     path "vms/*"        { capabilities = ["read", "list"] }
