@@ -57,13 +57,13 @@ class Stand(Cluster):
         return ClusterRecorder(v, o, actuator or FakeActuator(), env=self.env(index, server, alloc),
                                archive=self.servers[server].resource, clock=self.clock, wall=self.wall, capacity=capacity)
 
-    def resources_up(self) -> dict:
+    def resources_up(self, peers=None) -> dict:
         """Each server's resource job, heartbeating — what makes a server a place footage can go (lesson 6)."""
         from cluster.resource import cluster_resource
         self.resources = {}
         for name, srv in self.servers.items():
             v, o = self.as_process(f"resource ({name})", f"resource-{name}", ["objects/platform/resources/*"])
-            r = cluster_resource(srv.resource, name, f"http://{name}:8090", v, o, wall=self.wall)
+            r = cluster_resource(srv.resource, name, f"http://{name}:8090", v, o, wall=self.wall, peers=peers)
             r.space_probe = lambda path: (4 * 10**12, 3 * 10**12)     # a 4 TB disk, 1 TB used — the same on every run
             r.heartbeat()
             self.resources[name] = r
@@ -250,6 +250,157 @@ def who_may_write_what() -> str:
     return s.log.render()
 
 
+def _host(url: str) -> str:
+    return url.split("//", 1)[1].split("/", 1)[0].split(":", 1)[0]
+
+
+class _Manifests:
+    """The console's manifest reader over the servers' directories instead of HTTP — `GET <resource>/manifest/<unit>`."""
+
+    def __init__(self, s):
+        self.s = s
+
+    def read(self, url, cam):
+        from vms.archive import Manifest
+        srv = self.s.servers[_host(url)]
+        if getattr(srv, "down", False):
+            raise ConnectionError(srv.name)
+        return Manifest(srv.archive, cam).read()
+
+
+def _peers(s):
+    """The resources' peer client over directories instead of HTTP — the three calls `PeerClient` makes."""
+    from tests.test_lesson3_events import DirReader
+
+    class Peers(DirReader):
+        def _srv(self, url):
+            srv = self.c.servers[_host(url)]
+            if getattr(srv, "down", False):
+                raise ConnectionError(srv.name)
+            return srv
+    return Peers(s)
+
+
+def _json(obj) -> str:
+    import json
+    return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def an_edit_during_the_failover() -> str:
+    """Lesson 6: srv-a dies under w-1; while nobody runs it, the operator renames the camera; the replacement
+    on srv-b starts it with the new name. Nothing was published for this to work — the edit is in raft."""
+    s = Stand()
+    s.resources_up()
+    con, ctl = s.console(), s.controller()
+    con.create_camera({"name": "before", "source": "driverpack://file/1.mp4"})
+    a = s.worker(1, "srv-a"); a.heartbeat_once(); ctl.ensure_placed(); a.reconcile_once()
+    s.wall.advance(20)                                                 # srv-a is gone; w-1 is between instances
+    mark = s.log.mark()
+    con.update_camera(1, {"name": "edited during the failover"})
+    b = s.worker(1, "srv-b", alloc="alloc-0077")
+    b.reconcile_once()
+    return s.log.render(since=mark)
+
+
+def a_timeline_across_two_resources() -> str:
+    """Lesson 6: camera 7 was recorded on srv-a under epoch 3 until the failure, then on srv-b under epoch 4.
+    The console's timeline merges the two resources' manifests; srv-a goes silent and is NAMED; it comes back
+    and nothing was rebuilt. Not a store trace: the heartbeat, then what `/timeline/7` answers, three times."""
+    from cluster.resource import resources_seen
+    from cluster.timeline import merged_timeline
+    from tests.test_lesson3_resources import _segment
+    s = Stand()
+    t = s.wall()
+    _segment(s.servers["srv-a"], 7, 3, t - 1200); _segment(s.servers["srv-a"], 7, 3, t - 600)
+    _segment(s.servers["srv-b"], 7, 4, t - 300)
+    rs = s.resources_up()
+    out = ["# the heartbeat srv-a's resource publishes", "GET /v1/var/objects/platform/resources/srv-a/heartbeat → data:",
+           _json(resources_seen(s.objects)["srv-a"])]
+    ask = lambda: merged_timeline(resources_seen(s.objects), _Manifests(s), 7, t - 2000, t, current_epoch=4, now=s.wall())
+    out += ["", "# GET /timeline/7 — both resources answer", _json(ask())]
+    s.wall.advance(60); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    out += ["", "# srv-a has been silent for 60 s", _json(ask())]
+    rs["srv-a"].heartbeat()
+    out += ["", "# srv-a is back — with its disks", _json(ask())]
+    return s.log._clean("\n".join(out)) + "\n"
+
+
+def _events_site(peers=None):
+    from tests.test_lesson3_events import _observe
+    s = Stand()
+    t = s.wall() - 7200
+    _observe(s, "srv-a", "vms", "7", 3, t + 12, "motion", zone="gate")          # the VMS worker, camera 7, before the failover
+    _observe(s, "srv-a", "vms", "7", 3, t + 40, "silent")
+    _observe(s, "srv-b", "vms", "7", 4, t + 1205, "motion")                      # after it: next epoch, other server
+    _observe(s, "srv-c", "det", "d-12", 1, t + 30, "person", cam=7, score=0.9)  # a detector ABOUT camera 7, on a GPU server
+    _observe(s, "srv-a", "vms", "7", 3, t + 6800, "motion")                      # in srv-a's OPEN bucket
+    return s, t
+
+
+def _merged(s):
+    from w2cplatform.eventdatabase import MergedIndex
+
+    def fetch(url, p):
+        name = _host(url)
+        if getattr(s.servers[name], "down", False):
+            raise ConnectionError(name)
+        return s.resources[name].database.query(float(p["from"]), float(p["to"]), int(p["cam"]) if "cam" in p else None,
+                                                p.get("kind"), p.get("subsystem"), p.get("unit"), limit=int(p.get("limit", 1000)))
+    return MergedIndex(s.objects, fetch=fetch, wall=s.wall)
+
+
+def _short(q) -> dict:
+    keep = ("t", "subsystem", "unit", "kind", "server", "epoch", "fenced", "cam")
+    return {"state": q["state"], "events": [{k: e[k] for k in keep if k in e} for e in q["events"]]}
+
+
+def events_merged() -> str:
+    """Lesson 7: each resource keeps a database over its OWN tree; the console holds none and merges theirs,
+    fencing by the epochs only the cluster's rows know. A silent resource is named, not guessed."""
+    s, t = _events_site()
+    rs = s.resources_up()
+    out = ["# each resource rebuilds its own database, from its own buckets"]
+    for name in rs:
+        out.append(f"{name}: {rs[name].database.rebuild()}")
+    m = _merged(s)
+    out += ["", "# GET /events?cam=7 on the console — merged from every live resource",
+            _json(_short(m.query(t, t + 7200, cam=7, current_epochs={("vms", "7"): 4})))]
+    s.wall.advance(60); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    out += ["", "# srv-a has been silent for 60 s", _json(_short(m.query(t, t + 7200, cam=7, current_epochs={("vms", "7"): 4})))]
+    return "\n".join(out) + "\n"
+
+
+def the_events_mirror() -> str:
+    """Lesson 7: the storage knob's events row — one Variable. Each resource copies its CLOSED buckets to the
+    next live resource; srv-a goes silent and its events come from srv-b's copy, saying so; srv-a returns with
+    an empty disk and pulls its buckets home."""
+    import os
+    import shutil
+    from w2cplatform.resource import MIRROR_KEY
+    s, t = _events_site()
+    rs = s.resources_up(peers=_peers(s))
+    out = [f"# knob off: srv-a pass -> mirrored {rs['srv-a'].pass_()['mirrored']}"]
+    s.vars.put(MIRROR_KEY, {"enabled": "true", "copies": "1"})
+    out.append("# the knob: PUT /v1/var/platform/mirror {\"Items\": {\"enabled\": \"true\", \"copies\": \"1\"}}")
+    for name in rs:
+        r = rs[name].pass_()
+        out.append(f"{name} pass -> mirrored {r['mirrored']} to {r['peers']}")
+    for r in rs.values():
+        r.heartbeat()
+    for name in rs:
+        out.append(f"{name} database rebuild -> {rs[name].database.rebuild()}")
+    m = _merged(s)
+    out += ["", "# srv-a answers: its own events, the open bucket included", _json(_short(m.query(t, t + 7200, cam=7)))]
+    s.wall.advance(60); rs["srv-b"].heartbeat(); rs["srv-c"].heartbeat()
+    out += ["", "# srv-a silent: its closed buckets, from srv-b's copy", _json(_short(m.query(t, t + 7200, cam=7)))]
+    shutil.rmtree(s.servers["srv-a"].archive); os.makedirs(s.servers["srv-a"].archive)
+    rs["srv-a"].heartbeat()
+    out += ["", f"# srv-a back with an EMPTY disk: restore -> {rs['srv-a'].restore()}"]
+    rs["srv-a"].heartbeat(); rs["srv-a"].database.rebuild()
+    out += [_json(_short(m.query(t, t + 7200, cam=7)))]
+    return "\n".join(out) + "\n"
+
+
 SCENES = {"01-worker-starts": worker_starts,
           "02-console-creates-a-camera": console_creates_a_camera,
           "02-two-editors-one-row": two_editors_one_row,
@@ -259,7 +410,11 @@ SCENES = {"01-worker-starts": worker_starts,
           "04-scale-out-and-in": scale_out_and_in,
           "04-a-crash-releases-nothing": a_crash_releases_nothing,
           "04-what-the-autoscaler-reads": what_the_autoscaler_reads,
-          "05-who-may-write-what": who_may_write_what}
+          "05-who-may-write-what": who_may_write_what,
+          "06-an-edit-during-the-failover": an_edit_during_the_failover,
+          "06-a-timeline-across-two-resources": a_timeline_across_two_resources,
+          "07-events-merged": events_merged,
+          "07-the-events-mirror": the_events_mirror}
 
 
 def main() -> None:

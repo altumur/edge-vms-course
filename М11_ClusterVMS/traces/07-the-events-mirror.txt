@@ -1,0 +1,159 @@
+# knob off: srv-a pass -> mirrored 0
+# the knob: PUT /v1/var/platform/mirror {"Items": {"enabled": "true", "copies": "1"}}
+srv-a pass -> mirrored 1 to ['srv-b']
+srv-b pass -> mirrored 1 to ['srv-c']
+srv-c pass -> mirrored 1 to ['srv-a']
+srv-a database rebuild -> {'added': 4, 'segments': 3, 'mirrored': ['srv-c']}
+srv-b database rebuild -> {'added': 3, 'segments': 2, 'mirrored': ['srv-a']}
+srv-c database rebuild -> {'added': 2, 'segments': 2, 'mirrored': ['srv-b']}
+
+# srv-a answers: its own events, the open bucket included
+{
+  "state": "live",
+  "events": [
+    {
+      "t": 1757492812.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492830.0,
+      "subsystem": "det",
+      "unit": "d-12",
+      "kind": "person",
+      "server": "srv-c",
+      "epoch": 1,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492840.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "silent",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757494005.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-b",
+      "epoch": 4,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757499600.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    }
+  ]
+}
+
+# srv-a silent: its closed buckets, from srv-b's copy
+{
+  "state": "live; srv-a from mirror",
+  "events": [
+    {
+      "t": 1757492812.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492830.0,
+      "subsystem": "det",
+      "unit": "d-12",
+      "kind": "person",
+      "server": "srv-c",
+      "epoch": 1,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492840.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "silent",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757494005.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-b",
+      "epoch": 4,
+      "fenced": false,
+      "cam": 7
+    }
+  ]
+}
+
+# srv-a back with an EMPTY disk: restore -> {'pulled': 1, 'rec.added': 0, 'rec.dropped': 0, 'rec.media_removed': 0}
+{
+  "state": "live",
+  "events": [
+    {
+      "t": 1757492812.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492830.0,
+      "subsystem": "det",
+      "unit": "d-12",
+      "kind": "person",
+      "server": "srv-c",
+      "epoch": 1,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757492840.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "silent",
+      "server": "srv-a",
+      "epoch": 3,
+      "fenced": false,
+      "cam": 7
+    },
+    {
+      "t": 1757494005.0,
+      "subsystem": "vms",
+      "unit": "7",
+      "kind": "motion",
+      "server": "srv-b",
+      "epoch": 4,
+      "fenced": false,
+      "cam": 7
+    }
+  ]
+}

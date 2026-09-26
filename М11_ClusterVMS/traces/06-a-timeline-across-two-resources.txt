@@ -1,0 +1,113 @@
+# the heartbeat srv-a's resource publishes
+GET /v1/var/objects/platform/resources/srv-a/heartbeat → data:
+{
+  "server": "srv-a",
+  "ts": 1757500000.0,
+  "url": "http://srv-a:8090",
+  "schema": 1,
+  "build": "dev",
+  "usage": 2318,
+  "usage_at": 1757500000.0,
+  "space": {
+    "total": 4000000000000,
+    "free": 3000000000000,
+    "used": 1000000000000,
+    "full": 0.25
+  },
+  "volumes": {
+    "default": {
+      "total": 4000000000000,
+      "free": 3000000000000,
+      "used": 1000000000000,
+      "full": 0.25
+    }
+  },
+  "units": {
+    "rec": [
+      "7"
+    ]
+  },
+  "mirrors": {}
+}
+
+# GET /timeline/7 — both resources answer
+{
+  "segments": [
+    {
+      "start": 1757498800.0,
+      "end": 1757499400.0,
+      "path": "rec/7/e3/20250910T100640Z.mp4",
+      "epoch": 3,
+      "server": "srv-a",
+      "fenced": true
+    },
+    {
+      "start": 1757499400.0,
+      "end": 1757500000.0,
+      "path": "rec/7/e3/20250910T101640Z.mp4",
+      "epoch": 3,
+      "server": "srv-a",
+      "fenced": true
+    },
+    {
+      "start": 1757499700.0,
+      "end": 1757500300.0,
+      "path": "rec/7/e4/20250910T102140Z.mp4",
+      "epoch": 4,
+      "server": "srv-b",
+      "fenced": false
+    }
+  ],
+  "unreachable": [],
+  "note": ""
+}
+
+# srv-a has been silent for 60 s
+{
+  "segments": [
+    {
+      "start": 1757499700.0,
+      "end": 1757500300.0,
+      "path": "rec/7/e4/20250910T102140Z.mp4",
+      "epoch": 4,
+      "server": "srv-b",
+      "fenced": false
+    }
+  ],
+  "unreachable": [
+    "srv-a"
+  ],
+  "note": "ranges on srv-a are unavailable until the server returns — not lost"
+}
+
+# srv-a is back — with its disks
+{
+  "segments": [
+    {
+      "start": 1757498800.0,
+      "end": 1757499400.0,
+      "path": "rec/7/e3/20250910T100640Z.mp4",
+      "epoch": 3,
+      "server": "srv-a",
+      "fenced": true
+    },
+    {
+      "start": 1757499400.0,
+      "end": 1757500000.0,
+      "path": "rec/7/e3/20250910T101640Z.mp4",
+      "epoch": 3,
+      "server": "srv-a",
+      "fenced": true
+    },
+    {
+      "start": 1757499700.0,
+      "end": 1757500300.0,
+      "path": "rec/7/e4/20250910T102140Z.mp4",
+      "epoch": 4,
+      "server": "srv-b",
+      "fenced": false
+    }
+  ],
+  "unreachable": [],
+  "note": ""
+}
