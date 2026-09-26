@@ -1,0 +1,49 @@
+# vmsworker w-0
+PUT /v1/var/vms/epoch/7?namespace=default
+{"Items": {"epoch": "1"}}
+→ 200 {"Path": "vms/epoch/7", "ModifyIndex": 1001}
+
+# vmsworker w-0
+PUT /v1/var/vms/placement/7?namespace=default
+{"Items": {"worker": "w-0"}}
+→ 403 "Permission denied"
+
+# recworker r-0
+PUT /v1/var/rec/holds/disks-a?namespace=default
+{"Items": {"holder": "alloc-0002"}}
+→ 200 {"Path": "rec/holds/disks-a", "ModifyIndex": 1002}
+
+# recworker r-0
+PUT /v1/var/rec/recordings/7?namespace=default
+{"Items": {"cam": "7"}}
+→ 403 "Permission denied"
+
+# vmscontroller
+PUT /v1/var/vms/placement/7?namespace=default
+{"Items": {"worker": "w-0", "reason": "…"}}
+→ 200 {"Path": "vms/placement/7", "ModifyIndex": 1003}
+
+# vmscontroller
+PUT /v1/var/vms/cameras/7?namespace=default
+{"Items": {"name": "moved"}}
+→ 403 "Permission denied"
+
+# console
+PUT /v1/var/vms/cameras/7?namespace=default
+{"Items": {"name": "north-gate"}}
+→ 200 {"Path": "vms/cameras/7", "ModifyIndex": 1004}
+
+# console
+PUT /v1/var/vms/workers/w-0?namespace=default
+{"Items": {"units": "7"}}
+→ 403 "Permission denied"
+
+# resource srv-a
+PUT /v1/var/objects/platform/resources/srv-a/heartbeat?namespace=default
+{"Items": {"data": {}}}
+→ 200 {"Path": "objects/platform/resources/srv-a/heartbeat", "ModifyIndex": 1005}
+
+# resource srv-a
+PUT /v1/var/objects/vms/heartbeats/w-0?namespace=default
+{"Items": {"data": {}}}
+→ 403 "Permission denied"

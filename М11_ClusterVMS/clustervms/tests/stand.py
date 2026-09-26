@@ -226,6 +226,30 @@ def what_the_autoscaler_reads() -> str:
     return "GET /metrics\n" + "\n".join(keep) + "\n"
 
 
+def who_may_write_what() -> str:
+    """Lesson 5: every process of the cluster tries one write that is its own and one that is not. The
+    grants are the ones the code derives from the spec (`acl_worker`, `acl_controller`, `acl_console`) —
+    the same the policy files in deploy/ are checked against."""
+    s = Stand()
+    tries = [
+        ("vmsworker w-0", WORKER_GRANTS, [("vms/epoch/7", {"epoch": "1"}), ("vms/placement/7", {"worker": "w-0"})]),
+        ("recworker r-0", RECORDER_GRANTS, [("rec/holds/disks-a", {"holder": "alloc-0002"}), ("rec/recordings/7", {"cam": "7"})]),
+        ("vmscontroller", SPEC.acl_controller() + ["objects/vms/snapshot/*"],
+         [("vms/placement/7", {"worker": "w-0", "reason": "…"}), ("vms/cameras/7", {"name": "moved"})]),
+        ("console", SPEC.acl_console(), [("vms/cameras/7", {"name": "north-gate"}), ("vms/workers/w-0", {"units": "7"})]),
+        ("resource srv-a", ["objects/platform/resources/*"],
+         [("objects/platform/resources/srv-a/heartbeat", {"data": "{}"}), ("objects/vms/heartbeats/w-0", {"data": "{}"})]),
+    ]
+    for who, grants, writes in tries:
+        v, _ = s.as_process(who, who.split()[0] + "-" + who.split()[-1], grants)
+        for key, items in writes:
+            try:
+                v.put(key, items)
+            except Exception:                                            # noqa: BLE001 — the 403 is the point
+                pass
+    return s.log.render()
+
+
 SCENES = {"01-worker-starts": worker_starts,
           "02-console-creates-a-camera": console_creates_a_camera,
           "02-two-editors-one-row": two_editors_one_row,
@@ -234,7 +258,8 @@ SCENES = {"01-worker-starts": worker_starts,
           "04-two-allocations-one-index": two_allocations_one_index,
           "04-scale-out-and-in": scale_out_and_in,
           "04-a-crash-releases-nothing": a_crash_releases_nothing,
-          "04-what-the-autoscaler-reads": what_the_autoscaler_reads}
+          "04-what-the-autoscaler-reads": what_the_autoscaler_reads,
+          "05-who-may-write-what": who_may_write_what}
 
 
 def main() -> None:
