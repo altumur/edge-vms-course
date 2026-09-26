@@ -2,8 +2,8 @@
 genre: записки
 kind: разбор кода
 subject: М11_ClusterVMS
-source-commit: 4099cd5
-date: 2026-09-23
+source-commit: e3b8f57
+date: 2026-09-26
 status: draft
 ---
 
@@ -13,7 +13,7 @@ status: draft
 > Это разбор: я читал код и восстанавливал по нему, как всё устроено, максимально простыми словами.
 > **Источник истины — код.** Где записки расходятся с кодом, прав код.
 > Проект описывает себя сам: [`README.md`](../../README.md) и указатели модулей.
-> Состояние: коммит `4099cd5`, 23 сентября 2026.
+> Состояние: коммит `e3b8f57`, 26 сентября 2026.
 
 [← карта разбора](README.md) · назад: [10-limits-and-scale.md](10-limits-and-scale.md)
 
@@ -22,18 +22,22 @@ status: draft
 
 ```
 ── подготовка (до прихода оператора) ───────────────────────────────────────
+w-1  GET  /v1/var/platform/schema                           → 404  формат мой (раз, при старте)
 w-1  GET  /v1/vars?prefix=vms/slots/                        → []
 w-1  GET  /v1/var/vms/slots/w-1                             → 404
 w-1  PUT  /v1/var/vms/slots/w-1?cas=0                       → 200  holder, until, gen 1
+w-1  GET  /v1/var/objects/vms/heartbeats/w-1                → 404  прошлого отчёта нет
 w-1  PUT  /v1/var/objects/vms/heartbeats/w-1                → 200  status [], capacity 50
      …то же для w-2 и w-3
-res  PUT  /v1/var/objects/platform/resources/srv-1/heartbeat → 200
+res  GET  /v1/var/platform/schema                           → 404
+res  PUT  /v1/var/objects/platform/resources/srv-1/heartbeat → 200  space, volumes
      …то же для srv-2 и srv-3
 
 ── создание камеры 1 (T+0.0) ───────────────────────────────────────────────
 OP   POST /cameras  Idempotency-Key: 8f4b21e0-…             → 201  id 1, worker null
 con  PUT  /v1/var/vms/idem/8f4b21e0-…?cas=0                 → 200
 con  GET  /v1/vars?prefix=vms/idem/                         → 1 путь   (подчистка)
+con  GET  /v1/var/vms/idem/8f4b21e0-…                       → свежий — оставить
 con  GET  /v1/var/vms/next_id                               → 404
 con  PUT  /v1/var/vms/next_id?cas=0                         → 200  n=1
 con  PUT  /v1/var/vms/cameras/1?cas=0                       → 200  revision 1
@@ -42,7 +46,7 @@ con  PUT  /v1/var/vms/retention/1?cas=0                     → 200  days 365
 con  PUT  /v1/var/vms/idem/8f4b21e0-…                       → 200  state done
 
 ── создание камер 2 и 3 (T+1.2, T+2.0) ─────────────────────────────────────
-     те же семь вызовов, next_id 1→2 и 2→3
+     те же семь вызовов без подчистки (она не чаще раза в минуту), next_id 1→2 и 2→3
 
 ── проход контроллера (T+3.4) ──────────────────────────────────────────────
 ctl  GET  /v1/vars?prefix=vms/placement/   ×2               → []   unplace_deleted, unplace_retired
