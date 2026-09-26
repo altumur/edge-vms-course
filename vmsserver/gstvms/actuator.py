@@ -68,7 +68,11 @@ DESC = ("driverpacksrc name=src ! h264parse ! watchdog timeout={watchdog} ! tee 
 SHM = "shmsink socket-path={path} shm-size=20000000 wait-for-connection=false sync=false"      # the tee's same-server branch: any number of shmsrc readers
 LIVE = "rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={port} sync=false"   # the tee's branch: RTP to the loopback port
 IDLE = "fakesink sync=false"                                                                    # the RTSP fan-out (livesrv) serves from
-REC_SINK = "h264parse ! watchdog timeout={watchdog} ! archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}"
+REC_SINK = "h264parse ! watchdog timeout={watchdog} ! {ring}archivesink name=sink camera={cam} epoch={epoch} spool={spool} archive={archive} segment-seconds={seg}{capture}"
+# The prebuffer of a `when: offline` backup (Lesson 26): a queue that holds the last N seconds and drops the
+# oldest when full — `leaky=downstream` — with its source pad blocked while the backup is on hold. Released,
+# it pushes what it holds into the sink first. After the watchdog, so a held pipeline is still watched.
+RING = "queue name=ring max-size-time={ring_ns} max-size-buffers=0 max-size-bytes=0 leaky=downstream ! "
 REC_DESC = "rtspsrc location={source} latency=200 protocols=tcp name=src ! rtph264depay ! " + REC_SINK       # another server's worker: its fan-out
 # Backfill (Lesson 16): a range out of the holder's playback door, written as segments in the spool exactly
 # the way a live recording is. `souphttpsrc` because the door is HTTP — a browser has to seek it too — and
@@ -126,11 +130,17 @@ class GstActuator:
         bus.add_signal_watch()
         bus.connect("message::error", lambda b, m, c=cid: self.dead.append(c))
         bus.connect("message::element", lambda b, m, c=cid: self._posted(c, m))     # motion, person, ...: an element saw something
+        self._before_play(p, cam)
         if p.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             return False
         self.pipelines[cid] = p
         self._publish(cid, cam)
         return True
+
+    # What a subclass does to a built pipeline before it plays — the recorder blocks its ring here, so that
+    # not one buffer reaches the sink of a pipeline that starts on hold.
+    def _before_play(self, p, cam: dict) -> None:
+        pass
 
     # The pipeline for this verb's row: the worker's DESC with the tee's loopback branch.
     def describe(self, cam: dict) -> str:
@@ -187,6 +197,38 @@ class GstActuator:
 
 
 class GstRecActuator(GstActuator):
+    # `release` opens a held pipeline's ring; every other verb is the worker's.
+    def __call__(self, verb: str, cam: dict) -> bool:
+        if verb == "release":
+            return self._release(cam["id"])
+        return super().__call__(verb, cam)
+
+    # A pipeline that starts on hold: block the ring's source pad before the first buffer can pass.
+    def _before_play(self, p, cam: dict) -> None:
+        if cam.get("hold"):
+            pad = p.get_by_name("ring").get_static_pad("src")
+            self.blocks = getattr(self, "blocks", {})
+            self.blocks[cam["id"]] = pad.add_probe(Gst.PadProbeType.BLOCK_DOWNSTREAM, lambda *_: Gst.PadProbeReturn.OK)
+
+    # Unblock — and drop what the ring pushes until its first KEYFRAME: the leaky queue dropped its oldest
+    # buffers one at a time, so it may begin mid-GOP, and the muxer cannot start a file there. The product
+    # measured the result on a box: recording began 28.5 s before the hold was lifted.
+    def _release(self, cid) -> bool:
+        p = self.pipelines.get(cid)
+        probe = getattr(self, "blocks", {}).pop(cid, None)
+        if p is None or probe is None:
+            return False
+        pad = p.get_by_name("ring").get_static_pad("src")
+
+        def to_keyframe(pad_, info):
+            if info.get_buffer().has_flags(Gst.BufferFlags.DELTA_UNIT):
+                return Gst.PadProbeReturn.DROP
+            return Gst.PadProbeReturn.REMOVE
+
+        pad.add_probe(Gst.PadProbeType.BUFFER, to_keyframe)
+        pad.remove_probe(probe)
+        return True
+
     """The recorder's: `rtspsrc` on the camera's fan-out URL — or `shmsrc` on the worker's shared-memory
     branch when the worker is on this server — then `archivesink` into the spool under the recorder's
     epoch. No fan-out of its own; nothing here reads a camera."""
@@ -247,8 +289,14 @@ class GstRecActuator(GstActuator):
         after = {os.path.join(d, f) for d, _, fs in os.walk(spool) for f in fs}
         return sorted(p for p in after - before if parse(p, spool))
 
+    # The ring is in the pipeline only for a backup that may be held, and so is naming segments by the time
+    # their first frame was CAPTURED: a ring released now holds footage from thirty seconds ago, and a
+    # segment named by the time it was opened would put that footage thirty seconds late on the timeline.
     def describe(self, cam: dict) -> str:
-        kw = dict(watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0), spool=self.spool, archive=self.archive, seg=self.seg)
+        ring = cam.get("ring_seconds")
+        kw = dict(watchdog=self.watchdog, cam=cam["id"], epoch=cam.get("epoch", 0), spool=self.spool, archive=self.archive, seg=self.seg,
+                  ring=RING.format(ring_ns=int(float(ring) * Gst.SECOND)) if ring else "",
+                  capture=" capture-times=true" if ring else "")
         if cam["source"].startswith("shm://"):                                 # the worker is on this server: read its tee's shared memory
             return REC_SHM_DESC.format(path=cam["source"][len("shm://"):], **kw)
         return REC_DESC.format(source=cam["source"], **kw)

@@ -109,6 +109,10 @@ class RecWorker(VmsWorker):
     # (Lesson 26). Every event-driven recording starts this way — a row appears, a pipeline takes a few
     # seconds — and waking the backup for each would make it record every event twice.
     START_GRACE = 10.0
+    # How much of the past a held backup keeps in memory (Lesson 26). When the primary is found missing —
+    # `START_GRACE` after it went quiet, plus a pass — the ring is written first, so the backup's footage
+    # starts BEFORE the moment anybody noticed. Thirty seconds covers the grace, a pass and a keyframe.
+    PREBUFFER = 30.0
     SLOT_PREFIX, NAME_ENV = "r", "RECORDER_NAME"
     parse_row = staticmethod(rec_row)
 
@@ -171,6 +175,7 @@ class RecWorker(VmsWorker):
         self.nowhere: dict[tuple[str, str], list[tuple[float, float]]] = {}
         self.archive_url = ""                       # this recorder's archive door, once served (Lesson 26)
         self._not_written_since: dict[str, float] = {}   # primary recording -> since when nobody writes it
+        self.holding: dict[str, bool] = {}          # `when: offline` recording -> is its pipeline on hold now
         self.promoted = 0
         self.waiting: set[str] = set()                                        # units with nobody holding their camera
         self.sources: dict[str, str] = {}                                     # what each running pipeline subscribed to
@@ -212,8 +217,15 @@ class RecWorker(VmsWorker):
         # The pipeline is about to record this unit under this epoch, for the volume held now: say so in the
         # epoch's own directory before the first segment lands there.
         self.mark_epoch(cam["id"], cam.get("epoch", 0))
-        return dict(cam, source=src[1], source_server=src[0], via="shm" if src[1].startswith("shm://") else "rtsp",
-                    spool=self.archive.spool, archive=self.archive.root)
+        out = dict(cam, source=src[1], source_server=src[0], via="shm" if src[1].startswith("shm://") else "rtsp",
+                   spool=self.archive.spool, archive=self.archive.root)
+        # A `when: offline` backup runs ON HOLD while its primary is written: the pipeline is up, subscribed,
+        # and recording into a ring in memory, writing nothing (Lesson 26).
+        if self._offline_backup(cam):
+            hold = not self.primary_needs_cover(cam)
+            self.holding[str(cam["id"])] = hold
+            out.update(hold=hold, ring_seconds=self.PREBUFFER, now=self.wall())
+        return out
 
     def status_extra(self, cam: dict) -> dict:
         src = self.source(cam["cam"])
@@ -231,12 +243,11 @@ class RecWorker(VmsWorker):
 
     def status(self) -> list[dict]:
         out = super().status()
-        standby = {r["id"] for r in self.rows if self._stands_by(r)}
         for st in out:
             if st["phase"] != "running" and st["id"] in self.waiting and st["enabled"]:
                 st["phase"] = "waiting"
-            if st["id"] in standby and st["phase"] != "running":
-                st["phase"], st["why"] = "standby", "the primary recording is being written"
+            if st["phase"] == "running" and self.holding.get(str(st["id"])):
+                st["phase"], st["why"] = "standby", f"the primary recording is being written; the last {self.PREBUFFER:.0f} s are held in memory"
         return out
 
     # -- a backup that records only for a primary that is down (Lesson 26) -----------------------------
@@ -245,12 +256,36 @@ class RecWorker(VmsWorker):
     # switched off, or an event recording whose event has ended, is nobody's failure — standing in for it
     # would turn a recording on events into a recording always, on the backup's disk and, for a card, over
     # the camera's uplink. What is covered is a failure, never a decision.
-    def desired(self) -> list[dict]:
-        return [r for r in super().desired() if not self._stands_by(r)]
+    #
+    # The backup's pipeline does not wait to be started: it runs on hold, a ring of the last `PREBUFFER`
+    # seconds in memory, and the gate below opens and closes it. Starting it only when the primary is found
+    # missing would lose exactly the seconds before that — the grace, the pass, the pipeline's own start —
+    # which are the seconds the failure happened in.
+    def _offline_backup(self, row: dict) -> bool:
+        return str(row.get("when") or "") == "offline" and volumes.is_backup(row, self.vars)
 
-    def _stands_by(self, row: dict) -> bool:
-        return str(row.get("when") or "") == "offline" and volumes.is_backup(row, self.vars) \
-            and not self.primary_needs_cover(row)
+    # One pass of the gate, after the reconciler's. A held backup whose primary now needs cover is RELEASED:
+    # the ring is written first, then live. A released one whose primary is back is put on hold again — a
+    # restart under the same epoch, so the open segment is finalized and promoted, and the ring starts
+    # filling afresh.
+    def gate_pass(self, now: float | None = None) -> list[tuple[str, str]]:
+        now = self.wall() if now is None else now
+        done = []
+        for row in self.rows:
+            uid = str(row["id"])
+            if not self._offline_backup(row) or uid not in {str(u) for u in self.reconciler.actual}:
+                continue
+            need = self.primary_needs_cover(row, now)
+            if need and self.holding.get(uid):
+                if self.actuator("release", {"id": row["id"], "now": now}):
+                    self.holding[uid] = False
+                    done.append((uid, "released"))
+                    log.warning("%s: the primary of %s is not being written — recording from %.0f s ago",
+                                self.name, uid, self.PREBUFFER)
+            elif not need and self.holding.get(uid) is False:
+                if self._actuate("restart", row):
+                    done.append((uid, "held"))
+        return done
 
     def primary_needs_cover(self, row: dict, now: float | None = None) -> bool:
         now = self.wall() if now is None else now
@@ -294,7 +329,9 @@ class RecWorker(VmsWorker):
 
     def reconcile_once(self, now: float | None = None) -> list[tuple[str, int]]:
         self.resubscribe(now)
-        return super().reconcile_once(now)
+        out = super().reconcile_once(now)
+        self.gate_pass()
+        return out
 
     # What this recorder adds to the heartbeat: how many segments are in the spool and not yet in the
     # archive. Normally nought or one — the fragment being written — and it is the answer to the only

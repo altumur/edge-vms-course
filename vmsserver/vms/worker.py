@@ -207,6 +207,12 @@ class FakeActuator:
         self.copied: list[tuple] = []                    # what `copy_range` was asked for (Lesson 26)
         self.available = None                            # (source, t0, t1) -> spans the source really holds; None: all
         self.range_error = ""                            # set by a real actuator whose range pipeline failed
+        # The prebuffer (Lesson 26): pipelines running ON HOLD — recording into a ring of the last
+        # `ring_seconds` and writing nothing — and what each release wrote. `gop` is the keyframe interval:
+        # a release starts at the first keyframe still in the ring, never mid-GOP.
+        self.held: dict = {}                             # id -> {"since", "ring", "epoch", "spool"}
+        self.released: list[tuple] = []                  # (id, start, end) of every ring written out
+        self.gop = 2.0
         self.started: dict[int, dict] = {}
 
     # Records the call. `stop` always succeeds and removes the id. A start/restart on a failing id fails
@@ -217,7 +223,10 @@ class FakeActuator:
         self.calls.append((verb, cid))
         if verb == "stop":
             self.running.discard(cid)
+            self.held.pop(cid, None)
             return True
+        if verb == "release":
+            return self._release(cid, float(cam["now"]))
         fails = self.failing(cid) if callable(self.failing) else cid in self.failing
         if fails:
             self.running.discard(cid)
@@ -225,6 +234,33 @@ class FakeActuator:
         self.running.add(cid)
         self.epochs[cid] = cam.get("epoch", 0)
         self.started[cid] = cam                     # what the pipeline was built from: the row plus what `enrich` added
+        if cam.get("hold"):
+            self.held[cid] = {"since": float(cam.get("now", 0)), "ring": float(cam.get("ring_seconds", 0)),
+                              "epoch": cam.get("epoch", 0), "spool": cam.get("spool", "")}
+        else:
+            self.held.pop(cid, None)
+        return True
+
+    # Open the ring: what it holds is written first — from the oldest keyframe still in it, which is at most
+    # `ring` seconds ago and never before the pipeline started — as one segment named by the time it was
+    # CAPTURED, then live footage follows. The real one removes a pad probe; this writes the file.
+    def _release(self, cid, now: float) -> bool:
+        import math
+        import os
+        from datetime import datetime, timezone
+        from .archive import segment_path
+        h = self.held.pop(cid, None)
+        if h is None:
+            return False
+        oldest = max(now - h["ring"], h["since"])
+        start = math.ceil(oldest / self.gop) * self.gop       # the ring may begin mid-GOP; the copy may not
+        if start < now and h["spool"]:
+            p = segment_path(h["spool"], str(cid), h["epoch"], datetime.fromtimestamp(start, timezone.utc).replace(microsecond=0))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"\x00" * 16)
+            os.utime(p, (now, now))
+            self.released.append((cid, start, now))
         return True
 
     # Returns and clears `dead` and `posted`; dead ids leave `running`. Same contract as `GstActuator.pump`.

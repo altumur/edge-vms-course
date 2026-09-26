@@ -68,6 +68,10 @@ class ArchiveSink(Gst.Bin):
         "spool": (str, "spool", "spool root", "/data/spool", GObject.ParamFlags.READWRITE),
         "archive": (str, "archive", "archive resource root", "/data/archive", GObject.ParamFlags.READWRITE),
         "segment-seconds": (int, "segment-seconds", "segment length", 1, 86400, 600, GObject.ParamFlags.READWRITE),
+        # Name each segment by the time its first frame was CAPTURED rather than the time it was opened.
+        # The same for a live recording to within a buffer; thirty seconds apart for a prebuffer released
+        # from a ring (Lesson 26), which is why the recorder sets it there.
+        "capture-times": (bool, "capture-times", "name segments by capture time", False, GObject.ParamFlags.READWRITE),
     }
 
     # Defaults in `props_`; creates `splitmuxsink` with `muxer-factory=mp4mux` and `async-finalize=True`
@@ -76,13 +80,15 @@ class ArchiveSink(Gst.Bin):
     # `resource` stays `None` until the first fragment asks for a location.
     def __init__(self):
         super().__init__()
-        self.props_ = {"camera": 0, "epoch": 0, "spool": "/data/spool", "archive": "/data/archive", "segment-seconds": 600}
+        self.props_ = {"camera": 0, "epoch": 0, "spool": "/data/spool", "archive": "/data/archive", "segment-seconds": 600,
+                       "capture-times": False}
         self.mux = Gst.ElementFactory.make("splitmuxsink", "mux")
         self.mux.set_property("muxer-factory", "mp4mux")
         self.mux.set_property("async-finalize", True)
         self.add(self.mux)
         self.add_pad(Gst.GhostPad.new("sink", self.mux.get_request_pad("video")))
         self.mux.connect("format-location", self._location)
+        self.mux.connect("format-location-full", self._location_full)
         self.resource: ArchiveResource | None = None
         self.promoted = 0
 
@@ -103,13 +109,28 @@ class ArchiveSink(Gst.Bin):
     # `segment_path(spool, camera, epoch, start)` after creating its directory. So segments are named by
     # wall-clock start, and `vms.archive.parse` can read camera, epoch and start back from the path.
     # `fragment_id` is not used: the timestamp is the name.
-    def _location(self, mux, fragment_id):
+    def _location(self, mux, fragment_id, start: datetime | None = None):
         if self.resource is None:
             self.resource = ArchiveResource(self.props_["spool"], self.props_["archive"])
-        start = datetime.now(timezone.utc).replace(microsecond=0)
+        start = start or datetime.now(timezone.utc).replace(microsecond=0)
         p = segment_path(self.props_["spool"], self.props_["camera"], self.props_["epoch"], start)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         return p
+
+    # splitmuxsink asks with the fragment's first sample when a handler for this signal exists; it then does
+    # not ask `format-location`. With `capture-times` the sample's running time is turned into a wall time —
+    # now, minus how long ago on the pipeline clock that buffer was — and the segment is named by it.
+    def _location_full(self, mux, fragment_id, first_sample):
+        if not self.props_["capture-times"] or first_sample is None:
+            return self._location(mux, fragment_id)
+        import time
+        buf, seg = first_sample.get_buffer(), first_sample.get_segment()
+        clock, base = self.get_clock(), self.get_base_time()
+        if buf is None or seg is None or clock is None or buf.pts == Gst.CLOCK_TIME_NONE:
+            return self._location(mux, fragment_id)
+        age = (clock.get_time() - base - seg.to_running_time(Gst.Format.TIME, buf.pts)) / Gst.SECOND
+        start = datetime.fromtimestamp(time.time() - max(0.0, age), timezone.utc).replace(microsecond=0)
+        return self._location(mux, fragment_id, start)
 
     # The bin's bus-message hook. On an element message named `splitmuxsink-fragment-closed` — "the
     # acknowledgement point" — take its `location` string and `self.resource.promote(path)`; count it in

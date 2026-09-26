@@ -160,25 +160,98 @@ def test_the_camera_stands_beside_the_backup_recording():
 
 def test_an_offline_backup_stands_in_for_a_failure_and_never_for_a_decision():
     """`when: offline`: the backup records only while the primary SHOULD be written and is not. The primary
-    running — standby. The primary gone quiet — a few seconds of grace, because every recording starts that
+    running — hold. The primary gone quiet — a few seconds of grace, because every recording starts that
     way, then the backup records. The primary switched off, or an event recording whose `until` has passed —
     nobody's failure, and standing in for it would make a recording on events a recording always."""
     box, rec_ctl, primary, backup, _ = _site(when="offline")
     row = next(r for r in backup.rows if r["id"] == "1-copy")
-    assert not backup.primary_needs_cover(row) and backup.desired() == []
-    assert next(st for st in backup.status() if st["id"] == "1-copy")["phase"] == "standby"
+    assert not backup.primary_needs_cover(row)
 
     primary.actuator.stop_all(); primary.reconciler.actual.clear(); primary.heartbeat_once()   # the primary stops writing
     assert not backup.primary_needs_cover(row)                          # …not yet: it may be starting
     box.wall.advance(backup.START_GRACE + 1)
     primary.heartbeat_once()
-    assert backup.primary_needs_cover(row) and [r["id"] for r in backup.desired()] == ["1-copy"]
+    assert backup.primary_needs_cover(row)
 
     con = SpecController(REC_SPEC, box.vars.as_writer("console3", REC_SPEC.acl_console()), box.objects, wall=box.wall)
     con.update("1", {"enabled": False})                                  # the operator switched it off
     assert not backup.primary_needs_cover(row)
     con.update("1", {"enabled": True, "until": box.wall() - 1})          # an event that has ended
     assert not backup.primary_needs_cover(row)
+
+
+def test_an_offline_backup_runs_on_hold_and_writes_nothing():
+    """The backup's pipeline does not wait to be started. It is up, subscribed to the camera, and recording
+    into a ring of the last thirty seconds in memory — writing nothing to its volume, which on a card is
+    the camera's own flash. The operator sees why it is idle."""
+    box, rec_ctl, primary, backup, _ = _site(when="offline")
+    assert "1-copy" in backup.actuator.held and backup.holding["1-copy"] is True
+    st = next(st for st in backup.status() if st["id"] == "1-copy")
+    assert st["phase"] == "standby" and "held in memory" in st["why"]
+    assert backup.archive.closed_in_spool(0.0, box.wall() + 1) == []
+
+
+def _primary_stops(box, primary, backup, holder, after: float = 100.0):
+    """The backup has been holding for `after` seconds, so its ring is full; then the primary stops."""
+    box.wall.advance(after)
+    holder.heartbeat_once(); primary.heartbeat_once(); backup.heartbeat_once()
+    stopped = box.wall()
+    primary.actuator.stop_all(); primary.reconciler.actual.clear(); primary.heartbeat_once()
+    backup.reconcile_once()                                            # the backup's next pass sees it quiet
+    return stopped
+
+
+def test_a_released_backup_writes_the_seconds_before_anybody_noticed():
+    """The primary stops. Nobody can know at once — every recording starts with a quiet moment — so the
+    backup waits its grace, and is released a pass later. Started only then, it would begin eleven seconds
+    after the failure, and those are the seconds the failure happened in. Released from its ring, it writes
+    them first: from the oldest keyframe the ring still holds, before the primary stopped, named by the time
+    the footage was captured."""
+    box, rec_ctl, primary, backup, w = _site(when="offline")
+    stopped = _primary_stops(box, primary, backup, w)
+    box.wall.advance(backup.START_GRACE + 1)
+    primary.heartbeat_once()
+    backup.reconcile_once()
+    released_at = box.wall()
+
+    [(uid, start, end)] = backup.actuator.released
+    assert uid == "1-copy" and end == released_at
+    assert released_at - backup.PREBUFFER <= start < stopped            # footage from BEFORE the failure
+    assert start % backup.actuator.gop == 0                             # from a keyframe, never mid-GOP
+    assert backup.holding["1-copy"] is False
+    box.wall.advance(backup.grace_seconds + 1)                         # the recorder's own pause before promoting
+    backup.promote_closed()
+    segs = Manifest(backup.archive.root, "1-copy").read()
+    assert [(s.start, s.end) for s in segs] == [(start, released_at)]   # in the archive, at its own time
+
+
+def test_the_backup_goes_back_on_hold_when_the_primary_is_back():
+    """The primary is written again. The backup is put back on hold: a restart under the same epoch, so its
+    open segment is finalized and kept, and the ring starts filling afresh for next time."""
+    box, rec_ctl, primary, backup, w = _site(when="offline")
+    _primary_stops(box, primary, backup, w)
+    box.wall.advance(backup.START_GRACE + 1)
+    primary.heartbeat_once(); backup.reconcile_once()
+    epoch = backup.epochs["1-copy"]
+
+    w.heartbeat_once(); primary.reconcile_once(); primary.heartbeat_once()   # the primary's recorder is back
+    assert backup.holding["1-copy"] is False                           # released: recording for the primary
+    backup.reconcile_once()
+    assert backup.holding["1-copy"] is True and "1-copy" in backup.actuator.held
+    assert backup.epochs["1-copy"] == epoch                            # the same writer, held again
+    assert next(st for st in backup.status() if st["id"] == "1-copy")["phase"] == "standby"
+
+
+def test_a_primary_switched_off_never_releases_the_ring():
+    """The same rule as above, at the gate: an operator's decision is not a failure, and the ring stays
+    closed however long the primary is off."""
+    box, rec_ctl, primary, backup, w = _site(when="offline")
+    con = SpecController(REC_SPEC, box.vars.as_writer("console3", REC_SPEC.acl_console()), box.objects, wall=box.wall)
+    con.update("1", {"enabled": False})
+    _primary_stops(box, primary, backup, w)
+    box.wall.advance(600)
+    w.heartbeat_once(); primary.heartbeat_once(); backup.heartbeat_once(); backup.reconcile_once()
+    assert backup.actuator.released == [] and backup.holding["1-copy"] is True
 
 
 def test_a_backup_volume_names_its_box():
