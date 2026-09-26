@@ -2,8 +2,8 @@
 genre: записки
 kind: разбор кода
 subject: М11_ClusterVMS
-source-commit: 4099cd5
-date: 2026-09-23
+source-commit: e3b8f57
+date: 2026-09-26
 status: draft
 ---
 
@@ -13,7 +13,7 @@ status: draft
 > Это разбор: я читал код и восстанавливал по нему, как всё устроено, максимально простыми словами.
 > **Источник истины — код.** Где записки расходятся с кодом, прав код.
 > Проект описывает себя сам: [`README.md`](../../README.md) и указатели модулей.
-> Состояние: коммит `4099cd5`, 23 сентября 2026.
+> Состояние: коммит `e3b8f57`, 26 сентября 2026.
 
 [← карта разбора](README.md) · назад: [05-workers-and-epochs.md](05-workers-and-epochs.md) · вперёд: [07-edit-and-delete.md](07-edit-and-delete.md)
 
@@ -61,10 +61,13 @@ Host: srv-1:8080
       "events_retention_days": 365,
       "priority": 100,
       "labels": ["vlan:cctv"],
+      "folders": [],
+      "alarms": [],
       "ref": "north-gate",
       "cred_username": "operator",
       "cred_secret": "***",
       "live": "always",
+      "kind": "video",
       "revision": 1
     },
     {"id": 2, …},
@@ -106,6 +109,17 @@ GET /where/1 HTTP/1.1
   "directory": "w-1",
   "scans": 1
 }
+```
+
+В Nomad за этим ответом стоят два источника:
+
+```
+# решение контроллера
+GET /v1/var/vms/placement/1                   → worker, reason
+
+# кто камеру реально ведёт: все назначения подряд
+GET /v1/vars?prefix=vms/workers/              → 3 пути
+GET /v1/var/vms/workers/w-1..w-3              → units каждого
 ```
 
 Здесь сверяются два независимых ответа на один вопрос.
